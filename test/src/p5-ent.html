@@ -1,0 +1,592 @@
+<script>
+/* ═══════════════════ p5 — entities, player, camera, combat feel ═══════════════════ */
+
+/* ── particles (pooled Float32Array, one Points per system) ── */
+const DOT_TEX = (() => {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 32;
+  const g = cv.getContext('2d');
+  const gr = g.createRadialGradient(16, 16, 2, 16, 16, 15);
+  gr.addColorStop(0, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.55, 'rgba(255,255,255,0.5)');
+  gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(cv);
+})();
+function makePS(n, size, hex, additive, gravity) {
+  if (LOWFX) n = Math.max(8, n >> 1);
+  const pos = new Float32Array(n * 3);
+  const vel = new Float32Array(n * 3);
+  const life = new Float32Array(n);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color: hex, size, transparent: true, opacity: additive ? 0.8 : 0.72,
+    depthWrite: false, sizeAttenuation: true, map: DOT_TEX,
+  });
+  if (additive) mat.blending = THREE.AdditiveBlending;
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  scene.add(pts);
+  let head = 0;
+  for (let i = 0; i < n; i++) { pos[i * 3 + 1] = -999; }
+  return {
+    pts,
+    spawn(x, y, z, vx, vy, vz, l) {
+      const i = head; head = (head + 1) % n;
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+      vel[i * 3] = vx; vel[i * 3 + 1] = vy; vel[i * 3 + 2] = vz;
+      life[i] = l;
+    },
+    update(dt) {
+      let live = 0;
+      for (let i = 0; i < n; i++) {
+        if (life[i] <= 0) continue;
+        life[i] -= dt;
+        if (life[i] <= 0) { pos[i * 3 + 1] = -999; continue; }
+        live++;
+        pos[i * 3] += vel[i * 3] * dt;
+        pos[i * 3 + 1] += vel[i * 3 + 1] * dt;
+        pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
+        if (gravity) vel[i * 3 + 1] -= 7 * dt;
+      }
+      geo.attributes.position.needsUpdate = true;
+      return live;
+    },
+  };
+}
+const psSpark = makePS(160, 0.14, 0xffe9b0, true, true);      // sword hits, wisp pops
+const psDust = makePS(140, 0.2, 0xcbb694, false, true);       // rolls, crabs, slams
+const psSparkle = makePS(120, 0.12, 0xbfe8ff, true, false);   // shade healing, moonglass
+const psShimmer = LOWFX ? null : makePS(70, 0.55, 0xfff4d8, true, false);  // heat haze motes
+function burst(ps, x, y, z, n, spd, up, l) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, r = Math.random() * spd;
+    ps.spawn(x, y, z, Math.cos(a) * r, up + Math.random() * up, Math.sin(a) * r, l * (0.6 + Math.random() * 0.7));
+  }
+}
+
+/* ── cast placement ── */
+const wick = buildWick();
+scene.add(wick.root);
+const wickShadow = blobShadow(0.34);
+scene.add(wickShadow);
+
+function placeNPC(builder, x, z, heading, yOff) {
+  const c = builder();
+  const baseY = groundH(x, z) + (yOff || 0);
+  c.root.position.set(x, baseY, z);
+  c.root.rotation.y = heading;
+  scene.add(c.root);
+  return { char: c, x, z, home: heading, headT: 0, baseY };
+}
+const finn = placeNPC(buildFinn, 42.6, -16, -Math.PI / 2 - 0.2, 0);
+const tock = placeNPC(buildTock, TOCK_POS.x, TOCK_POS.z, 2.3, 0);
+const pearl = placeNPC(buildPearl, -21.9, -9.0, 0.4, 1.42);
+
+/* ── the player ── */
+const P = {
+  x: 8.2, z: 4.8, y: 0, heading: Math.PI,
+  vx: 0, vz: 0, speed: 4.3,
+  st: 'idle',                 // idle walk atk roll hit locked
+  atkN: 0, atkT: 0, queued: false, hitDone: false,
+  rollT: 0, rollDx: 0, rollDz: 1,
+  iframes: 0, hitstop: 0, hitT: 0,
+  hearts: 5, maxHearts: 5,
+  healT: 0, healTicks: 0,
+  shade: true, prevShade: true, everSun: false,
+  sword: false, salt: 0,
+  pulseT: 0,
+  area: 'village',
+  sunstruckCount: 0,
+  carryCrescent: false,
+};
+function playerPos() { P.y = groundH(P.x, P.z); return P; }
+
+/* camera */
+const CAM = { yaw: Math.PI, dist: 3.3, shake: 0, x: 0, y: 0, z: 0, ready: false, mode: 'follow' };
+const _cv = new THREE.Vector3();
+function updateCamera(dtv) {
+  if (CAM.mode !== 'follow') return;
+  const inG = inGrottoAt(P.x, P.z);
+  const wantDist = inG ? 2.55 : 3.3;
+  CAM.dist += (wantDist - CAM.dist) * Math.min(1, dtv * 3);
+  // yaw eases behind movement, with look-ahead
+  const moving = Math.hypot(P.vx, P.vz) > 0.4;
+  if (moving) CAM.yaw = angLerp(CAM.yaw, Math.atan2(P.vx, P.vz) + Math.PI, Math.min(1, dtv * 1.6));
+  const py = groundH(P.x, P.z);
+  const tx = P.x + Math.sin(P.heading) * 0.35, tz = P.z + Math.cos(P.heading) * 0.35;
+  const ty = py + (inG ? 1.15 : 1.25);
+  let dx = Math.sin(CAM.yaw), dz = Math.cos(CAM.yaw);
+  let dist = CAM.dist;
+  const upH = inG ? 1.35 : 1.9;
+  // sphere-cast pullback: terrain + grotto ceiling
+  for (let s = 0.25; s <= 1.0; s += 0.15) {
+    const sx = tx + dx * dist * s, sz = tz + dz * dist * s;
+    const gh = groundH(sx, sz);
+    const cy = ty + (upH - 0.1) * s;
+    if (gh + 0.42 > cy) { dist = Math.max(1.1, dist * (s - 0.12)); break; }
+  }
+  const cx = tx + dx * dist, cz = tz + dz * dist;
+  let cy = ty + upH * (dist / CAM.dist);
+  cy = Math.max(cy, groundH(cx, cz) + 0.45);
+  if (inG) cy = Math.min(cy, py + 3.4);
+  const k = CAM.ready ? Math.min(1, dtv * 6.5) : 1;
+  CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
+  CAM.ready = true;
+  camera.position.set(
+    CAM.x + (Math.random() - 0.5) * CAM.shake,
+    CAM.y + (Math.random() - 0.5) * CAM.shake * 0.6,
+    CAM.z + (Math.random() - 0.5) * CAM.shake);
+  CAM.shake = Math.max(0, CAM.shake - dtv * 1.6);
+  _cv.set(tx, ty, tz);
+  camera.lookAt(_cv);
+}
+
+/* ── swing hit arc helper ── */
+function inSwingArc(tx, tz, range) {
+  const dx = tx - P.x, dz = tz - P.z;
+  const d = Math.hypot(dx, dz);
+  if (d > range) return false;
+  let da = Math.atan2(dx, dz) - P.heading;
+  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+  return Math.abs(da) < 1.15;
+}
+
+/* ── kelp interaction ── */
+let kelpDoorCut = SAVE && SAVE.kelpDoor;
+function trySwingKelp() {
+  let cutAny = false;
+  for (const patch of kelpPatches) {
+    if (patch.tag === 'wall') continue;          // the wall burns, never cuts
+    let dirty = false;
+    for (const s of patch.stalks) {
+      if (s.cut) continue;
+      if (inSwingArc(s.x, s.z, 1.9)) {
+        s.cut = true; dirty = true; cutAny = true;
+        const y = groundH(s.x, s.z);
+        burst(psDust, s.x, y + 0.8, s.z, 8, 1.6, 1.4, 0.5);
+        burst(psSpark, s.x, y + 0.9, s.z, 4, 1.2, 1.2, 0.35);
+      }
+    }
+    if (dirty) {
+      rebuildKelpPatch(patch);
+      SFX.kelpCut();
+      if (patch.tag === 'door' && patch.stalks.every(s => s.cut) && !kelpDoorCut) {
+        kelpDoorCut = true;
+        SAVE.kelpDoor = true; storeSave();
+        onDoorFreed();          // p6 quest hook
+      }
+    }
+  }
+  return cutAny;
+}
+
+/* ── damage to the player ── */
+function hurtPlayer(n, fromX, fromZ) {
+  if (P.iframes > 0 || state !== 'play') return;
+  if (P.st === 'roll') return;                    // roll i-frames
+  P.hearts = Math.max(0, P.hearts - n);
+  P.iframes = 85;
+  P.hitT = 0.34; P.st = 'hit';
+  const dx = P.x - fromX, dz = P.z - fromZ, d = Math.hypot(dx, dz) || 1;
+  P.vx = dx / d * 7.5; P.vz = dz / d * 7.5;
+  CAM.shake = 0.22;
+  SFX.hurt();
+  rumble({ duration: 200, strong: 0.8, weak: 0.5 });
+  flashGlare(0.22, 0.35);
+  if (P.hearts <= 0) startSunstruck();            // p6
+}
+
+/* ── the moonglass pulse (△): the sword is a compass ── */
+function objectivePoint() {
+  if (!P.sword) return { x: 42.2, z: -16 };                       // find Finn
+  if (QUEST.q === 1) return { x: 42.2, z: -16 };
+  if (QUEST.q === 2) return BOSS.crescentGiven ? null : { x: GROTTO_B.x, z: GROTTO_B.z };
+  if (QUEST.q === 3) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+  return null;
+}
+function doPulse() {
+  P.pulseT = 1.0;
+  const o = objectivePoint();
+  let str = 0.25;
+  if (o) {
+    const d = Math.hypot(o.x - P.x, o.z - P.z);
+    str = clamp(1 - d / 160, 0.15, 1);
+    const dx = (o.x - P.x) / (d || 1), dz = (o.z - P.z) / (d || 1);
+    const y = groundH(P.x, P.z) + 1.2;
+    for (let i = 0; i < 7; i++) {
+      psSparkle.spawn(P.x + dx * (0.6 + i * 0.28), y + 0.15 * i, P.z + dz * (0.6 + i * 0.28),
+        dx * 3.2, 0.5, dz * 3.2, 0.8 + i * 0.12);
+    }
+  } else {
+    burst(psSparkle, P.x, groundH(P.x, P.z) + 1.3, P.z, 10, 1.2, 0.8, 0.9);
+  }
+  SFX.glassPulse(str);
+  rumble({ duration: 90, strong: 0.1 + str * 0.3, weak: 0.2 });
+}
+
+/* ── player sim tick (runs in state 'play') ── */
+function tickPlayer() {
+  const inShade = inShadeAt(P.x, P.z);
+  P.prevShade = P.shade; P.shade = inShade;
+  if (!inShade && P.prevShade) {
+    // stepping into the glare
+    flashGlare(P.everSun ? 0.14 : 0.6, P.everSun ? 0.5 : 1.3);
+    P.everSun = true;
+  }
+  if (P.iframes > 0) P.iframes--;
+  // shade heals: 1 heart / 4 s
+  if (inShade && P.hearts < P.maxHearts && (P.st === 'idle' || P.st === 'walk')) {
+    P.healT++;
+    if (P.healT >= 240) {
+      P.healT = 0; P.hearts++; P.healTicks++;
+      SFX.heal();
+      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.0, P.z, 12, 0.9, 1.3, 0.9);
+    }
+  } else if (!inShade) P.healT = 0;
+  if (P.pulseT > 0) P.pulseT -= DT;
+
+  if (P.st === 'hit') {
+    P.hitT -= DT;
+    P.x += P.vx * DT; P.z += P.vz * DT;
+    P.vx *= 0.86; P.vz *= 0.86;
+    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
+    if (P.hitT <= 0) P.st = 'idle';
+    return;
+  }
+  if (P.st === 'roll') {
+    P.rollT -= DT;
+    const sp = 7.2 * smoothstep(clamp(P.rollT / 0.38, 0, 1) + 0.25);
+    P.x += P.rollDx * sp * DT; P.z += P.rollDz * sp * DT;
+    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
+    if (P.rollT <= 0) P.st = 'idle';
+    return;
+  }
+  if (P.st === 'atk') {
+    P.atkT -= DT;
+    // slight forward drift on the 3rd hit
+    if (P.atkN === 3 && P.atkT > 0.12) {
+      P.x += Math.sin(P.heading) * 2.4 * DT; P.z += Math.cos(P.heading) * 2.4 * DT;
+      const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
+    }
+    const total = P.atkN === 3 ? 0.36 : 0.3;
+    const ph = 1 - P.atkT / total;
+    if (!P.hitDone && ph > 0.38) {
+      P.hitDone = true;
+      swingHits();               // p6 — enemies, boss, kelp
+    }
+    if (IN.atk && ph > 0.5 && P.atkN < 3) P.queued = true;
+    if (P.atkT <= 0) {
+      if (P.queued && P.sword) {
+        P.queued = false; P.hitDone = false;
+        P.atkN++; P.atkT = P.atkN === 3 ? 0.36 : 0.3;
+        SFX[P.atkN === 3 ? 'swing3' : 'sword']();
+      } else { P.st = 'idle'; P.atkN = 0; }
+    }
+    return;
+  }
+
+  // ── free movement ──
+  // camera-relative input
+  let mx = 0, mz = 0;
+  if (IN.mx || IN.my) {
+    const cy2 = CAM.yaw;
+    // camera forward on ground = -(sin,cos) of yaw
+    mx = -IN.my * -Math.sin(cy2) + IN.mx * Math.cos(cy2);
+    mz = -IN.my * -Math.cos(cy2) + IN.mx * -Math.sin(cy2);
+  }
+  const mag = Math.hypot(mx, mz);
+  const ctx2 = currentInteract();   // p6: {id, ...} or null
+  if (IN.roll && P.sword) {
+    P.st = 'roll'; P.rollT = 0.38;
+    if (mag > 0.05) { P.rollDx = mx / mag; P.rollDz = mz / mag; }
+    else { P.rollDx = Math.sin(P.heading); P.rollDz = Math.cos(P.heading); }
+    P.heading = Math.atan2(P.rollDx, P.rollDz);
+    SFX.roll();
+    burst(psDust, P.x, groundH(P.x, P.z) + 0.2, P.z, 6, 1.4, 0.9, 0.45);
+    return;
+  }
+  if (IN.atk) {
+    if (ctx2) { doInteract(ctx2); return; }        // context beats swing
+    if (P.sword) {
+      P.st = 'atk'; P.atkN = 1; P.atkT = 0.3; P.queued = false; P.hitDone = false;
+      if (mag > 0.05) P.heading = Math.atan2(mx, mz);
+      SFX.sword();
+      return;
+    }
+  }
+  if (IN.pulse && P.sword) doPulse();
+  if (mag > 0.05) {
+    const sp = P.speed * Math.min(1, mag * 1.15);
+    P.vx = mx / mag * sp; P.vz = mz / mag * sp;
+    P.x += P.vx * DT; P.z += P.vz * DT;
+    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
+    P.heading = angLerp(P.heading, Math.atan2(mx, mz), 0.28);
+    P.st = 'walk';
+  } else {
+    P.vx *= 0.7; P.vz *= 0.7;
+    P.st = 'idle';
+  }
+}
+
+/* ── procedural character animation ── */
+function poseHumanoid(c, st, t, speed, opts) {
+  opts = opts || {};
+  const a = c.anim;
+  a.t += t;
+  const w = a.t;
+  const brth = Math.sin(w * 2.1) * 0.012;
+  c.torso.scale.y = 1 + brth;
+  let legA = 0, armA = 0, bob = 0, lean = 0;
+  if (st === 'walk') {
+    const f = w * (7.2 + speed * 1.1);
+    legA = Math.sin(f) * 0.62;
+    armA = -Math.sin(f) * 0.42;
+    bob = Math.abs(Math.cos(f)) * 0.045;
+    lean = 0.1;
+  }
+  c.hipL.rotation.x = legA; c.hipR.rotation.x = -legA;
+  c.kneeL.rotation.x = Math.max(0, -legA) * 1.3 + 0.06;
+  c.kneeR.rotation.x = Math.max(0, legA) * 1.3 + 0.06;
+  if (!opts.armsOverride) {
+    c.shL.rotation.x = armA + 0.06; c.shL.rotation.z = 0.1;
+    c.shR.rotation.x = -armA + 0.06; c.shR.rotation.z = -0.1;
+    c.elL.rotation.x = -0.25 - Math.max(0, armA) * 0.5;
+    c.elR.rotation.x = -0.25 - Math.max(0, -armA) * 0.5;
+  }
+  c.pelvis.position.y = c.pelvis.userData.y0 !== undefined ? c.pelvis.userData.y0 + bob : (c.pelvis.userData.y0 = c.pelvis.position.y);
+  c.torso.rotation.x = (opts.stoop || 0) + lean * 0.6;
+  // head look
+  if (opts.lookAt !== undefined) {
+    c.head.rotation.y = angLerp(c.head.rotation.y, clamp(opts.lookAt, -0.9, 0.9), 0.12);
+  } else {
+    c.head.rotation.y = angLerp(c.head.rotation.y, Math.sin(w * 0.4) * 0.15, 0.05);
+  }
+  c.head.rotation.x = Math.sin(w * 0.9) * 0.02 + (opts.headTilt || 0);
+  // scarf / hem sway
+  const sway = Math.sin(w * 3.1) * 0.06 + speed * 0.16;
+  for (let i = 0; i < c.scarf.length; i++) {
+    const s2 = c.scarf[i];
+    const base = i === 0 ? 0.72 : 0.1;     // tail trails BEHIND the shoulder
+    s2.rotation.x = clamp(base + sway * (0.7 + i * 0.5) + (opts.wind || 0) * (0.4 + i * 0.3), -0.2, 1.9);
+    s2.rotation.z = Math.sin(w * 2.3 + i) * 0.09;
+  }
+  if (c.hem) c.hem.rotation.x = Math.sin(w * 2.0) * 0.03 + speed * 0.06;
+}
+/* attack poses layered over the base */
+function poseAttack(c, n, ph) {
+  // ph 0..1 through the swing
+  const anticip = smoothstep(clamp(ph / 0.3, 0, 1));
+  const swing = smoothstep(clamp((ph - 0.3) / 0.35, 0, 1));
+  const rec = smoothstep(clamp((ph - 0.72) / 0.28, 0, 1));
+  const back = anticip * (1 - swing);
+  if (n === 1) {           // horizontal, right → left
+    c.shR.rotation.x = -0.5 - back * 0.9 + swing * 0.4;
+    c.shR.rotation.z = -0.2 - back * 1.1 + swing * 2.2 - rec * 0.9;
+    c.elR.rotation.x = -0.4 + back * 0.2 - swing * 0.15;
+    c.torso.rotation.y = back * 0.55 - swing * 1.0 + rec * 0.45;
+  } else if (n === 2) {    // backhand, left → right
+    c.shR.rotation.x = -0.6 - back * 0.5 + swing * 0.3;
+    c.shR.rotation.z = 1.6 - swing * 2.6 + rec * 1.0;
+    c.elR.rotation.x = -0.3;
+    c.torso.rotation.y = -back * 0.5 + swing * 0.95 - rec * 0.45;
+  } else {                 // overhead chop
+    c.shR.rotation.x = -0.2 - back * 2.3 + swing * 2.9 - rec * 0.6;
+    c.shR.rotation.z = -0.1;
+    c.elR.rotation.x = -0.5 + back * 0.3;
+    c.torso.rotation.x = -back * 0.22 + swing * 0.34 - rec * 0.12;
+  }
+  c.shL.rotation.x = 0.3 - back * 0.3 - swing * 0.2;
+  c.shL.rotation.z = 0.35;
+}
+function poseRoll(c, ph) {
+  c.pelvis.rotation.x = ph * TAU;
+  c.kneeL.rotation.x = 1.9; c.kneeR.rotation.x = 1.9;
+  c.hipL.rotation.x = -1.2; c.hipR.rotation.x = -1.2;
+  c.shL.rotation.x = -1.4; c.shR.rotation.x = -1.4;
+  c.elL.rotation.x = -1.6; c.elR.rotation.x = -1.6;
+}
+function poseItemGet(c, ph) {
+  const up = smoothstep(clamp(ph * 2.4, 0, 1));
+  c.shR.rotation.x = -up * 2.9; c.shR.rotation.z = -0.15;
+  c.elR.rotation.x = -0.15;
+  c.shL.rotation.x = 0.15; c.shL.rotation.z = 0.25;
+  c.head.rotation.x = -up * 0.4;
+}
+function poseCrumple(c, ph) {
+  const k = smoothstep(clamp(ph, 0, 1));
+  c.pelvis.position.y = (c.pelvis.userData.y0 || c.pelvis.position.y) - k * 0.35;
+  c.kneeL.rotation.x = k * 1.7; c.kneeR.rotation.x = k * 1.5;
+  c.hipL.rotation.x = -k * 1.1; c.hipR.rotation.x = -k * 0.9;
+  c.torso.rotation.x = k * 0.7;
+  c.head.rotation.x = k * 0.5;
+  c.shL.rotation.x = k * 0.4; c.shR.rotation.x = k * 0.5;
+}
+
+/* wick render-frame animation driver */
+let itemGetT = -1;   // >= 0 while playing the hold-up-the-item beat
+let idleSettle = 0;  // eases Wick into his relaxed stance
+function animateWick(dtv, now) {
+  const c = wick;
+  playerPos();
+  c.root.position.set(P.x, P.y, P.z);
+  c.root.rotation.y = P.heading;
+  wickShadow.position.set(P.x + shadeGrow * 0.22, P.y + 0.05, P.z + shadeGrow * 0.1);
+  wickShadow.scale.set(1 + shadeGrow * 0.35, 1, 1);
+  wickShadow.rotation.y = -Math.atan2(SHADOW_DIR[1], SHADOW_DIR[0]) * shadeGrow;
+  // i-frame flicker
+  const vis = P.iframes > 0 ? (Math.floor(now / 60) % 2 === 0) : true;
+  for (const m of c.parts) m.visible = vis;
+  c.sword.group.visible = P.sword && vis;
+  const spd = Math.hypot(P.vx, P.vz) / P.speed;
+  if (itemGetT >= 0) {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    poseItemGet(c, itemGetT);
+    swordToHand(true);
+    return;
+  }
+  if (P.st === 'atk') {
+    const total = P.atkN === 3 ? 0.36 : 0.3;
+    const ph = 1 - P.atkT / total;
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: 0.4 });
+    poseAttack(c, P.atkN, ph);
+    swordToHand(true);
+    updateTrail(ph);
+  } else if (P.st === 'roll') {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    poseRoll(c, 1 - P.rollT / 0.38);
+    swordToHand(false);
+    c.trail.mesh.visible = false;
+  } else if (P.st === 'hit') {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    c.torso.rotation.x = -0.25;
+    c.shL.rotation.x = -0.7; c.shR.rotation.x = -0.7;
+    swordToHand(false);
+    c.trail.mesh.visible = false;
+  } else if (state === 'cine' && CINE.id === 'sunstruck') {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    poseCrumple(c, CINE.t * 1.4);
+    swordToHand(false);
+  } else if (state === 'cine' && CINE.id === 'wake') {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    poseCrumple(c, 1 - clamp((CINE.t - 0.9) / 1.8, 0, 1));   // rises from the sand
+    swordToHand(false);
+  } else {
+    c.pelvis.rotation.x = 0;
+    c.torso.rotation.y *= 0.7;
+    poseHumanoid(c, P.st === 'walk' ? 'walk' : 'idle', dtv, spd * P.speed, { wind: spd * 0.5 });
+    // relaxed idle: weight on the left leg, right hand resting at the belt —
+    // settles in over half a second of standing still
+    if (P.st === 'idle') idleSettle = Math.min(1, idleSettle + dtv * 2.2);
+    else idleSettle = 0;
+    const k = smoothstep(idleSettle);
+    if (k > 0.01) {
+      c.pelvis.rotation.z = 0.05 * k;
+      c.torso.rotation.z = -0.035 * k;
+      c.hipR.rotation.x += -0.1 * k;
+      c.kneeR.rotation.x += 0.22 * k;
+      c.hipL.rotation.x += 0.02 * k;
+      c.shR.rotation.x += -0.5 * k;
+      c.shR.rotation.z += -0.12 * k;
+      c.elR.rotation.x += -0.85 * k;
+      c.shL.rotation.z += 0.1 * k;
+      c.head.rotation.z = 0.03 * k;
+    } else {
+      c.pelvis.rotation.z *= 0.8;
+      c.torso.rotation.z *= 0.8;
+      c.head.rotation.z *= 0.8;
+    }
+    swordToHand(false);
+    c.trail.mesh.visible = false;
+  }
+  // moonglass glow: △-pulse, plus passive proximity to the Crescent itself
+  let near = 0;
+  if (P.carryCrescent) near = 0.85;
+  else if (BOSS.c && !BOSS.crescentGiven) {
+    const dcr = Math.hypot(P.x - BOSS.x, P.z - BOSS.z);
+    near = clamp(1 - dcr / 30, 0, 1) * 0.8;
+  }
+  const glow = Math.max(P.pulseT, near);
+  const bm = c.sword.bladeMat;
+  bm.opacity = 0.92;
+  bm.color.setRGB(Math.min(1, 0.92 + glow * 0.5), Math.min(1, 0.97 + glow * 0.4), Math.min(1, 0.98 + glow * 0.3));
+}
+function swordToHand(inHand) {
+  const c = wick;
+  if (!P.sword) return;
+  const want = inHand ? c.swordHand : c.swordBack;
+  if (c.sword.group.parent !== want) {
+    want.add(c.sword.group);
+    c.sword.group.position.set(0, 0, 0);
+    c.sword.group.rotation.set(0, 0, 0);
+  }
+}
+/* glass-blade arc trail */
+function updateTrail(ph) {
+  const tr = wick.trail;
+  const on = ph > 0.3 && ph < 0.78;
+  tr.mesh.visible = on;
+  if (!on) return;
+  if (!tr.mesh.parent) scene.add(tr.mesh);
+  const k = (ph - 0.3) / 0.48;
+  const n = P.atkN;
+  const arcC = n === 2 ? -1 : 1;
+  const a0 = P.heading + arcC * (1.35 - k * 2.5) - 0.5 * arcC;
+  const y0 = groundH(P.x, P.z) + (n === 3 ? 1.5 - k * 0.9 : 1.05);
+  for (let i = 0; i < tr.segs; i++) {
+    const t = i / (tr.segs - 1);
+    const a = a0 + arcC * t * 1.5;
+    const r0 = 0.35, r1 = 1.55;
+    const sx = Math.sin(a), cz2 = Math.cos(a);
+    const yy = n === 3 ? y0 + t * 0.5 : y0 + Math.sin(t * 3.14) * 0.06;
+    tr.pos[i * 6] = P.x + sx * r0; tr.pos[i * 6 + 1] = yy; tr.pos[i * 6 + 2] = P.z + cz2 * r0;
+    tr.pos[i * 6 + 3] = P.x + sx * r1; tr.pos[i * 6 + 4] = yy + 0.06; tr.pos[i * 6 + 5] = P.z + cz2 * r1;
+  }
+  tr.mesh.geometry.attributes.position.needsUpdate = true;
+  TRAIL_MAT.opacity = 0.5 * (1 - Math.abs(k - 0.5) * 1.6);
+}
+
+/* NPC idle animation */
+function animateNPCs(dtv) {
+  const d2f = Math.hypot(P.x - finn.x, P.z - finn.z);
+  // face the player when близко during dialogue or nearby
+  for (const npc of [finn, tock, pearl]) {
+    const c = npc.char;
+    const dx = P.x - npc.x, dz = P.z - npc.z;
+    const d = Math.hypot(dx, dz);
+    let look;
+    if (d < 5) {
+      const want = Math.atan2(dx, dz);
+      let rel = want - npc.char.root.rotation.y;
+      rel = ((rel % TAU) + TAU) % TAU; if (rel > Math.PI) rel -= TAU;
+      look = clamp(rel, -0.85, 0.85);
+    }
+    poseHumanoid(c, 'idle', dtv, 0, {
+      lookAt: look,
+      stoop: (npc === finn || npc === tock) ? 0.1 : 0,
+    });
+    if (npc === tock) {
+      // knitting: tiny alternating hand bobs + the counting sway
+      const w = c.anim.t;
+      c.shL.rotation.x = -0.85 + Math.sin(w * 6) * 0.07;
+      c.shR.rotation.x = -0.8 - Math.sin(w * 6) * 0.07;
+      c.elL.rotation.x = -0.9; c.elR.rotation.x = -0.95;
+      c.torso.rotation.z = Math.sin(w * 1.1) * 0.03;
+    }
+    if (npc === pearl) {
+      // hands clasped behind, up on her toes now and then, watching the sky
+      const w = c.anim.t;
+      c.shL.rotation.x = 0.35; c.shR.rotation.x = 0.35;
+      c.shL.rotation.z = 0.3; c.shR.rotation.z = -0.3;
+      c.head.rotation.x = -0.25 + Math.sin(w * 0.5) * 0.08;
+      c.root.position.y = npc.baseY + Math.max(0, Math.sin(w * 0.9)) * 0.02;
+    }
+    if (npc === finn) {
+      c.shL.rotation.x = 0.12; c.shR.rotation.x = 0.12;
+      c.elL.rotation.x = -0.5; c.elR.rotation.x = -0.55;
+    }
+  }
+}
+</script>

@@ -1,0 +1,250 @@
+# FALLEN MOON — decided design (Phase 0, first playable slice)
+
+Spiritual sequel to Shattered Sun. Real 3D (three.js r147, Powder Peak
+recipe), close third-person Zelda-style adventure. Kid-playable: short
+dialogue, story told through what you SEE and DO. Design decided
+2026-08-08 under John's brief ("auto mode, playable by morning");
+creative liberties below are locked — implement as written, tune
+numbers for fun.
+
+## The mythology (invented, locked)
+
+The moon didn't just fall — it CAME APART. One year ago it cracked
+like a struck bell and its EIGHT PHASES fell to earth as real,
+differently-shaped relics: the New Coin, the Waxing Sliver, the
+CRESCENT HORN, the Half Shield, the Gibbous Bell, the Full Mirror,
+the Waning Lantern, the Old Bone. Since then the sun has nowhere to
+go: it hangs pinned at noon, forever. Nobody knows yet what struck
+the moon (series mystery — the slice drops ONE hint, see Grotto).
+
+Above the village stands the **MOONWHEEL** — an ancient stone ring
+with eight empty sockets. **THE SPINE OF THE GAME (locked, John's
+directive 8/8): every phase restored CHANGES THE WORLD — visibly,
+mechanically, permanently. Never just a counter.** The progression
+IS the spectacle: you are watching yourself fix the world, one
+phase at a time, and the finale — the eighth phase — brings the
+first NIGHT of the entire game.
+
+The eight phases and their world-changes (series roadmap; slice
+implements the Crescent only, but the TO BE CONTINUED card teases
+the Half Shield's):
+
+1. **CRESCENT HORN** (this slice) — shadows return: every shade
+   pool visibly stretches and grows (more healing ground), the
+   first star appears, and one tidepool at the bay's edge refills —
+   a single moonfish jumps. Proof of concept for everything.
+2. **HALF SHIELD** — THE TIDE COMES HOME: the Dry Bay floods back
+   to real ocean. Boats float, the ferry runs, new coasts open —
+   and the walkable seabed (including the Grotto path) submerges.
+   The first dungeon area transforms into sea.
+3. **GIBBOUS BELL** — the sun finally MOVES: a partial day arc
+   returns, bringing the first sunset anyone has seen in years
+   (long golden-hour light, evening ambience).
+4. **WAXING SLIVER** — cool winds return: the Parched Forest
+   re-greens, burnt thickets soften into new walkable paths.
+5. **FULL MIRROR** — nocturnal life wakes: moths, owls, fireflies;
+   night-market NPCs appear with new shops and quests.
+6. **WANING LANTERN** — the stars all return: constellations
+   unlock star-map navigation puzzles and light distant beacons.
+7. **OLD BONE** — the deep places cool: badland lava crusts into
+   walkable obsidian; the final region opens.
+8. **NEW COIN** — the moon rises. **NIGHT.** The whole world you
+   fixed, seen at last in the dark: firefly fields, lit windows,
+   the tide silver under moonlight. The end.
+
+The slice recovers exactly one phase (the Crescent Horn) and its
+payoff must already demonstrate the spine: sky step + shadows
+stretching + the refilled tidepool, all at once.
+
+## ART DIRECTION (locked, overriding all house-style precedent)
+
+**This is NOT the Phaser Wars look. No chibi, no big heads, no googly
+eyes, no toddler proportions — nothing "cute-arcade."** The bar is
+stylized-realism in the vein of Zelda: Breath of the Wild / Ghibli:
+- Characters at **6.5–7 head-heights**, slim believable builds,
+  real necks, real hands (mitten-simple is fine, but proportioned).
+- Faces minimal and matte like BotW: small dark eyes (no white
+  sclera balls, no giant pupils), simple brow line, understated
+  mouth. Expression comes from posture and animation, not face gags.
+- Hair as sculpted low-poly chunks (Link-like), cloth as real
+  geometry: Wick's scarf and Finn's coat hem move with a cheap
+  vertex sway. Hooded/robed silhouettes welcome for NPCs.
+- **Cel/toon shading**: characters use MeshToonMaterial (r147) with
+  a 3-step gradient ramp — clean two-tone cel look, one directional
+  + hemisphere, constant across areas. World light is BAKED as
+  painterly toon ramps in vertex colors (hard-edged light/shade
+  boundaries, colored shadows), not smooth gradients.
+- Muted, natural palette under blown-out noon: bleached grass-gold,
+  sea-salt white, terracotta roofs, teal shade pools. No neon, no
+  arcade saturation. Bloom-feel faked with pale sky + fog, never
+  postprocessing.
+- Animation carries the charm: weight in the walk, anticipation on
+  the sword swing, idle breathing, head-look at nearby NPCs.
+The screenshot test: a stranger should read a still as "a small
+serious 3D adventure game," never "a kids' browser game."
+
+## The hero & the sword
+
+**WICK** — a young adventurer (gender-neutral, Link-like proportions
+per the art direction above: 6.5 heads tall, sculpted hair, red
+scarf with vertex sway, toon-shaded, small matte eyes).
+**The Moonglass Sword** — a pale glass blade, the village heirloom.
+Moonglass GLOWS when a moon phase is near: the sword is also your
+compass (△ pulses it — a soft chime + glow swell scaled by
+proximity to the current objective).
+
+## The world slice: BRIGHTHARBOR & THE DRY BAY
+
+A fishing village where the tide went out a year ago and never came
+back. Consequence-as-level-design everywhere:
+
+- Boats beached and tilted on a cracked-mud seabed; nets full of salt
+  crystals; a lighthouse with nothing to light (it's always noon).
+- The DRY BAY is walkable seafloor — dried kelp forests (cuttable),
+  salt-crystal tidepools, a shipwreck with a chest — places you can
+  only reach BECAUSE the sea is gone.
+- **Shade is sanctuary**: standing in shadow slowly refills hearts
+  (visible sparkle + soft hum). Sun-glare zones on open seabed pulse
+  heat shimmer. The theme is a mechanic: without night, shade is the
+  only rest anyone gets.
+- Palette: over-bright warm noon (bleached sand, white-gold sky, hard
+  colored shadows: deep teal/purple shade pools). Fog matched to a
+  pale hot horizon. It should look BEAUTIFUL and slightly wrong.
+
+## Slice beats (launch → ~12 min, all playable)
+
+1. **Wake under a beached boat** (in shade). Zero text. Walk out into
+   the glare — screen blooms bright for a beat. You already understand.
+2. **Village, 3 NPCs, dialogue ≤3 short lines each, ✕ advances:**
+   - **Keeper Finn** (lighthouse keeper, dry humor): "A lighthouse in
+     endless day is just... stairs." Gives you the Moonglass Sword
+     after beat 3. Quest-giver.
+   - **Granny Tock**: hasn't slept in a year; knits by the well;
+     counts seconds out loud to remember what time was.
+   - **Pearl** (kid on a boat prow): has never seen stars; thinks
+     they're a bedtime story adults made up.
+3. **Sword in ~90 seconds**: Finn's door is blocked by dried kelp →
+   he tosses you the sword through the window: "Mind the glass. Cut
+   me loose." Cut kelp (tutorial), he steps out, points at the
+   Moonwheel on the hill: "Eight sockets. Eight phases. The Crescent
+   fell into the bay — and the bay's gone dry. Walk out and get it."
+4. **Objective ping**: sword glows toward the bay. HUD quest line:
+   "RECOVER THE CRESCENT HORN — 0/8 PHASES RESTORED".
+5. **The Dry Bay**: fight 2 enemy types — **Scorch Crabs** (skitter,
+   telegraphed pinch lunge) and **Glare Wisps** (drifting sun-motes
+   that dive; they pop into harmless sparkles in shade). Secrets: a
+   shipwreck chest (+1 heart container), salt crystals (sparkle
+   pickup, count toward nothing yet — future currency, save them).
+6. **Tidepool Grotto** (mini-dungeon, SHADED interior — relief is
+   audible: heat hum stops): one environmental puzzle — a fallen
+   **mirror-shell** you rotate (✕ hold) to bounce the one hard
+   sunbeam from the ceiling crack onto a dried kelp wall, burning it
+   away. Teaches: the sun is a tool here, not just an enemy.
+7. **Boss: the SUNSTRUCK KING-CRAB** — hermit-crab the size of a
+   boat wearing the CRESCENT HORN as its shell. Sun-maddened, not
+   evil. Three-phase kid-fair fight (telegraphed claw slam → hit the
+   claw; it burrows/charges → dodge-roll; wisps join in phase 3).
+   Beaten, the madness lifts — it blinks, bows, hands over the
+   Crescent, and scuttles into a shady pool. (Nothing dies in
+   Brightharbor.) ONE lore hint on the grotto wall behind it: a
+   huge old carving of the moon with a CHAIN wrapped around it,
+   leading down. No explanation. (That's the series hook.)
+8. **THE PAYOFF** (the slice's whole reason to exist — spend polish
+   here): carry the Crescent to the Moonwheel, slot it (✕):
+   cinematic beat — the wheel turns one notch, a low bell tolls,
+   and the world CHANGES in three visible ways at once:
+   a. The sky dims one-eighth toward dusk; horizon warms; ONE star
+      appears (the first in a year).
+   b. **Every shadow in the world stretches** — shade pools visibly
+      grow (~30% larger healing zones, asserted in harness). The
+      camera should catch shadows lengthening across the village.
+   c. **One tidepool at the bay's edge refills with real water** —
+      and a moonfish jumps once, catching the new starlight.
+   Granny Tock, from the village below: audible yawn. Pearl:
+   "...is that a star?" Save point. HUD: "1/8 PHASES RESTORED".
+   Finn: "The Half Shield fell past the Parched Forest. They say
+   the tide follows it home. Rest first. Or don't — it's not like
+   it gets dark." → TO BE CONTINUED card (silhouette of the flooded
+   bay-to-come) → back to playing (free roam, secrets remain; the
+   refilled tidepool stays, shadows stay long).
+
+## Controls (locked)
+
+Pad: left stick = move (camera-relative). ✕ = sword swing (3-hit
+combo) AND context interact/talk when prompted. ○ = dodge-roll
+(i-frames, kid-generous). △ = moonglass pulse (objective compass).
+START = pause. Never SELECT+START / home (shell owns them).
+Keyboard: WASD move, J or Space = attack/interact, K or Shift =
+roll, L = pulse, Esc/P = pause. Touch: injected touchpad-v1 only —
+no custom touch UI.
+
+## Camera (locked)
+
+Close third-person follow: ~3.2m behind, ~1.9m up, looks at chest
+height; lerped; swings gently behind movement direction with slight
+look-ahead; pulls closer indoors (Grotto). No manual camera control,
+no lock-on in v1 — sword arcs are generous instead. Never clips
+through walls (simple sphere-cast pullback).
+
+## Combat & kid-proofing (locked)
+
+3-hit combo, visible glass-blade arc trail, hitstop 3 ticks, sparks,
+knockback, PW2-style rumble table (guarded). 5 hearts; hit = 1 heart
++ i-frames + knockback. 0 hearts = "sunstruck" — screen whites out,
+wake in nearest shade with 3 hearts. No death word, no game over.
+Shade heals 1 heart / 4s. Enemies respawn only after leaving the
+area. Boss checkpoints at each phase.
+
+## Persistence
+
+localStorage `fallenmoon_save_v1` (try/catch): quest step, phases
+restored, heart containers, chests opened, salt crystals, sword
+obtained, last shade spot. Continue seamlessly on relaunch; title
+shows CONTINUE when a save exists.
+
+## 1P only (decided)
+
+The slice is single-player; drop-in 2P doesn't fit a Zelda-like yet.
+(Future: Pearl as P2 with a slingshot. Not in v1.)
+
+## Tech (Powder Peak/PW2 recipe, verbatim — non-negotiable)
+
+three.js r147 inlined (three.min.js vendored in repo) in its own
+<script> before game code. Fixed 1280x720 backbuffer, pixelRatio 1,
+antialias false, stencil false, CSS-transform letterbox (#stage).
+World = merged BufferGeometry chunks, MeshBasicMaterial + baked
+vertex colors (bake the hard-noon light + colored shade INTO the
+verts), no normals/UVs. Only Wick + NPCs + enemies Lambert-lit (1
+directional + 1 hemisphere, CONSTANT — arena/mood via baked colors
+and fog only, per PW2 skin-tone lesson). NO shadow maps — blob
+shadows. Sky dome low-seg, vertex gradient; the 8-step sky dimming =
+re-lerp the dome/fog/hemisphere colors (cheap, dramatic). Fog is
+load-bearing. Fixed 60Hz accumulator sim (≤5 catch-up), decoupled
+render. Pooled Float32Array particles (sparks, shimmer, sparkles,
+star). No per-frame allocs; scratch vectors. matrixAutoUpdate=false
+statics. Budgets: ≤80 draw calls, ≤120k tris, asserted via
+renderer.info in harness. Telemetry on window.__fm (tick, state,
+pos, hearts, quest step, phases, calls, tris, fps, dialogue id,
+boss phase, skyStep). LOWFX halves particles, kills shimmer.
+Chunked world visibility by distance (Powder Peak tile culling).
+
+Audio: all WebAudio synth (lazy ctx): heat hum (open sun), cool hush
+(shade), sword whoosh/glass chime, crab clicks, boss thumps, the
+BELL TOLL for the wheel, one gentle 5-note "night theme" fragment
+when the star appears. Sparse music: ambient pads day-side, tiny
+music box motif in shade. SpeechSynthesis NOT used (NPC dialogue is
+text bubbles — short).
+
+## Verification additions (beyond house standard)
+
+Real-input CDP gates: full slice walkthrough start→Crescent→wheel
+(pad alone, then keyboard alone); shade healing tick observed; hit →
+sunstruck → shade respawn; kelp cut; chest + heart container; mirror
+puzzle solved by held rotate; boss all 3 phases via real dodges/hits;
+**sky-dim payoff asserted by sampling sky pixels before/after
+slotting** (delta must be visible); save persists across reload
+(CONTINUE resumes at quest step); pause; touch pass; perf sampling
+in village, bay fight, and boss. Screenshots: title, village, dry
+bay combat, grotto puzzle, boss, THE PAYOFF (wheel + dimmed sky +
+star), each LOOKED AT against the bar: "beautiful and slightly
+wrong; a real place, not a tech demo."

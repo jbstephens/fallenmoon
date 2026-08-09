@@ -1,0 +1,1074 @@
+<script>
+/* ═══════════════════ p6 — enemies, boss, dialogue, quests, cinematics ═══════════════════ */
+
+/* ── quest state ── */
+const QUEST = { q: 0, phases: 0 };
+const QUEST_TEXT = {
+  0: '',
+  1: 'CUT KEEPER FINN’S DOOR FREE',
+  2: 'RECOVER THE CRESCENT HORN — 0/8 PHASES RESTORED',
+  3: 'CARRY THE CRESCENT TO THE MOONWHEEL',
+  4: '1/8 PHASES RESTORED',
+};
+function setQuest(q) {
+  QUEST.q = q;
+  SAVE.q = q; storeSave();
+  const t = QUEST_TEXT[q] || '';
+  questEl.textContent = t;
+  questEl.classList.toggle('on', !!t);
+  if (q === 4) setTimeout(() => questEl.classList.remove('on'), 9000);
+}
+
+/* ── glare overlay ── */
+let glareA = 0, glareDecay = 1;
+function flashGlare(op, dur) { glareA = Math.max(glareA, op); glareDecay = op / Math.max(0.15, dur); }
+
+/* ── dialogue ── */
+const DLG = {
+  finn1: { name: 'KEEPER FINN', lines: [
+    'A lighthouse in endless day is just... stairs.',
+    'The door’s grown a beard of kelp, and my knees are past arguing with it.',
+    'Catch — mind the glass. Cut me loose.',
+  ], onDone: () => giveSword() },
+  finnCut: { name: 'KEEPER FINN', lines: ['The kelp, lad. Swing that ancient thing.'] },
+  finn2: { name: 'KEEPER FINN', lines: [
+    'Hah. Air. Still hot as a kettle, mind.',
+    'Eight sockets on that hill. Eight fallen phases. The Crescent came down in the bay.',
+    'And the bay’s gone dry, so — walk out and get it. Keep to the shade.',
+  ], onDone: () => setQuest(2) },
+  finnWait: { name: 'KEEPER FINN', lines: [
+    'Shade heals. Sun doesn’t. That’s the whole trick to the bay.',
+  ] },
+  finnCarry: { name: 'KEEPER FINN', lines: [
+    'That’s IT. That’s a piece of the moon. Up the hill — the wheel’s waited a year.',
+  ] },
+  finn3: { name: 'KEEPER FINN', lines: [
+    'One notch. Listen — the whole hill is humming.',
+    'The Half Shield fell past the Parched Forest. They say the tide follows it home.',
+    'Rest first. Or don’t — it’s not like it gets dark.',
+  ], onDone: () => showTBC() },
+  finnPost: { name: 'KEEPER FINN', lines: [
+    'Seven to go. The tide follows them home, they say.',
+  ] },
+  tock1: { name: 'GRANNY TOCK', lines: [
+    '...four thousand and one. Four thousand and two.',
+    'Counting seconds, dear. Somebody has to remember what time was.',
+    'Sleep? When it’s dark. So — never.',
+  ] },
+  tock2: { name: 'GRANNY TOCK', lines: ['...four thousand and nine. Don’t tangle my wool, dear.'] },
+  tockDusk: { name: 'GRANNY TOCK', lines: [
+    '...one... two... my my. Would you look at that colour.',
+    'First yawn in a year. Off you go, dear. Seven more.',
+  ] },
+  pearl1: { name: 'PEARL', lines: [
+    'Grown-ups say lights used to live in the night sky. Stars.',
+    'I think they made it up.',
+    '...they made it up, right?',
+  ] },
+  pearl2: { name: 'PEARL', lines: ['The sea was RIGHT here. Dad says I paddled in it. I don’t remember it.'] },
+  pearlStar: { name: 'PEARL', lines: [
+    'It’s real. It’s REAL, and it’s looking at me.',
+    'Get the others, Wick. Get ALL of them.',
+  ] },
+};
+const DS = { id: null, line: 0, chars: 0, npc: null };
+function startDialog(id, npc) {
+  DS.id = id; DS.line = 0; DS.chars = 0; DS.npc = npc || null;
+  setState('dialog');
+  dlgName.textContent = DLG[id].name;
+  dlgText.textContent = '';
+  SFX.talk();
+}
+function tickDialog() {
+  const d = DLG[DS.id];
+  const full = d.lines[DS.line];
+  if (DS.chars < full.length) {
+    DS.chars = Math.min(full.length, DS.chars + 2);
+    dlgText.textContent = full.slice(0, DS.chars);
+  }
+  if (IN.confirm) {
+    if (DS.chars < full.length) {
+      DS.chars = full.length;
+      dlgText.textContent = full;
+    } else if (DS.line < d.lines.length - 1) {
+      DS.line++; DS.chars = 0; dlgText.textContent = '';
+      SFX.talk();
+    } else {
+      const id = DS.id;
+      DS.id = null;
+      setState('play');
+      if (d.onDone) d.onDone();
+      markTalked(id);
+    }
+  }
+}
+function markTalked(id) {
+  if (id === 'finn1') { SAVE.talked.finn = Math.max(SAVE.talked.finn, 1); }
+  if (id === 'finn2') { SAVE.talked.finn = Math.max(SAVE.talked.finn, 2); }
+  if (id === 'tock1') SAVE.talked.tock = 1;
+  if (id === 'pearl1') SAVE.talked.pearl = 1;
+  storeSave();
+}
+
+/* ── item toast ── */
+function itemToast(big, small) {
+  const t = el('itemToast');
+  t.querySelector('.it1').textContent = big;
+  t.querySelector('.it2').textContent = small;
+  t.classList.remove('show');
+  void t.offsetWidth;
+  t.classList.add('show');
+}
+
+/* ── sword bestowal ── */
+function giveSword() {
+  P.sword = true;
+  SAVE.sword = true; storeSave();
+  wick.sword.group.visible = true;
+  itemGetT = 0;
+  itemToast('THE MOONGLASS SWORD', 'It glows when a piece of the moon is near. △ to pulse.');
+  SFX.itemGet();
+  rumble({ duration: 300, strong: 0.4, weak: 0.6 });
+  setQuest(1);
+}
+function onDoorFreed() {
+  // Finn steps out, then delivers the quest
+  startCine('finnOut');
+}
+
+/* ── interactions ── */
+function currentInteract() {
+  if (!P) return null;
+  const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
+  if (QUEST.q === 3 && P.carryCrescent && near(WHEEL_POS.x, WHEEL_POS.z, 5.2))
+    return { id: 'wheel', label: '✕ PLACE THE CRESCENT' };
+  if (!chest.opened && QUEST.q >= 2 && near(chest.x, chest.z, 1.7))
+    return { id: 'chest', label: '✕ OPEN' };
+  for (const [npc, tag, rad] of [[finn, 'finn', 2.4], [tock, 'tock', 2.4], [pearl, 'pearl', 2.9]]) {
+    // while Finn is still kelped in and you hold the sword, ✕ must CUT, not chat
+    if (tag === 'finn' && QUEST.q === 1 && !kelpDoorCut) continue;
+    if (near(npc.x, npc.z, rad)) return { id: 'talk', npc, tag, label: '✕ TALK' };
+  }
+  if (!wallBurned() && QUEST.q >= 2 && near(MIRROR_POS.x, MIRROR_POS.z, 2.4))
+    return { id: 'mirror', label: 'HOLD ✕ — TURN THE SHELL' };
+  return null;
+}
+function wallBurned() { return wallKelp.stalks[0].cut; }
+function doInteract(ctx) {
+  if (ctx.id === 'talk') {
+    const t = ctx.tag;
+    let id;
+    if (t === 'finn') {
+      if (!P.sword && QUEST.q === 0) id = 'finn1';
+      else if (QUEST.q === 1) id = 'finnCut';
+      else if (QUEST.q === 2) id = 'finnWait';
+      else if (QUEST.q === 3) id = 'finnCarry';
+      else id = 'finnPost';
+    } else if (t === 'tock') {
+      if (QUEST.q >= 4) id = 'tockDusk';
+      else id = SAVE.talked.tock ? 'tock2' : 'tock1';
+    } else {
+      if (QUEST.q >= 4) id = 'pearlStar';
+      else id = SAVE.talked.pearl ? 'pearl2' : 'pearl1';
+    }
+    startDialog(id, ctx.npc);
+  } else if (ctx.id === 'chest') {
+    openChest();
+  } else if (ctx.id === 'wheel') {
+    startCine('wheel');
+  }
+  // mirror: nothing on press — it's a hold
+}
+
+/* chest + heart container */
+let chestAnimT = -1, heartFloatT = -1;
+function openChest() {
+  chest.opened = true;
+  SAVE.wreckChest = true; storeSave();
+  chestAnimT = 0;
+  SFX.chestOpen();
+}
+function tickChest() {
+  if (chestAnimT < 0) return;
+  chestAnimT += DT;
+  chest.lid.rotation.x = -smoothstep(clamp(chestAnimT / 0.5, 0, 1)) * 1.9;
+  if (chestAnimT > 0.4 && heartFloatT < 0) {
+    heartFloatT = 0;
+    chest.heart.visible = true;
+  }
+  if (heartFloatT >= 0) {
+    heartFloatT += DT;
+    const y0 = groundH(chest.x, chest.z) + 0.5;
+    if (heartFloatT < 1.0) {
+      chest.heart.position.set(chest.x, y0 + heartFloatT * 0.9, chest.z);
+      chest.heart.rotation.y += DT * 3;
+    } else if (heartFloatT < 1.7) {
+      const t = (heartFloatT - 1.0) / 0.7;
+      chest.heart.position.set(lerp(chest.x, P.x, t), lerp(y0 + 0.9, groundH(P.x, P.z) + 1.9, t), lerp(chest.z, P.z, t));
+      chest.heart.rotation.y += DT * 6;
+    } else {
+      chest.heart.visible = false;
+      chestAnimT = -1; heartFloatT = -1;
+      P.maxHearts = Math.min(8, P.maxHearts + 1);
+      P.hearts = P.maxHearts;
+      SAVE.mh = P.maxHearts; storeSave();
+      itemGetT = 0;
+      itemToast('HEART CONTAINER', 'The old sea kept one safe for you.');
+      SFX.heart();
+      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+    }
+  }
+}
+
+/* salt pickups */
+function tickSalt() {
+  for (const s of saltPickups) {
+    if (s.got) continue;
+    if (Math.hypot(P.x - s.x, P.z - s.z) < 1.0) {
+      s.got = true;
+      P.salt++;
+      SAVE.salt = P.salt; storeSave();
+      rebuildSalt();
+      SFX.pickup();
+      burst(psSparkle, s.x, groundH(s.x, s.z) + 0.5, s.z, 10, 1.0, 1.4, 0.7);
+    }
+  }
+}
+
+/* ── the mirror-shell puzzle ── */
+let burnT = 0, beamOn = false, wallBurnAnim = -1, mirrorDelta = 9;
+function tickMirror() {
+  const ctx = currentInteract();
+  const nearMirror = ctx && ctx.id === 'mirror';
+  if (nearMirror && IN.atkHeld && state === 'play') {
+    mirror.angle += 0.75 * DT;
+    if (mirror.angle > TAU) mirror.angle -= TAU;
+    mirror.group.rotation.y = -mirror.angle;
+  }
+  let da = mirror.angle - mirror.target;
+  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+  // magnetic settle: release near the mark and the shell seats itself
+  if (!(nearMirror && IN.atkHeld) && Math.abs(da) < 0.4 && !wallBurned()) {
+    mirror.angle = angLerp(mirror.angle, mirror.target, 0.05);
+    mirror.group.rotation.y = -mirror.angle;
+    da = mirror.angle - mirror.target;
+    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+  }
+  mirrorDelta = da;
+  beamOn = !wallBurned() && Math.abs(da) < 0.17;
+  beamOut.rotation.y = -mirror.angle;
+  beamOut.material.opacity = beamOn ? 0.3 : (Math.abs(da) < 0.7 ? 0.1 : 0);
+  if (beamOn && wallBurnAnim < 0) {
+    burnT += DT;
+    if (burnT > 0.15 && Math.random() < 0.3) {
+      burst(psSpark, KELPWALL.x, groundH(KELPWALL.x, KELPWALL.z) + 1.5, KELPWALL.z, 3, 0.8, 1.6, 0.5);
+    }
+    if (burnT >= 1.0) {
+      wallBurnAnim = 0;
+      SFX.burn();
+    }
+  } else if (!beamOn) burnT = Math.max(0, burnT - DT * 2);
+  if (wallBurnAnim >= 0 && !wallBurned()) {
+    wallBurnAnim += DT;
+    if (Math.random() < 0.5) {
+      const s = wallKelp.stalks[(Math.random() * wallKelp.stalks.length) | 0];
+      burst(psSpark, s.x, groundH(s.x, s.z) + Math.random() * 2.5, s.z, 4, 1.2, 2.0, 0.6);
+    }
+    if (wallBurnAnim > 1.4) {
+      for (const s of wallKelp.stalks) s.cut = true;
+      rebuildKelpPatch(wallKelp);
+      for (const c of wallColl) c.off = true;
+      SAVE.wallBurned = true; storeSave();
+      burst(psDust, KELPWALL.x, groundH(KELPWALL.x, KELPWALL.z) + 1, KELPWALL.z, 20, 2.2, 2.0, 0.8);
+      rumble({ duration: 250, strong: 0.4, weak: 0.5 });
+    }
+  }
+}
+
+/* ═══════════ ENEMIES ═══════════ */
+const crabs = [
+  { x: -8, z: 44 }, { x: 18, z: 56 }, { x: -26, z: 66 }, { x: 40, z: 74 },
+  { x: 24, z: 116 }, { x: 38, z: 120 },
+].map(s => ({
+  c: buildScorchCrab(), sx: s.x, sz: s.z, x: s.x, z: s.z, hp: 3,
+  st: 'patrol', t: Math.random() * 3, ang: 0, dir: [1, 0], dead: false, area: 'bay',
+  lungeCD: 0, flash: 0,
+}));
+for (const cr of crabs) { cr.c.root.position.set(cr.x, groundH(cr.x, cr.z), cr.z); scene.add(cr.c.root); }
+
+const wisps = [
+  { x: 0, z: 60 }, { x: -36, z: 84 }, { x: 30, z: 90 },
+].map(s => ({
+  m: buildWisp(), sx: s.x, sz: s.z, x: s.x, z: s.z, y: 0,
+  st: 'drift', t: Math.random() * 2, dir: [0, 0, 0], dead: false, area: 'bay',
+}));
+for (const w of wisps) { w.y = groundH(w.x, w.z) + 1.8; w.m.root.position.set(w.x, w.y, w.z); scene.add(w.m.root); }
+
+function areaAt(x, z) {
+  if (inGrottoAt(x, z)) return 'grotto';
+  return z < 14 ? 'village' : 'bay';
+}
+function respawnLeftBehind() {
+  const cur = P.area;
+  for (const cr of crabs) {
+    if (cr.dead && cr.area !== cur) {
+      cr.dead = false; cr.hp = 3; cr.st = 'patrol'; cr.x = cr.sx; cr.z = cr.sz;
+      cr.c.root.position.set(cr.x, groundH(cr.x, cr.z), cr.z);
+    }
+  }
+  for (const w of wisps) {
+    if (w.dead && w.area !== cur && w.area !== 'boss') {
+      w.dead = false; w.st = 'drift'; w.x = w.sx; w.z = w.sz;
+      w.y = groundH(w.x, w.z) + 1.8;
+      w.m.root.visible = true;
+    }
+  }
+}
+
+function tickCrab(cr) {
+  if (cr.dead) return;
+  const d2p = Math.hypot(P.x - cr.x, P.z - cr.z);
+  cr.t += DT;
+  if (cr.flash > 0) cr.flash -= DT;
+  if (cr.lungeCD > 0) cr.lungeCD -= DT;
+  if (cr.st === 'stagger') {
+    cr.x += cr.dir[0] * 4 * DT; cr.z += cr.dir[1] * 4 * DT;
+    if (cr.t > 0.4) { cr.st = 'aggro'; cr.t = 0; }
+  } else if (cr.st === 'patrol') {
+    const a = Math.sin(cr.t * 0.5 + cr.sx) * 2.2;
+    const tx = cr.sx + Math.cos(a) * 3, tz = cr.sz + Math.sin(a * 1.3) * 3;
+    moveCrab(cr, tx, tz, 1.0);
+    if (d2p < 8) { cr.st = 'aggro'; cr.t = 0; }
+  } else if (cr.st === 'aggro') {
+    moveCrab(cr, P.x, P.z, 1.9);
+    if (d2p > 13) { cr.st = 'patrol'; cr.t = 0; }
+    else if (d2p < 3.6 && cr.lungeCD <= 0) {
+      cr.st = 'tele'; cr.t = 0;
+      SFX.click();
+    }
+  } else if (cr.st === 'tele') {
+    // claws up, rattling — the read
+    if (cr.t > 0.55) {
+      cr.st = 'lunge'; cr.t = 0;
+      const d = Math.hypot(P.x - cr.x, P.z - cr.z) || 1;
+      cr.dir = [(P.x - cr.x) / d, (P.z - cr.z) / d];
+      SFX.click();
+    }
+  } else if (cr.st === 'lunge') {
+    cr.x += cr.dir[0] * 7.5 * DT; cr.z += cr.dir[1] * 7.5 * DT;
+    const c = collide(cr.x, cr.z, 0.5); cr.x = c[0]; cr.z = c[1];
+    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.05) hurtPlayer(1, cr.x, cr.z);
+    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
+  } else if (cr.st === 'recover') {
+    if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
+  }
+  // soft push so it never overlaps the player standing still
+  if (d2p < 1.1 && cr.st !== 'lunge') {
+    const d = d2p || 1;
+    cr.x -= (P.x - cr.x) / d * 1.2 * DT; cr.z -= (P.z - cr.z) / d * 1.2 * DT;
+  }
+}
+function moveCrab(cr, tx, tz, sp) {
+  const dx = tx - cr.x, dz = tz - cr.z, d = Math.hypot(dx, dz);
+  if (d > 0.4) {
+    cr.x += dx / d * sp * DT; cr.z += dz / d * sp * DT;
+    const c = collide(cr.x, cr.z, 0.5); cr.x = c[0]; cr.z = c[1];
+    cr.ang = Math.atan2(dx, dz);
+  }
+}
+function hitCrab(cr) {
+  cr.hp--;
+  cr.flash = 0.18;
+  SFX.hit();
+  P.hitstop = 3;
+  rumble({ duration: 70, strong: 0.4, weak: 0.3 });
+  const y = groundH(cr.x, cr.z);
+  burst(psSpark, cr.x, y + 0.5, cr.z, 8, 1.8, 1.6, 0.4);
+  const d = Math.hypot(cr.x - P.x, cr.z - P.z) || 1;
+  cr.dir = [(cr.x - P.x) / d, (cr.z - P.z) / d];
+  if (cr.hp <= 0) {
+    cr.dead = true;
+    burst(psDust, cr.x, y + 0.3, cr.z, 16, 2.0, 1.6, 0.7);
+    SFX.thump(false);
+    cr.c.root.visible = false;      // burrows away — nothing dies in Brightharbor
+    if (Math.random() < 0.35) {
+      P.salt++; SAVE.salt = P.salt; storeSave();
+      SFX.pickup();
+      burst(psSparkle, cr.x, y + 0.6, cr.z, 8, 1.0, 1.2, 0.7);
+    }
+  } else {
+    cr.st = 'stagger'; cr.t = 0;
+  }
+}
+
+function tickWisp(w) {
+  if (w.dead) return;
+  w.t += DT;
+  const gy = groundH(w.x, w.z);
+  if (inShadeAt(w.x, w.z) && w.st !== 'pop') {
+    // shade pops wisps into harmless sparkles — the theme as a mechanic
+    popWisp(w);
+    return;
+  }
+  const d2p = Math.hypot(P.x - w.x, P.z - w.z);
+  if (w.st === 'drift') {
+    w.y = gy + 1.8 + Math.sin(w.t * 2.2) * 0.25;
+    if (d2p > 1.5 && d2p < 16) {
+      const d = d2p || 1;
+      w.x += (P.x - w.x) / d * 1.25 * DT;
+      w.z += (P.z - w.z) / d * 1.25 * DT;
+    }
+    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; }
+  } else if (w.st === 'tele') {
+    w.y = gy + 2.1 + Math.sin(w.t * 18) * 0.06;
+    if (w.t > 0.5) {
+      w.st = 'dive'; w.t = 0;
+      const ty = groundH(P.x, P.z) + 0.8;
+      const dx = P.x - w.x, dy = ty - w.y, dz = P.z - w.z;
+      const l = Math.hypot(dx, dy, dz) || 1;
+      w.dir = [dx / l * 8.5, dy / l * 8.5, dz / l * 8.5];
+      SFX.pop();
+    }
+  } else if (w.st === 'dive') {
+    w.x += w.dir[0] * DT; w.y += w.dir[1] * DT; w.z += w.dir[2] * DT;
+    if (Math.hypot(P.x - w.x, P.z - w.z) < 0.8 && Math.abs(w.y - (groundH(P.x, P.z) + 1.0)) < 1.0) {
+      hurtPlayer(1, w.x, w.z);
+      w.st = 'drift'; w.t = 0;
+    }
+    if (w.y < gy + 0.25 || w.t > 1.1) { w.st = 'drift'; w.t = 0; }
+  }
+  // sword pops them
+  if (P.st === 'atk' && P.hitDone === false) { /* handled in swingHits */ }
+}
+function popWisp(w) {
+  w.dead = true;
+  w.m.root.visible = false;
+  burst(psSpark, w.x, w.y, w.z, 14, 1.6, 0.8, 0.7);
+  SFX.pop();
+}
+
+/* ═══════════ THE SUNSTRUCK KING-CRAB ═══════════ */
+const BOSS = {
+  c: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
+  x: GROTTO_B.x, z: GROTTO_B.z - 2, ang: Math.PI,
+  slamPos: [0, 0], chargeDir: [0, 0], chargeN: 0,
+  wispT: 0, defeated: false, crescentGiven: false, flash: 0,
+};
+function initBoss() {
+  BOSS.c = buildKingCrab();
+  BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
+  scene.add(BOSS.c.root);
+  if (SAVE && SAVE.bossDone) {
+    BOSS.defeated = true; BOSS.crescentGiven = true;
+    BOSS.c.crN.visible = false;
+    calmBossEyes(1);
+    BOSS.x = GROTTO_B.x - 8; BOSS.z = GROTTO_B.z + 8;
+    BOSS.st = 'rest';
+  }
+}
+function calmBossEyes(t) {
+  const colA = BOSS.c.eyeGlow.geometry.attributes.color;
+  for (let i = 0; i < colA.count; i++) {
+    colA.setXYZ(i, lerp(1.0, 0.15, t), lerp(0.62, 0.12, t), lerp(0.2, 0.1, t));
+  }
+  colA.needsUpdate = true;
+}
+function bossClawPos() {
+  // world pos of the big claw tip-ish
+  const a = BOSS.ang;
+  return [BOSS.x + Math.sin(a) * 2.2 - Math.cos(a) * 2.0, BOSS.z + Math.cos(a) * 2.2 + Math.sin(a) * 2.0];
+}
+function tickBoss() {
+  const B = BOSS;
+  if (!B.c || B.defeated) return;
+  const inArena = Math.hypot(P.x - GROTTO_B.x, P.z - GROTTO_B.z) < GROTTO_B.r + 1;
+  if (!B.active) {
+    if (inArena && wallBurned()) {
+      B.active = true; B.phase = 1; B.clawHits = 0; B.st = 'track'; B.t = 0;
+      SFX.thump(true);
+      CAM.shake = 0.3;
+      rumble({ duration: 400, strong: 0.7, weak: 0.7 });
+    }
+    return;
+  }
+  B.t += DT;
+  if (B.flash > 0) B.flash -= DT;
+  const d2p = Math.hypot(P.x - B.x, P.z - B.z);
+  const faceP = () => {
+    const want = Math.atan2(P.x - B.x, P.z - B.z);
+    B.ang = angLerp(B.ang, want, 0.04);
+  };
+  switch (B.st) {
+    case 'track': {
+      faceP();
+      const d = d2p || 1;
+      const sp = 1.15;
+      B.x += (P.x - B.x) / d * sp * DT; B.z += (P.z - B.z) / d * sp * DT;
+      keepInArena(B, 3.2);
+      const wantSlam = B.phase !== 2;
+      if (B.t > (B.phase === 3 ? 1.6 : 2.2)) {
+        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; SFX.click(); }
+        else if (!wantSlam || (B.phase === 3 && B.chargeN % 2 === 1)) { B.st = 'burrow'; B.t = 0; SFX.burrow(); }
+        else B.t = 1.2;
+      }
+      break;
+    }
+    case 'slamTele':
+      B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
+      if (B.t > 0.75) {
+        B.st = 'slam'; B.t = 0;
+        SFX.thump(true);
+        CAM.shake = 0.5;
+        rumble({ duration: 280, strong: 0.9, weak: 0.6 });
+        burst(psDust, B.slamPos[0], groundH(B.slamPos[0], B.slamPos[1]) + 0.3, B.slamPos[1], 22, 2.6, 2.2, 0.8);
+        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z);
+      }
+      break;
+    case 'slam':
+      if (B.t > 0.35) { B.st = 'stuck'; B.t = 0; }
+      break;
+    case 'stuck':   // the claw is down — HIT IT
+      if (B.t > 2.3) { B.st = 'track'; B.t = 0; }
+      break;
+    case 'burrow':
+      if (B.t > 0.9) {
+        // move under the sand to the arena edge opposite the player
+        const a = Math.atan2(B.x - GROTTO_B.x, B.z - GROTTO_B.z) + Math.PI + (Math.random() - 0.5);
+        B.x = GROTTO_B.x + Math.sin(a) * (GROTTO_B.r - 4);
+        B.z = GROTTO_B.z + Math.cos(a) * (GROTTO_B.r - 4);
+        B.st = 'emerge'; B.t = 0;
+        burst(psDust, B.x, groundH(B.x, B.z) + 0.4, B.z, 26, 3.0, 2.6, 0.9);
+        SFX.thump(true);
+        CAM.shake = 0.35;
+      }
+      break;
+    case 'emerge':
+      faceP();
+      if (B.t > 0.7) { B.st = 'chargeTele'; B.t = 0; SFX.click(); }
+      break;
+    case 'chargeTele':
+      faceP();
+      if (B.t > 0.65) {
+        B.st = 'charge'; B.t = 0;
+        const d = d2p || 1;
+        B.chargeDir = [(P.x - B.x) / d, (P.z - B.z) / d];
+        B.chargeN++;
+        SFX.burrow();
+        rumble({ duration: 200, strong: 0.5, weak: 0.7 });
+      }
+      break;
+    case 'charge': {
+      B.x += B.chargeDir[0] * 10 * DT; B.z += B.chargeDir[1] * 10 * DT;
+      if (Math.hypot(P.x - B.x, P.z - B.z) < 2.4) hurtPlayer(1, B.x - B.chargeDir[0], B.z - B.chargeDir[1]);
+      const dc = Math.hypot(B.x - GROTTO_B.x, B.z - GROTTO_B.z);
+      if (dc > GROTTO_B.r - 3.2) {
+        // crash into the wall — dizzy, vulnerable
+        keepInArena(B, 3.2);
+        B.st = 'dizzy'; B.t = 0;
+        CAM.shake = 0.45;
+        SFX.thump(true);
+        burst(psDust, B.x, groundH(B.x, B.z) + 0.5, B.z, 24, 2.6, 2.2, 0.9);
+        rumble({ duration: 300, strong: 0.8, weak: 0.5 });
+      }
+      break;
+    }
+    case 'dizzy':
+      if (B.t > 2.5) {
+        if (B.phase === 2 && B.chargeN < 2) { B.st = 'burrow'; B.t = 0; SFX.burrow(); }
+        else { B.st = 'track'; B.t = 0; }
+      }
+      break;
+    case 'roar':
+      if (B.t > 1.6) {
+        B.phase++;
+        B.clawHits = 0; B.chargeN = 0;
+        B.st = B.phase === 2 ? 'burrow' : 'track'; B.t = 0;
+        if (B.phase === 2) SFX.burrow();
+      }
+      break;
+  }
+  // phase-3 wisps
+  if (B.phase === 3 && B.st !== 'roar') {
+    B.wispT += DT;
+    const alive = wisps.filter(w => w.area === 'boss' && !w.dead).length;
+    if (B.wispT > 6 && alive < 2) {
+      B.wispT = 0;
+      const a = Math.random() * TAU;
+      const wx = GROTTO_B.x + Math.sin(a) * 8, wz = GROTTO_B.z + Math.cos(a) * 8;
+      let w = wisps.find(q => q.area === 'boss' && q.dead);
+      if (!w) {
+        w = { m: buildWisp(), sx: wx, sz: wz, x: wx, z: wz, y: 0, st: 'drift', t: 0, dir: [0, 0, 0], dead: false, area: 'boss' };
+        scene.add(w.m.root);
+        wisps.push(w);
+      }
+      w.dead = false; w.st = 'drift'; w.x = wx; w.z = wz; w.y = groundH(wx, wz) + 2;
+      w.m.root.visible = true;
+      SFX.pop();
+    }
+  }
+}
+function keepInArena(B, margin) {
+  const dx = B.x - GROTTO_B.x, dz = B.z - GROTTO_B.z;
+  const d = Math.hypot(dx, dz);
+  const mx = GROTTO_B.r - margin;
+  if (d > mx) { B.x = GROTTO_B.x + dx / d * mx; B.z = GROTTO_B.z + dz / d * mx; }
+}
+function hitBossClaw() {
+  const B = BOSS;
+  B.clawHits++;
+  B.flash = 0.2;
+  SFX.clawHit();
+  P.hitstop = 4;
+  CAM.shake = 0.2;
+  rumble({ duration: 120, strong: 0.6, weak: 0.4 });
+  const cp = bossClawPos();
+  burst(psSpark, cp[0], groundH(cp[0], cp[1]) + 0.8, cp[1], 12, 2.2, 1.8, 0.5);
+  if (B.clawHits >= 3) {
+    if (B.phase >= 3) startCine('bossDefeat');
+    else { B.st = 'roar'; B.t = 0; SFX.thump(true); CAM.shake = 0.4; }
+  } else if (B.st === 'stuck' || B.st === 'dizzy') {
+    B.t = Math.min(B.t, 1.2);   // brief extra window
+  }
+}
+
+/* ── sword swing resolution ── */
+function swingHits() {
+  let any = trySwingKelp();
+  for (const cr of crabs) {
+    if (cr.dead) continue;
+    if (inSwingArc(cr.x, cr.z, 1.9)) { hitCrab(cr); any = true; }
+  }
+  for (const w of wisps) {
+    if (w.dead) continue;
+    if (inSwingArc(w.x, w.z, 2.0) && w.y < groundH(P.x, P.z) + 2.2) { popWisp(w); any = true; }
+  }
+  const B = BOSS;
+  if (B.active && !B.defeated && (B.st === 'stuck' || B.st === 'dizzy')) {
+    const cp = B.st === 'stuck' ? [B.slamPos[0], B.slamPos[1]] : [B.x, B.z];
+    if (inSwingArc(cp[0], cp[1], B.st === 'dizzy' ? 3.4 : 2.6)) { hitBossClaw(); any = true; }
+  }
+  return any;
+}
+
+/* ═══════════ CINEMATICS ═══════════ */
+const CINE = { id: null, t: 0, step: 0 };
+function startCine(id) {
+  CINE.id = id; CINE.t = 0; CINE.step = 0;
+  setState('cine');
+  if (id === 'wheel') {
+    CAM.mode = 'cine';
+    dlgBox.classList.remove('on');
+  } else if (id === 'bossDefeat') {
+    CAM.mode = 'cine';
+    BOSS.defeated = true;
+    BOSS.st = 'defeat';
+  } else if (id === 'sunstruck') {
+    P.sunstruckCount++;
+  } else if (id === 'wake') {
+    CAM.mode = 'cine';
+  } else if (id === 'finnOut') {
+    CAM.mode = 'cine';
+  }
+}
+function endCine() {
+  CINE.id = null;
+  CAM.mode = 'follow';
+  CAM.ready = false;
+  setState('play');
+}
+const _cp = new THREE.Vector3(), _cl = new THREE.Vector3();
+function cineCam(px, py, pz, lx, ly, lz) {
+  camera.position.set(px, py, pz);
+  _cl.set(lx, ly, lz);
+  camera.lookAt(_cl);
+}
+function tickCine() {
+  const t = (CINE.t += DT);
+  if (CINE.id === 'wake') {
+    // under the boat, in the blue shade. no words.
+    const y = groundH(P.x, P.z);
+    if (t < 0.1) fadeBlackEl.style.opacity = '1';
+    if (t > 0.4) fadeBlackEl.style.opacity = '0';
+    // camera: low under the hull, easing up and back as Wick stands
+    const k = smoothstep(clamp((t - 1.2) / 1.9, 0, 1));
+    cineCam(
+      P.x - 1.6 + k * 0.6, y + lerp(0.55, 1.7, k), P.z + lerp(1.9, 3.1, k),
+      P.x, y + lerp(0.45, 1.15, k), P.z);
+    if (t >= 3.2) { endCine(); }
+    return;
+  }
+  if (CINE.id === 'sunstruck') {
+    if (t < 0.9) {
+      glareEl.style.opacity = String(Math.min(1, t * 1.4));
+    } else if (CINE.step === 0) {
+      CINE.step = 1;
+      const spot = inGrottoAt(P.x, P.z) ? { x: 30, z: 137 } : nearestShadeSpot(P.x, P.z);
+      P.x = spot.x; P.z = spot.z;
+      P.hearts = 3;
+      P.st = 'idle'; P.vx = 0; P.vz = 0;
+      P.healT = 0;
+      P.shade = P.prevShade = inShadeAt(P.x, P.z);   // wake state is true immediately
+      SAVE.lastShade = [spot.x, spot.z]; storeSave();
+      // boss checkpoint: leave the arena reset at the CURRENT phase
+      if (BOSS.active && !BOSS.defeated) {
+        BOSS.st = 'track'; BOSS.t = 0; BOSS.clawHits = 0; BOSS.chargeN = 0;
+        BOSS.active = false;    // re-arms on re-entry, same phase
+        BOSS.x = GROTTO_B.x; BOSS.z = GROTTO_B.z - 2;
+      }
+      CAM.ready = false;
+    } else {
+      glareEl.style.opacity = String(Math.max(0, 1 - (t - 0.9) * 1.1));
+      if (t > 2.0) { glareEl.style.opacity = '0'; endCine(); }
+    }
+    return;
+  }
+  if (CINE.id === 'finnOut') {
+    // Finn walks out of the freed doorway
+    const t0 = clamp(t / 1.6, 0, 1);
+    finn.x = lerp(42.6, 40.4, smoothstep(t0));
+    finn.z = lerp(-16, -15.0, smoothstep(t0));
+    finn.char.root.position.set(finn.x, groundH(finn.x, finn.z), finn.z);
+    finn.char.root.rotation.y = -Math.PI / 2 + smoothstep(t0) * 0.9;
+    poseHumanoid(finn.char, 'walk', DT, 1.4, { stoop: 0.1 });
+    cineCam(finn.x - 4.5, groundH(finn.x, finn.z) + 2.2, finn.z + 3.5,
+      finn.x, groundH(finn.x, finn.z) + 1.4, finn.z);
+    if (t >= 1.8) { endCine(); startDialog('finn2', finn); }
+    return;
+  }
+  if (CINE.id === 'bossDefeat') { tickBossDefeat(t); return; }
+  if (CINE.id === 'wheel') { tickWheelPayoff(t); return; }
+}
+
+/* boss defeat: the madness lifts. nothing dies in Brightharbor. */
+function tickBossDefeat(t) {
+  const B = BOSS;
+  const by = groundH(B.x, B.z);
+  const px2 = B.x + Math.sin(B.ang) * 7, pz2 = B.z + Math.cos(B.ang) * 7;
+  if (t < 3.4) {
+    cineCam(px2, by + 2.6, pz2, B.x, by + 2.2, B.z);
+    calmBossEyes(clamp(t / 1.4, 0, 1));
+    B.c.body.rotation.x = smoothstep(clamp((t - 1.6) / 1.2, 0, 1)) * 0.32;   // the bow
+    if (CINE.step === 0 && t > 1.5) { CINE.step = 1; SFX.chime(0.5); }
+  } else if (t < 5.6) {
+    // the Crescent floats to Wick
+    if (CINE.step === 1) {
+      CINE.step = 2;
+      B.c.crN.visible = false;
+      crescentItem.visible = true;
+      SFX.chime(1);
+    }
+    const k = smoothstep(clamp((t - 3.4) / 1.8, 0, 1));
+    const sy = by + 3.2, ty2 = groundH(P.x, P.z) + 1.6;
+    crescentItem.position.set(lerp(B.x, P.x, k), lerp(sy, ty2, k) + Math.sin(k * Math.PI) * 1.2, lerp(B.z, P.z, k));
+    crescentItem.rotation.y += DT * 2.2;
+    crescentItem.scale.setScalar(lerp(1, 0.55, k));
+    cineCam(P.x + Math.sin(P.heading) * 3.4, groundH(P.x, P.z) + 1.8, P.z + Math.cos(P.heading) * 3.4,
+      P.x, groundH(P.x, P.z) + 1.4, P.z);
+  } else if (t < 8.0) {
+    if (CINE.step === 2) {
+      CINE.step = 3;
+      itemGetT = 0;
+      itemToast('THE CRESCENT HORN', 'One of eight. The Moonwheel waits above the village.');
+      SFX.itemGet();
+      P.carryCrescent = true;
+      B.crescentGiven = true;
+      SAVE.bossDone = true; storeSave();
+      setQuest(3);
+      P.heading = Math.PI + 0.4;
+    }
+    crescentItem.position.set(P.x, groundH(P.x, P.z) + 2.05, P.z);
+    crescentItem.rotation.y += DT * 1.2;
+    cineCam(P.x + 2.6, groundH(P.x, P.z) + 1.7, P.z + 2.6, P.x, groundH(P.x, P.z) + 1.7, P.z);
+    // the King-Crab scuttles to its shady pool
+    const k = smoothstep(clamp((t - 5.8) / 2.0, 0, 1));
+    B.x = lerp(GROTTO_B.x, GROTTO_B.x - 8, k); B.z = lerp(GROTTO_B.z - 2, GROTTO_B.z + 8, k);
+    B.ang = angLerp(B.ang, Math.atan2(-1, 1), 0.05);
+  } else if (t < 11.0) {
+    // ONE hint: the carving behind the arena — the moon, chained, the chain leading down.
+    const mx = GROTTO_B.x + GROTTO_B.r - 1.2, mz = GROTTO_B.z;
+    const k = smoothstep(clamp((t - 8.0) / 1.2, 0, 1));
+    cineCam(lerp(P.x + 2.6, mx - 8, k), lerp(groundH(P.x, P.z) + 1.7, 3.4, k), lerp(P.z + 2.6, mz, k),
+      mx, 3.0, mz);
+    if (CINE.step === 3) { CINE.step = 4; SFX.yawn(); /* low weird tone */ }
+  } else {
+    itemGetT = -1;
+    BOSS.st = 'rest';
+    endCine();
+  }
+}
+
+/* THE PAYOFF — every restored phase changes the world. */
+let starT = 0;
+function tickWheelPayoff(t) {
+  const wy = groundH(WHEEL_POS.x, WHEEL_POS.z) + 4.2;
+  const wx = WHEEL_POS.x, wz = WHEEL_POS.z;
+  if (t < 2.4) {
+    // the Crescent leaves Wick's hands and seats into the top socket
+    if (CINE.step === 0) { CINE.step = 1; P.carryCrescent = false; SFX.chime(0.7); }
+    const k = smoothstep(clamp(t / 2.2, 0, 1));
+    const sy = groundH(P.x, P.z) + 1.6;
+    crescentItem.visible = true;
+    crescentItem.position.set(lerp(P.x, wx, k), lerp(sy, wy + 3.1, k) + Math.sin(k * Math.PI) * 1.6, lerp(P.z, wz, k));
+    crescentItem.rotation.y += DT * 3;
+    crescentItem.scale.setScalar(lerp(0.55, 0.8, k));
+    cineCam(wx + 7, wy - 0.5, wz + 9, wx, wy + 1.5, wz);
+    if (t > 2.25 && CINE.step === 1) {
+      CINE.step = 2;
+      SFX.chime(1.4);
+      burst(psSparkle, wx, wy + 3.1, wz, 20, 1.6, 1.0, 1.2);
+    }
+  } else if (t < 4.6) {
+    // the wheel turns one notch
+    if (CINE.step === 2) { CINE.step = 3; SFX.grind(); rumble({ duration: 600, strong: 0.5, weak: 0.8 }); }
+    const k = smoothstep(clamp((t - 2.4) / 1.8, 0, 1));
+    wheelRing.rotation.z = -k * (Math.PI / 4);
+    crescentItem.position.set(wx + Math.sin(k * Math.PI / 4) * 3.1 * 0, wy + 3.1, wz);
+    // ride the socket: rotate the item's holder angle with the ring
+    const a = Math.PI / 2 - k * Math.PI / 4;
+    crescentItem.position.set(wx + Math.cos(a) * 3.1 * Math.cos(wheelRing.rotation.y), wy + Math.sin(a) * 3.1, wz - Math.cos(a) * 3.1 * Math.sin(wheelRing.rotation.y));
+    CAM.shake = 0.06;
+    cineCam(wx + 7, wy - 0.5, wz + 9, wx, wy + 1.5, wz);
+    if (t > 4.3 && CINE.step === 3) {
+      CINE.step = 4;
+      SFX.bell();
+      rumble({ duration: 900, strong: 0.9, weak: 0.9 });
+      CAM.shake = 0.3;
+    }
+  } else if (t < 9.4) {
+    // THE SKY HEALS ONE STEP — dims an eighth, shadows stretch, the star
+    const k = smoothstep(clamp((t - 4.6) / 3.6, 0, 1));
+    setSkyBlend(k);
+    shadeGrow = k;
+    if ((simTick & 3) === 0) rebuildShadePools();
+    starT = clamp((t - 7.3) / 1.5, 0, 1);
+    setStarOp(starT * 0.95);
+    if (CINE.step === 4 && t > 6.8) { CINE.step = 5; SFX.night(); }
+    // THE SHOT: from the wheel hill, over Brightharbor — houses and the bay
+    // in frame while the sky dims, the shadows reach across town, and the
+    // first star arrives over the water. One slow drift past the wheel.
+    const ck = smoothstep(clamp((t - 4.6) / 4.2, 0, 1));
+    cineCam(
+      lerp(wx + 6.5, wx - 8.5, ck), lerp(wy + 0.8, wy + 3.2, ck), lerp(wz + 8, wz + 2.5, ck),
+      lerp(wx + 34, wx + 28, ck), lerp(wy - 5, wy - 5.5, ck), lerp(wz + 52, wz + 48, ck));
+  } else if (t < 12.2) {
+    // the tidepool at the bay's edge REFILLS. a moonfish jumps, once.
+    if (CINE.step === 5) {
+      CINE.step = 6;
+      tidepoolFilled = true;
+      tidewater.visible = true;
+      SFX.waterFill();
+      SAVE.tidepool = true;
+    }
+    const k = smoothstep(clamp((t - 9.4) / 1.6, 0, 1));
+    tidewater.position.y = groundH(REFILL_POOL.x, REFILL_POOL.z) - 0.5 + k * 1.05;
+    const fk = clamp((t - 10.9) / 1.1, 0, 1);
+    if (fk > 0 && fk < 1) {
+      moonfish.visible = true;
+      moonfish.scale.setScalar(2.3);
+      const fx = REFILL_POOL.x + (fk - 0.5) * 2.6;
+      const fy = tidewater.position.y + Math.sin(fk * Math.PI) * 1.7;
+      moonfish.position.set(fx, fy, REFILL_POOL.z);
+      moonfish.rotation.z = -(fk - 0.5) * 2.6;
+      if (CINE.step === 6 && fk > 0.08) { CINE.step = 7; SFX.splash(); }
+      if (fk > 0.9) { burst(psSparkle, fx, tidewater.position.y, REFILL_POOL.z, 10, 1.0, 1.4, 0.6); }
+    } else if (fk >= 1) {
+      moonfish.visible = false;
+      if (CINE.step === 7) { CINE.step = 8; SFX.splash(); }
+    }
+    cineCam(REFILL_POOL.x - 6, groundH(REFILL_POOL.x, REFILL_POOL.z) + 2.6, REFILL_POOL.z - 6.5,
+      REFILL_POOL.x + 0.5, groundH(REFILL_POOL.x, REFILL_POOL.z) + 0.2, REFILL_POOL.z + 1);
+  } else if (t < 15.4) {
+    // voices from the village below
+    if (CINE.step === 8) {
+      CINE.step = 9;
+      QUEST.phases = 1;
+      SAVE.ph = 1; SAVE.sky = 1; storeSave();
+      setQuest(4);
+      floatEl.textContent = '“...is that a star?” — Pearl, from the village below';
+      floatEl.classList.add('on');
+      SFX.yawn();
+    }
+    const k = smoothstep(clamp((t - 12.2) / 2.6, 0, 1));
+    cineCam(lerp(wx + 3, wx + 5, k), wy + 2.2, lerp(wz + 15, wz + 13, k),
+      wx + 30, wy - 2, wz + 60);
+  } else {
+    if (CINE.step === 9) {
+      CINE.step = 10;
+      floatEl.classList.remove('on');
+      CINE.id = null;               // dialogue takes over; cine cam persists until dialog end
+      startDialog('finn3', finn);
+      dlgBox.classList.add('on');
+      return;
+    }
+  }
+}
+
+/* TO BE CONTINUED — the bay, flooded back to ocean. phase 2's promise. */
+let tbcT = 0;
+function showTBC() {
+  drawTBCArt();
+  setState('tbc');
+  tbcT = 0;
+  el('tbcGo').textContent = '';
+  setTimeout(() => el('tbc').classList.add('on'), 30);
+  CAM.mode = 'cine';
+}
+function drawTBCArt() {
+  const cv = el('tbcArt'), g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  // dusk sky
+  const sky = g.createLinearGradient(0, 0, 0, H * 0.62);
+  sky.addColorStop(0, '#131b33'); sky.addColorStop(0.7, '#3a3a5c'); sky.addColorStop(1, '#a06a4e');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H * 0.62);
+  // the mending moon — one bright phase of eight
+  g.strokeStyle = 'rgba(220,228,224,0.28)'; g.lineWidth = 2;
+  g.beginPath(); g.arc(W * 0.72, H * 0.24, 34, 0, TAU); g.stroke();
+  g.fillStyle = '#dde6e0';
+  g.beginPath(); g.arc(W * 0.72, H * 0.24, 34, -0.9, 0.35);
+  g.arc(W * 0.72, H * 0.24, 22, 0.35, -0.9, true); g.closePath(); g.fill();
+  // stars (a few now — the promise)
+  g.fillStyle = '#e8ecf2';
+  for (let i = 0; i < 12; i++) {
+    const x = (hash2(i, 5) * 0.5 + 0.5) * W, y = (hash2(i, 11) * 0.5 + 0.5) * H * 0.4;
+    g.globalAlpha = 0.3 + (hash2(i, 3) * 0.5 + 0.5) * 0.7;
+    g.fillRect(x, y, 2, 2);
+  }
+  g.globalAlpha = 1;
+  // THE SEA, COME HOME — silver water where the dry bay was
+  const sea = g.createLinearGradient(0, H * 0.62, 0, H);
+  sea.addColorStop(0, '#7d95a8'); sea.addColorStop(1, '#2c3e54');
+  g.fillStyle = sea; g.fillRect(0, H * 0.62, W, H * 0.38);
+  // moon road on the water
+  g.fillStyle = 'rgba(230,238,235,0.3)';
+  for (let i = 0; i < 14; i++) {
+    const y = H * 0.64 + i * (H * 0.34 / 14);
+    const w = 6 + i * 4.5;
+    g.fillRect(W * 0.72 - w / 2 + hash2(i, 8) * 8, y, w, 2.2);
+  }
+  // headland + lighthouse silhouette (left), boats FLOATING again
+  g.fillStyle = '#0d1220';
+  g.beginPath();
+  g.moveTo(0, H * 0.66); g.lineTo(W * 0.2, H * 0.6); g.lineTo(W * 0.26, H * 0.63); g.lineTo(W * 0.3, H * 0.7); g.lineTo(0, H * 0.78);
+  g.closePath(); g.fill();
+  g.fillRect(W * 0.205, H * 0.44, 14, H * 0.17);        // lighthouse tower
+  g.fillRect(W * 0.198, H * 0.43, 20, 8);
+  // its lamp is LIT again — first light in a year
+  g.fillStyle = 'rgba(255,236,180,0.9)';
+  g.fillRect(W * 0.206, H * 0.445, 12, 6);
+  g.fillStyle = 'rgba(255,236,180,0.12)';
+  g.beginPath(); g.moveTo(W * 0.218, H * 0.45); g.lineTo(W * 0.5, H * 0.36); g.lineTo(W * 0.5, H * 0.52); g.closePath(); g.fill();
+  // floating boat silhouettes
+  g.fillStyle = '#0d1220';
+  for (const [bx, by, s] of [[0.45, 0.72, 1], [0.58, 0.8, 1.3], [0.85, 0.7, 0.8]]) {
+    const x = W * bx, y = H * by;
+    g.beginPath();
+    g.moveTo(x - 22 * s, y); g.quadraticCurveTo(x, y + 10 * s, x + 22 * s, y);
+    g.lineTo(x + 16 * s, y - 5 * s); g.lineTo(x - 16 * s, y - 5 * s);
+    g.closePath(); g.fill();
+    g.fillRect(x - 1.5 * s, y - 22 * s, 3 * s, 17 * s);
+  }
+}
+function tickTBC() {
+  tbcT += DT;
+  if (tbcT > 1.6) el('tbcGo').textContent = '✕ CONTINUE';
+  if (tbcT > 1.6 && IN.confirm) {
+    el('tbc').classList.remove('on');
+    endCine();
+    SFX.confirm();
+  }
+}
+
+/* ── sunstruck entry ── */
+function startSunstruck() {
+  P.st = 'idle';
+  startCine('sunstruck');
+  SFX.yawn();
+  rumble({ duration: 500, strong: 0.3, weak: 0.6 });
+}
+
+/* boss render-frame animation */
+function animateBoss(dtv, now) {
+  const B = BOSS;
+  if (!B.c) return;
+  const y = groundH(B.x, B.z);
+  let yo = 0;
+  if (B.st === 'burrow') yo = -Math.min(2.6, B.t * 4);
+  if (B.st === 'emerge') yo = Math.min(0, -2.6 + B.t * 5);
+  if (B.st === 'rest') yo = -0.6;
+  B.c.root.position.set(B.x, y + yo, B.z);
+  B.c.root.rotation.y = B.ang;
+  const bdx = B.x - camera.position.x, bdz = B.z - camera.position.z;
+  B.c.root.visible = !(B.st === 'burrow' && B.t > 0.7) && (bdx * bdx + bdz * bdz < 8100);
+  B.c.shadow.scale.setScalar(1 + shadeGrow * 0.2);
+  const w = now / 1000;
+  // legs scuttle
+  const moving = B.st === 'track' || B.st === 'charge';
+  const la = moving ? Math.sin(w * 16) * 0.14 : Math.sin(w * 2) * 0.02;
+  B.c.legL.rotation.x = la; B.c.legR.rotation.x = -la;
+  // slam claw
+  const cl = B.c.clawL;
+  if (B.st === 'slamTele') {
+    cl.armN.rotation.x = -1.15;
+    cl.armN.position.y = -0.04 * B.c.S + Math.sin(w * 30) * 0.02;
+  } else if (B.st === 'slam' || B.st === 'stuck') {
+    cl.armN.rotation.x = 0.75;
+  } else {
+    cl.armN.rotation.x = Math.sin(w * 1.8) * 0.06;
+  }
+  B.c.clawR.armN.rotation.x = Math.sin(w * 1.8 + 1) * 0.08;
+  if (B.st === 'chargeTele') {
+    B.c.body.rotation.x = 0.14;
+    B.c.body.position.y = 0.28 * B.c.S - 0.1;
+  } else if (B.st !== 'defeat' && B.st !== 'rest') {
+    B.c.body.rotation.x *= 0.9;
+    B.c.body.position.y = 0.28 * B.c.S + (B.st === 'roar' ? Math.sin(w * 22) * 0.06 + 0.2 : 0);
+  }
+  if (B.st === 'dizzy') B.c.body.rotation.z = Math.sin(w * 7) * 0.09;
+  else if (B.st !== 'defeat') B.c.body.rotation.z *= 0.9;
+  // hit flash + breathing moonglass glow on the crescent
+  B.c.crescent.material.opacity = B.flash > 0 ? 0.55 + Math.sin(now / 30) * 0.4 : 0.95;
+  B.c.crescentHalo.material.opacity = B.flash > 0 ? 0.5 : 0.09 + 0.06 * Math.sin(now / 480);
+}
+/* crab + wisp render-frame animation */
+function animateEnemies(dtv, now) {
+  const w = now / 1000;
+  const ccx = camera.position.x, ccz = camera.position.z;
+  const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
+  for (const cr of crabs) {
+    if (cr.dead) continue;
+    const vis = near2(cr.x, cr.z, 45);
+    cr.c.root.visible = vis;
+    if (!vis) continue;
+    const y = groundH(cr.x, cr.z);
+    cr.c.root.position.set(cr.x, y, cr.z);
+    cr.c.root.rotation.y = cr.ang;
+    const moving = cr.st === 'patrol' || cr.st === 'aggro' || cr.st === 'lunge';
+    const la = moving ? Math.sin(w * (cr.st === 'lunge' ? 26 : 14) + cr.sx) * 0.16 : 0;
+    cr.c.legL.rotation.x = la; cr.c.legR.rotation.x = -la;
+    if (cr.st === 'tele') {
+      cr.c.clawL.armN.rotation.x = -1.1 + Math.sin(w * 34) * 0.08;
+      cr.c.clawR.armN.rotation.x = -1.1 - Math.sin(w * 34) * 0.08;
+      cr.c.body.position.y = 0.22 + 0.06;
+    } else {
+      cr.c.clawL.armN.rotation.x = Math.sin(w * 2.2 + cr.sx) * 0.1;
+      cr.c.clawR.armN.rotation.x = Math.sin(w * 2.2 + cr.sx + 1) * 0.1;
+      cr.c.body.position.y = 0.22 + (moving ? Math.abs(Math.sin(w * 14)) * 0.03 : 0);
+    }
+    cr.c.body.scale.setScalar(cr.flash > 0 ? 1.12 : 1);
+    cr.c.shadow.scale.setScalar(1 + shadeGrow * 0.25);
+  }
+  for (const ws of wisps) {
+    if (ws.dead) continue;
+    const vis = near2(ws.x, ws.z, 45);
+    ws.m.root.visible = vis;
+    if (!vis) continue;
+    ws.m.root.position.set(ws.x, ws.y, ws.z);
+    const pulse = 1 + Math.sin(w * (ws.st === 'tele' ? 22 : 5) + ws.sx) * (ws.st === 'tele' ? 0.3 : 0.12);
+    ws.m.root.scale.setScalar(pulse);
+    ws.m.halo.rotation.z = w * 2;
+    if (!LOWFX && Math.random() < 0.12) {
+      psSpark.spawn(ws.x, ws.y - 0.1, ws.z, (Math.random() - 0.5) * 0.4, -0.6, (Math.random() - 0.5) * 0.4, 0.5);
+    }
+  }
+}
+</script>

@@ -1,0 +1,696 @@
+<script>
+/* ═══════════════════ p3 — art: mesh kit, materials, characters ═══════════════════
+   Art contract (DESIGN.md): 6.5–7 head heights, small matte eyes, sculpted
+   low-poly hair, real necks and hands, 3-step cel shading, muted palette.
+   The still-frame test: "small serious 3D adventure game".                    */
+
+/* ── shared toon material (all characters share ONE material; color in verts) ── */
+function makeRamp() {
+  const data = new Uint8Array([118, 118, 118, 255, 205, 205, 205, 255, 255, 255, 255, 255]);
+  const tex = new THREE.DataTexture(data, 3, 1, THREE.RGBAFormat);
+  tex.minFilter = THREE.NearestFilter; tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+const TOON = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: makeRamp() });
+const BASIC_V = new THREE.MeshBasicMaterial({ vertexColors: true });   // unlit props on rigs
+const GLASS_MAT = new THREE.MeshBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.92, depthWrite: true,
+});
+const TRAIL_MAT = new THREE.MeshBasicMaterial({
+  color: 0xeaf6f4, transparent: true, opacity: 0.0, depthWrite: false,
+  side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+});
+const WISP_MAT = new THREE.MeshBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.95,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const SHADOW_MAT = new THREE.MeshBasicMaterial({
+  color: 0x22334c, transparent: true, opacity: 0.26, depthWrite: false,
+});
+
+/* ── geometry kit ── */
+function MD() { return { p: [], c: [] }; }
+const _rp = [0, 0, 0];
+function _rot(x, y, z, rx, ry, rz) {
+  let c, s, t;
+  if (rx) { c = Math.cos(rx); s = Math.sin(rx); t = y; y = t * c - z * s; z = t * s + z * c; }
+  if (ry) { c = Math.cos(ry); s = Math.sin(ry); t = x; x = t * c + z * s; z = -t * s + z * c; }
+  if (rz) { c = Math.cos(rz); s = Math.sin(rz); t = x; x = t * c - y * s; y = t * s + y * c; }
+  _rp[0] = x; _rp[1] = y; _rp[2] = z; return _rp;
+}
+function pushTri(md, ax, ay, az, bx, by, bz, cx, cy, cz, col) {
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  md.c.push(col[0], col[1], col[2], col[0], col[1], col[2], col[0], col[1], col[2]);
+}
+function pushQuad(md, a, b, c, d, col) {
+  pushTri(md, a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], col);
+  pushTri(md, a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2], col);
+}
+/* tapered/sheared box. o = { x,y,z (center of BOTTOM face), w,d (bottom half-
+   extents), tw,td (top half-extents; default = w,d), h, shx,shz (top shear),
+   rx,ry,rz (rotate about bottom-center), col, colB (darker bottom tint) } */
+function box(md, o) {
+  const w = o.w, d = o.d, h = o.h;
+  const tw = o.tw !== undefined ? o.tw : w, td = o.td !== undefined ? o.td : d;
+  const sx = o.shx || 0, sz = o.shz || 0;
+  const cs = [
+    [-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d],
+    [-tw + sx, h, -td + sz], [tw + sx, h, -td + sz], [tw + sx, h, td + sz], [-tw + sx, h, td + sz],
+  ];
+  for (let i = 0; i < 8; i++) {
+    const p = _rot(cs[i][0], cs[i][1], cs[i][2], o.rx || 0, o.ry || 0, o.rz || 0);
+    cs[i] = [p[0] + o.x, p[1] + o.y, p[2] + o.z];
+  }
+  const cT = o.col, cB = o.colB || o.col;
+  pushQuad(md, cs[4], cs[5], cs[6], cs[7], cT);                       // top
+  pushQuad(md, cs[3], cs[2], cs[1], cs[0], cB);                       // bottom
+  pushQuad(md, cs[0], cs[1], cs[5], cs[4], o.colN || cT);             // -z
+  pushQuad(md, cs[2], cs[3], cs[7], cs[6], o.colS || cT);             // +z
+  pushQuad(md, cs[1], cs[2], cs[6], cs[5], cT);                       // +x
+  pushQuad(md, cs[3], cs[0], cs[4], cs[7], cT);                       // -x
+}
+/* lathe of a profile [[r,y],...] around Y. o = { seg, ex (z ellipse), x,y,z,
+   ry, col | cols (per-band), a0, a1 (partial sweep) } */
+function lathe(md, prof, o) {
+  const seg = o.seg || 8, ex = o.ex || 1;
+  const a0 = o.a0 !== undefined ? o.a0 : 0, a1 = o.a1 !== undefined ? o.a1 : TAU;
+  // winding is corrected per-face so normals always point OUT of the axis —
+  // bands where the radius shrinks with height would otherwise be inside-out
+  const tri = (A, B, C, c) => {
+    const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]);
+    const ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]);
+    const nz = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+    const mx = (A[0] + B[0] + C[0]) / 3 - (o.x || 0), mz = (A[2] + B[2] + C[2]) / 3 - (o.z || 0);
+    const my = (A[1] + B[1] + C[1]) / 3 - (o.y || 0);
+    let hint = nx * mx + nz * mz;
+    if (Math.abs(hint) < 1e-8) hint = ny * my;         // caps: outward = away from mid-height
+    if (hint < 0) pushTri(md, A[0], A[1], A[2], C[0], C[1], C[2], B[0], B[1], B[2], c);
+    else pushTri(md, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], c);
+  };
+  for (let i = 0; i < prof.length - 1; i++) {
+    const [r0, y0] = prof[i], [r1, y1] = prof[i + 1];
+    const c = (o.cols && (o.cols[i] || o.cols[o.cols.length - 1])) || o.col;
+    for (let s = 0; s < seg; s++) {
+      const t0 = a0 + (a1 - a0) * s / seg, t1 = a0 + (a1 - a0) * (s + 1) / seg;
+      const p00 = _pt(r0, y0, t0, ex, o), p01 = _pt(r0, y0, t1, ex, o);
+      const p10 = _pt(r1, y1, t0, ex, o), p11 = _pt(r1, y1, t1, ex, o);
+      if (r0 < 0.0001) tri(p00, p11, p10, c);
+      else if (r1 < 0.0001) tri(p00, p01, p10, c);
+      else { tri(p00, p01, p11, c); tri(p00, p11, p10, c); }
+    }
+  }
+}
+function _pt(r, y, a, ex, o) {
+  let x = Math.cos(a) * r, z = Math.sin(a) * r * ex;
+  if (o.ry) { const p = _rot(x, y, z, 0, o.ry, 0); x = p[0]; y = p[1]; z = p[2]; }
+  return [x + (o.x || 0), y + (o.y || 0), z + (o.z || 0)];
+}
+function mdMesh(md, mat, computeNormals) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(md.p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(md.c), 3));
+  if (computeNormals !== false) g.computeVertexNormals();
+  return new THREE.Mesh(g, mat);
+}
+function node(parent, x, y, z) {
+  const g = new THREE.Group();
+  g.position.set(x, y, z);
+  parent.add(g);
+  return g;
+}
+function blobShadow(r) {
+  const md = MD();
+  const c = [1, 1, 1];
+  for (let s = 0; s < 12; s++) {
+    const a0 = s / 12 * TAU, a1 = (s + 1) / 12 * TAU;
+    pushTri(md, 0, 0, 0, Math.cos(a1) * r, 0, Math.sin(a1) * r, Math.cos(a0) * r, 0, Math.sin(a0) * r, c);
+  }
+  const m = mdMesh(md, SHADOW_MAT, false);
+  m.renderOrder = 1;
+  return m;
+}
+
+/* ═══════════ HUMANOID BUILDER ═══════════
+   spec: { h (height), skin, hair, hairStyle, top, topB, sleeve, pants, boot,
+           scarf, coat (long-coat color → robed lower body), beard, cap, hood,
+           dress, hat, headScale }.
+   Returns char rig { root, pelvis, torso, head, shL, elL, shR, elR,
+                      hipL, kneeL, hipR, kneeR, scarf[], hem, parts }         */
+function buildHumanoid(spec) {
+  const H = spec.h;
+  const u = H / 1.55;                    // scale all metrics off Wick's height
+  const skin = spec.skin, hairC = spec.hair;
+  const root = new THREE.Group();
+  const parts = [];
+  const mk = (md, mat) => { const m = mdMesh(md, mat || TOON); parts.push(m); return m; };
+
+  const hipY = (spec.kid ? 0.46 : 0.78) * u * (spec.stoop ? 0.97 : 1);
+  const torsoH = (spec.kid ? 0.34 : 0.44) * u;
+  const shW = (spec.kid ? 0.13 : 0.17) * u * (spec.broad || 1);
+
+  /* pelvis + lower */
+  const pelvis = node(root, 0, hipY, 0);
+  const mdPelvis = MD();
+  if (spec.coat || spec.dress) {
+    // robed: skirt cone from hip to near ground replaces visible legs
+    const skirtC = spec.coat || spec.dress;
+    const skirtB = mix3(skirtC, [0, 0, 0], 0.22);
+    lathe(mdPelvis, [[0.13 * u, 0.06 * u], [0.155 * u, -hipY * 0.42], [0.19 * u, -hipY * 0.8]],
+      { seg: 10, ex: 0.82, col: skirtC, cols: [skirtC, skirtB] });
+  } else {
+    box(mdPelvis, { x: 0, y: -0.06 * u, z: 0, w: 0.125 * u, d: 0.085 * u, h: 0.14 * u, tw: 0.115 * u, td: 0.08 * u, col: spec.pants });
+  }
+  let hem = null;
+  if (spec.coat || spec.dress) {
+    const skirtC2 = spec.coat || spec.dress;
+    const skirtB2 = mix3(skirtC2, [0.1, 0.08, 0.12], 0.3);
+    lathe(mdPelvis, [[0.19 * u, -hipY * 0.8], [0.21 * u, -hipY * 0.97]], { seg: 10, ex: 0.82, col: skirtB2 });
+  }
+  const pelvisM = mk(mdPelvis); pelvis.add(pelvisM);
+
+  /* legs (skipped visually when robed, but nodes exist for the walk code) */
+  const legLen = hipY - 0.06 * u;
+  const thighL = legLen * 0.52, shinL = legLen * 0.48 + 0.06 * u;
+  function leg(side) {
+    const hip = node(pelvis, side * 0.075 * u, -0.02 * u, 0);
+    const knee = node(hip, 0, -thighL, 0);
+    if (!spec.coat && !spec.dress) {
+      const mdT = MD();
+      box(mdT, { x: 0, y: -thighL, z: 0, w: 0.052 * u, d: 0.06 * u, h: thighL, tw: 0.06 * u, td: 0.068 * u, col: spec.pants });
+      hip.add(mk(mdT));
+      const mdS = MD();
+      const bootTop = shinL * 0.55;
+      box(mdS, { x: 0, y: -shinL + bootTop, z: 0, w: 0.045 * u, d: 0.052 * u, h: shinL - bootTop, tw: 0.05 * u, td: 0.058 * u, col: spec.pants });
+      box(mdS, { x: 0, y: -shinL, z: 0, w: 0.05 * u, d: 0.056 * u, h: bootTop, tw: 0.047 * u, td: 0.052 * u, col: spec.boot });
+      box(mdS, { x: 0, y: -shinL, z: 0.045 * u, w: 0.048 * u, d: 0.055 * u, h: 0.055 * u, col: spec.boot });
+      knee.add(mk(mdS));
+    }
+    return { hip, knee };
+  }
+  const L = leg(-1), R = leg(1);
+
+  /* torso */
+  const torso = node(pelvis, 0, 0.06 * u, 0);
+  const mdT = MD();
+  const topB = spec.topB || mix3(spec.top, [0, 0, 0], 0.18);
+  if (spec.coat) {
+    box(mdT, { x: 0, y: 0, z: 0, w: 0.135 * u, d: 0.095 * u, h: torsoH, tw: shW, td: 0.085 * u, col: spec.coat, colB: mix3(spec.coat, [0, 0, 0], 0.15) });
+    box(mdT, { x: 0, y: torsoH * 0.3, z: 0.088 * u, w: 0.04 * u, d: 0.012 * u, h: torsoH * 0.62, tw: 0.028 * u, col: mix3(spec.coat, [1, 1, 1], 0.12) });
+  } else {
+    box(mdT, { x: 0, y: 0, z: 0, w: 0.115 * u, d: 0.082 * u, h: torsoH, tw: shW, td: 0.078 * u, col: spec.top, colB: topB });
+    // belt
+    box(mdT, { x: 0, y: 0.01 * u, z: 0, w: 0.118 * u, d: 0.085 * u, h: 0.05 * u, tw: 0.112 * u, td: 0.08 * u, col: spec.belt || [0.32, 0.25, 0.17] });
+  }
+  if (spec.stoop) torso.rotation.x = 0.14;
+  if (spec.scarf) {
+    // the neck wrap + knot live in the torso mesh (they never move relative to it)
+    const sc0 = spec.scarf, sc0B = mix3(sc0, [0, 0, 0], 0.22), sc0L = mix3(sc0, [1, 0.9, 0.8], 0.12);
+    lathe(mdT, [[0.055 * u, torsoH - 0.04 * u], [0.085 * u, torsoH - 0.0 * u], [0.07 * u, torsoH + 0.045 * u]],
+      { seg: 9, ex: 0.95, col: sc0, cols: [sc0B, sc0] });
+    lathe(mdT, [[0, 0], [0.032 * u, 0.02 * u], [0.02 * u, 0.055 * u], [0, 0.07 * u]],
+      { seg: 6, x: -0.055 * u, y: torsoH - 0.01 * u, z: -0.02 * u, col: sc0L });
+  }
+  const torsoM = mk(mdT); torso.add(torsoM);
+
+  /* arms */
+  const armLen = (spec.kid ? 0.19 : 0.26) * u;
+  const foreLen = (spec.kid ? 0.2 : 0.28) * u;
+  function arm(side) {
+    const sh = node(torso, side * (shW + 0.035 * u), torsoH - 0.045 * u, 0);
+    const elbow = node(sh, 0, -armLen, 0);
+    const mdU = MD();
+    box(mdU, { x: 0, y: -armLen, z: 0, w: 0.037 * u, d: 0.04 * u, h: armLen, tw: 0.045 * u, td: 0.048 * u, col: spec.sleeve || spec.top });
+    // shoulder cap — small and round, no pauldron spikes
+    lathe(mdU, [[0.012 * u, 0.035 * u], [0.046 * u, 0.008 * u], [0.042 * u, -0.028 * u]], { seg: 7, col: spec.sleeve || spec.top });
+    sh.add(mk(mdU));
+    const mdF = MD();
+    const wristY = -foreLen + 0.075 * u;
+    box(mdF, { x: 0, y: wristY, z: 0, w: 0.03 * u, d: 0.034 * u, h: foreLen - 0.075 * u, tw: 0.035 * u, td: 0.038 * u, col: spec.sleeve2 || skin });
+    // hand: palm + thumb — proportioned mitten, not a ball
+    box(mdF, { x: 0, y: -foreLen, z: 0, w: 0.026 * u, d: 0.036 * u, h: 0.078 * u, tw: 0.024 * u, td: 0.03 * u, col: skin });
+    box(mdF, { x: side * 0.02 * u, y: -foreLen + 0.04 * u, z: 0.02 * u, w: 0.011 * u, d: 0.016 * u, h: 0.034 * u, col: skin, rx: 0.5 });
+    const fm = mk(mdF); elbow.add(fm);
+    return { sh, elbow };
+  }
+  const AL = arm(-1), AR = arm(1);
+
+  /* head — neck, skull lathe, sculpted hair, matte face */
+  const headN = node(torso, 0, torsoH + 0.005 * u, spec.stoop ? 0.03 * u : 0);
+  const hs = (spec.headScale || 1) * u;
+  const mdH = MD();
+  // neck (real neck — thin cylinder)
+  lathe(mdH, [[0.032 * hs, -0.01], [0.03 * hs, 0.05 * hs]], { seg: 7, col: mix3(skin, [0, 0, 0], 0.12) });
+  // skull: chin → jaw → cheeks → crown  (head height ≈ 0.235)
+  const headProf = [
+    [0.0, 0.045 * hs],                 // chin point
+    [0.045 * hs, 0.06 * hs],           // jaw
+    [0.075 * hs, 0.115 * hs],          // cheeks
+    [0.082 * hs, 0.17 * hs],           // temples
+    [0.062 * hs, 0.235 * hs],          // upper skull
+    [0.0, 0.26 * hs],                  // crown
+  ];
+  lathe(mdH, headProf, { seg: 9, ex: 0.92, col: skin });
+  // ears
+  box(mdH, { x: -0.078 * hs, y: 0.12 * hs, z: 0, w: 0.008 * hs, d: 0.02 * hs, h: 0.035 * hs, col: mix3(skin, [0, 0, 0], 0.06) });
+  box(mdH, { x: 0.078 * hs, y: 0.12 * hs, z: 0, w: 0.008 * hs, d: 0.02 * hs, h: 0.035 * hs, col: mix3(skin, [0, 0, 0], 0.06) });
+  // nose: small wedge
+  box(mdH, { x: 0, y: 0.105 * hs, z: 0.072 * hs, w: 0.009 * hs, d: 0.012 * hs, h: 0.03 * hs, tw: 0.005 * hs, td: 0.006 * hs, col: skin });
+  // face features merge into the head mesh: small dark eyes, brow lines,
+  // understated mouth — BotW restraint.
+  const mdFace = mdH;
+  const eyeC = [0.13, 0.1, 0.085], browC = mix3(hairC || [0.2, 0.15, 0.1], [0, 0, 0], 0.25);
+  const ez = 0.0705 * hs, ey = 0.125 * hs, ex = 0.036 * hs;
+  function fq(x, y, z, w, h, c, rz) {
+    const p = [[-w, -h], [w, -h], [w, h], [-w, h]].map(q => {
+      const r = _rot(q[0], q[1], 0, 0, 0, rz || 0);
+      return [x + r[0], y + r[1], z + 0.003];
+    });
+    pushQuad(mdFace, p[0], p[1], p[2], p[3], c);
+  }
+  if (!spec.hood || spec.faceInHood !== false) {
+    fq(-ex, ey, ez, 0.011 * hs, 0.019 * hs, eyeC);
+    fq(ex, ey, ez, 0.011 * hs, 0.019 * hs, eyeC);
+    fq(-ex, ey + 0.032 * hs, ez, 0.017 * hs, 0.0045 * hs, browC, -0.12);
+    fq(ex, ey + 0.032 * hs, ez, 0.017 * hs, 0.0045 * hs, browC, 0.12);
+    fq(0, 0.068 * hs, ez * 1.007, 0.012 * hs, 0.0032 * hs, mix3(skin, [0.3, 0.1, 0.08], 0.55));
+    if (spec.blush) {
+      fq(-0.045 * hs, 0.095 * hs, ez * 0.98, 0.012 * hs, 0.007 * hs, mix3(skin, [0.75, 0.3, 0.25], 0.4));
+      fq(0.045 * hs, 0.095 * hs, ez * 0.98, 0.012 * hs, 0.007 * hs, mix3(skin, [0.75, 0.3, 0.25], 0.4));
+    }
+  }
+  const headM = mk(mdH); headN.add(headM);
+
+  /* hair / headwear */
+  const mdHair = MD();
+  const hairB = hairC ? mix3(hairC, [0, 0, 0], 0.25) : null;
+  if (spec.hood) {
+    // hood wraps the head but leaves the FACE open (sweep skips the front arc)
+    const hc = spec.hood, hcB = mix3(hc, [0, 0, 0], 0.25);
+    const hA0 = Math.PI / 2 + 0.95, hA1 = Math.PI / 2 - 0.95 + TAU;
+    lathe(mdHair, [[0.055 * hs, 0.02 * hs], [0.1 * hs, 0.1 * hs], [0.105 * hs, 0.2 * hs], [0.06 * hs, 0.285 * hs], [0, 0.3 * hs]],
+      { seg: 10, ex: 1.0, a0: hA0, a1: hA1, col: hc, cols: [hcB, hc, hc, hc] });
+    // brim edges framing the face + a peak over the brow
+    for (const s of [-1, 1]) {
+      box(mdHair, { x: s * 0.088 * hs, y: 0.02 * hs, z: 0.055 * hs, w: 0.014 * hs, d: 0.035 * hs, h: 0.21 * hs, tw: 0.012 * hs, td: 0.02 * hs, rz: -s * 0.15, col: hcB });
+    }
+    box(mdHair, { x: 0, y: 0.225 * hs, z: 0.045 * hs, w: 0.085 * hs, d: 0.045 * hs, h: 0.055 * hs, tw: 0.05 * hs, td: 0.01 * hs, shz: 0.03 * hs, col: hc });
+  } else if (spec.hairStyle === 'swept') {
+    // sculpted swept-back cap: full coverage of the crown, brow left clear
+    lathe(mdHair, [[0.085 * hs, 0.155 * hs], [0.094 * hs, 0.2 * hs], [0.075 * hs, 0.253 * hs], [0, 0.283 * hs]],
+      { seg: 10, ex: 0.97, col: hairC, cols: [hairB, hairC, hairC] });
+    // brow fringe: angular chunks that STOP above the brows
+    for (let i = 0; i < 5; i++) {
+      const a = (i - 2) * 0.3;
+      box(mdHair, {
+        x: Math.sin(a) * 0.068 * hs, y: 0.215 * hs, z: Math.cos(a) * 0.068 * hs,
+        w: 0.02 * hs, d: 0.012 * hs, h: -0.048 * hs, tw: 0.004 * hs, td: 0.003 * hs,
+        ry: -a, rx: 0.62, col: i % 2 ? hairC : mix3(hairC, [1, 1, 1], 0.08),
+      });
+    }
+    // side locks sweeping past the ears
+    for (const s of [-1, 1]) {
+      box(mdHair, { x: s * 0.082 * hs, y: 0.2 * hs, z: 0.028 * hs, w: 0.014 * hs, d: 0.026 * hs, h: -0.1 * hs, tw: 0.004 * hs, td: 0.008 * hs, rz: s * 0.16, col: hairB });
+    }
+    // swept-back volume + short tail at the nape
+    box(mdHair, { x: 0, y: 0.21 * hs, z: -0.07 * hs, w: 0.055 * hs, d: 0.03 * hs, h: -0.1 * hs, tw: 0.02 * hs, td: 0.008 * hs, rx: -0.3, col: hairC });
+    box(mdHair, { x: 0, y: 0.115 * hs, z: -0.078 * hs, w: 0.024 * hs, d: 0.016 * hs, h: -0.06 * hs, tw: 0.005 * hs, td: 0.004 * hs, rx: -0.25, col: hairB });
+  } else if (spec.hairStyle === 'bun') {
+    lathe(mdHair, [[0.072 * hs, 0.16 * hs], [0.085 * hs, 0.21 * hs], [0.06 * hs, 0.255 * hs], [0, 0.27 * hs]],
+      { seg: 8, ex: 0.95, col: hairC });
+    lathe(mdHair, [[0, 0.255 * hs], [0.032 * hs, 0.275 * hs], [0.026 * hs, 0.3 * hs], [0, 0.31 * hs]],
+      { seg: 6, x: 0, z: -0.03 * hs, col: hairB });
+  } else if (spec.hairStyle === 'short') {
+    lathe(mdHair, [[0.075 * hs, 0.155 * hs], [0.086 * hs, 0.2 * hs], [0.065 * hs, 0.25 * hs], [0, 0.272 * hs]],
+      { seg: 9, ex: 0.95, col: hairC, cols: [hairB, hairC, hairC] });
+  }
+  if (spec.cap) {
+    const cc = spec.cap, ccB = mix3(cc, [0, 0, 0], 0.2);
+    lathe(mdHair, [[0.088 * hs, 0.19 * hs], [0.092 * hs, 0.235 * hs], [0.055 * hs, 0.27 * hs], [0, 0.278 * hs]],
+      { seg: 9, ex: 0.95, col: cc, cols: [ccB, cc, cc] });
+    box(mdHair, { x: 0, y: 0.19 * hs, z: 0.075 * hs, w: 0.06 * hs, d: 0.035 * hs, h: 0.012 * hs, tw: 0.045 * hs, td: 0.03 * hs, shz: 0.02 * hs, col: ccB });
+  }
+  if (spec.hat) {
+    // straw sun hat: wide sloped brim + dome
+    const hc2 = spec.hat, hcB2 = mix3(hc2, [0, 0, 0], 0.14);
+    lathe(mdHair, [[0.16 * hs, 0.19 * hs], [0.09 * hs, 0.225 * hs], [0.085 * hs, 0.23 * hs]], { seg: 10, col: hcB2 });
+    lathe(mdHair, [[0.085 * hs, 0.225 * hs], [0.07 * hs, 0.275 * hs], [0, 0.295 * hs]], { seg: 10, col: hc2 });
+  }
+  if (spec.beard) {
+    const bc = spec.beard;
+    box(mdHair, { x: 0, y: 0.015 * hs, z: 0.045 * hs, w: 0.045 * hs, d: 0.03 * hs, h: -0.075 * hs, tw: 0.012 * hs, td: 0.008 * hs, rx: 0.15, col: bc });
+    box(mdHair, { x: 0, y: 0.085 * hs, z: 0.068 * hs, w: 0.032 * hs, d: 0.012 * hs, h: -0.028 * hs, tw: 0.02 * hs, col: bc }); // moustache
+  }
+  if (mdHair.p.length) { const hm = mk(mdHair); headN.add(hm); }
+
+  /* scarf — a chunky neck wrap, tail flowing down the BACK with chained sway */
+  const scarf = [];
+  if (spec.scarf) {
+    const sc = spec.scarf, scB = mix3(sc, [0, 0, 0], 0.22), scL = mix3(sc, [1, 0.9, 0.8], 0.12);
+    // tail hangs from behind the left shoulder (wrap itself is in the torso mesh)
+    let par = node(torso, 0, torsoH - 0.03 * u, 0), sy = 0.01 * u;
+    for (let i = 0; i < 3; i++) {
+      const segN = node(par, i === 0 ? -0.05 * u : 0, sy, i === 0 ? -0.075 * u : 0);
+      const mdS = MD();
+      const w0 = (0.055 - i * 0.007) * u, w1 = (0.046 - i * 0.007) * u, len = 0.12 * u;
+      box(mdS, { x: 0, y: -len, z: 0, w: w1, d: 0.014 * u, h: len, tw: w0, td: 0.016 * u, col: i % 2 ? scB : sc });
+      if (i === 2) {
+        box(mdS, { x: 0, y: -len - 0.02 * u, z: 0, w: w1 * 1.2, d: 0.015 * u, h: 0.024 * u, col: scB });
+        box(mdS, { x: 0, y: -len - 0.034 * u, z: 0, w: w1 * 0.9, d: 0.013 * u, h: 0.016 * u, col: scL });
+      }
+      segN.add(mk(mdS));
+      scarf.push(segN);
+      par = segN; sy = -0.115 * u;
+    }
+    scarf[0].rotation.x = 0.72;    // kick the tail out behind; sway layers on top
+  }
+
+  for (const m of parts) { m.frustumCulled = false; }
+  return {
+    root, pelvis, torso, head: headN, headM,
+    shL: AL.sh, elL: AL.elbow, shR: AR.sh, elR: AR.elbow,
+    hipL: L.hip, kneeL: L.knee, hipR: R.hip, kneeR: R.knee,
+    scarf, hem, parts, u,
+    // pose scratch
+    anim: { t: 0, blink: 0 },
+  };
+}
+
+/* ── the moonglass sword ── */
+function buildSword() {
+  const g = new THREE.Group();
+  const mdB = MD();
+  const glass = [0.85, 0.95, 0.96], glassEdge = [0.68, 0.85, 0.9];
+  // blade: elegant leaf shape, slight crescent curve
+  const bl = 0.52;
+  box(mdB, { x: 0, y: 0.1, z: 0, w: 0.028, d: 0.008, h: bl * 0.65, tw: 0.022, td: 0.005, col: glass });
+  box(mdB, { x: 0, y: 0.1 + bl * 0.65, z: 0, w: 0.022, d: 0.005, h: bl * 0.35, tw: 0.0, td: 0.0, shx: 0.008, col: glassEdge });
+  const blade = mdMesh(mdB, GLASS_MAT.clone());
+  blade.frustumCulled = false;
+  const mdH = MD();
+  const bronze = [0.55, 0.42, 0.26], grip = [0.28, 0.2, 0.15];
+  // crescent guard
+  lathe(mdH, [[0.012, 0.09], [0.052, 0.1], [0.045, 0.115], [0.0, 0.108]], { seg: 8, ex: 0.4, col: bronze });
+  box(mdH, { x: 0, y: -0.05, z: 0, w: 0.013, d: 0.013, h: 0.14, col: grip });
+  lathe(mdH, [[0, -0.07], [0.02, -0.055], [0.016, -0.04]], { seg: 6, col: bronze });
+  const hilt = mdMesh(mdH, TOON);
+  hilt.frustumCulled = false;
+  g.add(blade); g.add(hilt);
+  return { group: g, blade, bladeMat: blade.material };
+}
+
+/* ── sword swing trail (fan, updated per-frame during swings) ── */
+function buildTrail() {
+  const segs = 10;
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(segs * 2 * 3);
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const idx = [];
+  for (let i = 0; i < segs - 1; i++) {
+    const a = i * 2, b = i * 2 + 1, c = i * 2 + 2, d = i * 2 + 3;
+    idx.push(a, b, c, b, d, c);
+  }
+  geo.setIndex(idx);
+  const mesh = new THREE.Mesh(geo, TRAIL_MAT);
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  return { mesh, pos, segs };
+}
+
+/* ═══════════ THE CAST ═══════════ */
+function buildWick() {
+  const c = buildHumanoid({
+    h: 1.55,
+    skin: col(0xd9a97f), hair: col(0x54371f), hairStyle: 'swept',
+    top: col(0xb59a6b), topB: col(0x9c8256),
+    sleeve: col(0xa78d5f), sleeve2: col(0xd9a97f),
+    pants: col(0x5c4c39), boot: col(0x40311f),
+    belt: col(0x3f3020),
+    scarf: col(0xa03a28),
+  });
+  // sword on back (sheathed) + hand node for combat
+  const sword = buildSword();
+  const backN = node(c.torso, -0.06, 0.3, -0.115);
+  backN.rotation.set(0.2, 0, 2.45);
+  const handN = node(c.elR, 0, -0.28 * c.u - 0.02, 0.02);
+  handN.rotation.set(Math.PI * 0.92, 0, 0);   // blade extends past the fist, wrist cocked
+  const trail = buildTrail();
+  c.swordBack = backN; c.swordHand = handN; c.sword = sword; c.trail = trail;
+  backN.add(sword.group);
+  sword.group.visible = false;   // hidden until obtained
+  return c;
+}
+function buildFinn() {
+  return buildHumanoid({
+    h: 1.7, stoop: true,
+    skin: col(0xd3a983), hair: col(0xd8d3c4), hairStyle: 'short',
+    beard: col(0xd8d3c4), cap: col(0x46453c),
+    coat: col(0x5c6e69), top: col(0x5c6e69),
+    sleeve: col(0x54645f), sleeve2: col(0xd3a983),
+    pants: col(0x3a3a34), boot: col(0x33302a),
+  });
+}
+function buildTock() {
+  const c = buildHumanoid({
+    h: 1.46, stoop: true,
+    skin: col(0xcfa07e), hair: col(0xbdb4a8), hairStyle: 'bun',
+    hood: col(0x69465a),
+    dress: col(0x5c4152), top: col(0x69465a),
+    sleeve: col(0x5c4152), sleeve2: col(0xcfa07e),
+    pants: col(0x4c3a44), boot: col(0x3a2e34),
+  });
+  // knitting needles + wool
+  const mdK = MD();
+  box(mdK, { x: 0, y: 0, z: 0, w: 0.004, d: 0.004, h: 0.2, rx: 1.2, ry: 0.4, col: [0.75, 0.7, 0.6] });
+  box(mdK, { x: 0.04, y: 0.01, z: 0.02, w: 0.004, d: 0.004, h: 0.2, rx: 1.3, ry: -0.5, col: [0.75, 0.7, 0.6] });
+  lathe(mdK, [[0, -0.02], [0.035, 0.0], [0.03, 0.035], [0, 0.05]], { seg: 6, x: 0.02, y: -0.04, col: [0.72, 0.5, 0.5] });
+  const k = mdMesh(mdK, TOON); k.frustumCulled = false;
+  const kn = node(c.elL, 0.06, -0.26 * c.u, 0.1);
+  kn.add(k);
+  return c;
+}
+function buildPearl() {
+  return buildHumanoid({
+    h: 1.42, kid: true, blush: true,   // u-scale; kid proportions land her ~1.05 m
+    skin: col(0xd9ab82), hair: col(0x54402e), hairStyle: 'short',
+    hat: col(0xcbb684),
+    dress: col(0xad6a5c), top: col(0xad6a5c),
+    sleeve: col(0xad6a5c), sleeve2: col(0xd9ab82),
+    pants: col(0x8a5548), boot: col(0xd9ab82),
+    headScale: 1.12,
+  });
+}
+
+/* ═══════════ ENEMIES ═══════════ */
+function buildScorchCrab() {
+  const root = new THREE.Group();
+  const parts = [];
+  const mk = (md) => { const m = mdMesh(md, TOON); m.frustumCulled = false; parts.push(m); return m; };
+  const shellC = col(0xa8503a), shellB = col(0x8a3f30), belly = col(0xd8b894), spike = col(0x7c3428);
+  /* body: flattened shell with ridge spikes */
+  const body = node(root, 0, 0.22, 0);
+  const mdB = MD();
+  lathe(mdB, [[0, -0.1], [0.3, -0.08], [0.36, 0.02], [0.24, 0.13], [0, 0.17]],
+    { seg: 9, ex: 0.82, col: shellC, cols: [belly, shellC, shellC, shellB] });
+  for (let i = 0; i < 4; i++) {
+    box(mdB, { x: (i - 1.5) * 0.11, y: 0.1, z: -0.02, w: 0.03, d: 0.03, h: 0.09, tw: 0.002, td: 0.002, rx: -0.3 + i * 0.15, col: spike });
+  }
+  body.add(mk(mdB));
+  /* eye stalks — small matte eyes, angry brow ridge */
+  const mdE = MD();
+  for (const s of [-1, 1]) {
+    box(mdE, { x: s * 0.1, y: 0.1, z: 0.26, w: 0.018, d: 0.018, h: 0.1, rx: 0.5, col: shellB });
+    lathe(mdE, [[0, 0], [0.028, 0.014], [0.024, 0.04], [0, 0.05]], { seg: 6, x: s * 0.1, y: 0.19, z: 0.31, col: [0.14, 0.1, 0.08] });
+    box(mdE, { x: s * 0.1, y: 0.23, z: 0.3, w: 0.03, d: 0.01, h: 0.012, rz: s * -0.35, col: spike });
+  }
+  body.add(mk(mdE));
+  /* claws: arm + pincer, big and telegraphed */
+  function claw(side) {
+    const armN = node(body, side * 0.32, -0.02, 0.14);
+    const mdA = MD();
+    box(mdA, { x: 0, y: 0, z: 0, w: 0.045, d: 0.045, h: 0.16, ry: side * 0.5, rx: 1.2, col: shellB });
+    armN.add(mk(mdA));
+    const pinch = node(armN, side * 0.1, 0.045, 0.14);
+    const mdP = MD();
+    lathe(mdP, [[0, -0.05], [0.085, 0.0], [0.09, 0.09], [0.02, 0.19], [0, 0.2]], { seg: 7, ex: 0.75, ry: 0, col: shellC, cols: [belly, shellC, shellC] });
+    box(mdP, { x: 0, y: 0.1, z: 0.055, w: 0.02, d: 0.014, h: 0.1, tw: 0.002, td: 0.002, rx: 0.35, col: spike });
+    const pm = mk(mdP); pm.rotation.x = -0.9;
+    pinch.add(pm);
+    return { armN, pinch };
+  }
+  const cl = claw(-1), cr = claw(1);
+  /* legs: 3 per side, merged per side */
+  function legs(side) {
+    const md = MD();
+    for (let i = 0; i < 3; i++) {
+      const z = (i - 1) * 0.16 - 0.04;
+      box(md, { x: side * 0.28, y: 0.16, z, w: 0.02, d: 0.024, h: 0.14, rz: side * 1.15, col: shellB });
+      box(md, { x: side * 0.42, y: 0.13, z, w: 0.016, d: 0.02, h: -0.15, rz: side * 0.5, col: shellC });
+    }
+    const m = mk(md); root.add(m); return m;
+  }
+  const legL = legs(-1), legR = legs(1);
+  const shadow = blobShadow(0.42);
+  root.add(shadow);
+  for (const m of parts) m.frustumCulled = false;
+  return { root, body, clawL: cl, clawR: cr, legL, legR, shadow, parts };
+}
+
+function buildWisp() {
+  const root = new THREE.Group();
+  const md = MD();
+  const core = [1.0, 0.93, 0.72], rim = [1.0, 0.78, 0.42];
+  lathe(md, [[0, -0.1], [0.09, -0.03], [0.1, 0.03], [0, 0.11]], { seg: 7, col: core, cols: [rim, core, rim] });
+  const m = mdMesh(md, WISP_MAT, false);
+  m.frustumCulled = false;
+  root.add(m);
+  const mdH = MD();
+  lathe(mdH, [[0, -0.16], [0.16, 0], [0, 0.17]], { seg: 7, col: [0.55, 0.42, 0.18] });
+  const halo = mdMesh(mdH, WISP_MAT, false);
+  halo.frustumCulled = false;
+  root.add(halo);
+  return { root, core: m, halo };
+}
+
+function buildKingCrab() {
+  const root = new THREE.Group();
+  const parts = [];
+  const mk = (md, mat) => { const m = mdMesh(md, mat || TOON); m.frustumCulled = false; parts.push(m); return m; };
+  const shellC = col(0x9c5b40), shellB = col(0x7c4634), belly = col(0xd8bb96),
+        barn = col(0xcfc6ae), spike = col(0x6e3a2a);
+  const S = 4.2;   // overall scale
+  const body = node(root, 0, 0.28 * S, 0);
+  const mdB = MD();
+  lathe(mdB, [[0, -0.12 * S], [0.3 * S, -0.09 * S], [0.35 * S, 0.03 * S], [0.2 * S, 0.14 * S], [0, 0.16 * S]],
+    { seg: 10, ex: 0.85, col: shellC, cols: [belly, shellC, shellC, shellB] });
+  // barnacle clusters
+  for (let i = 0; i < 5; i++) {
+    const a = i * 1.35 + 0.4;
+    lathe(mdB, [[0, 0], [0.035 * S, 0.012 * S], [0.02 * S, 0.035 * S], [0, 0.04 * S]],
+      { seg: 5, x: Math.cos(a) * 0.24 * S, y: 0.05 * S + hash2(i, 9) * 0.03 * S, z: Math.sin(a) * 0.2 * S, col: barn });
+  }
+  body.add(mk(mdB));
+  /* THE CRESCENT HORN worn as shell — giant pale moonglass crescent */
+  const mdCr = MD();
+  const glass = [0.88, 0.94, 0.9], glassD = [0.7, 0.82, 0.84];
+  const R0 = 0.62 * S, R1 = 0.3 * S;
+  for (let s = 0; s < 12; s++) {
+    const a0 = -0.4 + (s / 12) * 3.9, a1 = -0.4 + ((s + 1) / 12) * 3.9;
+    const th = 0.17 * S * (1 - Math.abs(s / 12 - 0.5) * 1.2);
+    const th1 = 0.17 * S * (1 - Math.abs((s + 1) / 12 - 0.5) * 1.2);
+    const p00 = [Math.cos(a0) * R0, Math.sin(a0) * R0, th], p01 = [Math.cos(a0) * R0, Math.sin(a0) * R0, -th];
+    const p10 = [Math.cos(a1) * R0, Math.sin(a1) * R0, th1], p11 = [Math.cos(a1) * R0, Math.sin(a1) * R0, -th1];
+    const q00 = [Math.cos(a0) * R1, Math.sin(a0) * R1, th * 0.6], q01 = [Math.cos(a0) * R1, Math.sin(a0) * R1, -th * 0.6];
+    const q10 = [Math.cos(a1) * R1, Math.sin(a1) * R1, th1 * 0.6], q11 = [Math.cos(a1) * R1, Math.sin(a1) * R1, -th1 * 0.6];
+    pushQuad(mdCr, p00, p10, q10, q00, glass);
+    pushQuad(mdCr, q01, q11, p11, p01, glass);
+    pushQuad(mdCr, p00, p01, p11, p10, glassD);
+    pushQuad(mdCr, q10, q11, q01, q00, glassD);
+  }
+  const crescent = mdMesh(mdCr, GLASS_MAT.clone());
+  crescent.material.opacity = 0.97;
+  crescent.frustumCulled = false;
+  // wrapped low across the dome of the shell — embedded, not floating
+  const crN = node(body, 0, 0.09 * S, -0.06 * S);
+  crN.rotation.set(-1.02, 0, 0.08);
+  crN.scale.setScalar(1.22);
+  crN.add(crescent);
+  // moonglass glow: an additive halo copy that breathes
+  const halo = mdMesh(mdCr, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.22,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  halo.frustumCulled = false;
+  halo.material.opacity = 0.12;
+  halo.scale.setScalar(1.05);
+  crN.add(halo);
+  /* eye stalks — amber sun-mad glow (own material so we can calm them) */
+  const mdEye = MD();
+  for (const s of [-1, 1]) {
+    box(mdEye, { x: s * 0.11 * S, y: 0.08 * S, z: 0.27 * S, w: 0.02 * S, d: 0.02 * S, h: 0.14 * S, rx: 0.5, col: shellB });
+  }
+  body.add(mk(mdEye));
+  const mdGlow = MD();
+  for (const s of [-1, 1]) {
+    lathe(mdGlow, [[0, 0], [0.035 * S, 0.02 * S], [0.028 * S, 0.055 * S], [0, 0.065 * S]],
+      { seg: 6, x: s * 0.11 * S, y: 0.2 * S, z: 0.335 * S, col: [1.0, 0.62, 0.2] });
+  }
+  const eyeGlow = mdMesh(mdGlow, new THREE.MeshBasicMaterial({ vertexColors: true }));
+  eyeGlow.frustumCulled = false;
+  body.add(eyeGlow); parts.push(eyeGlow);
+  /* claws — LEFT one is the huge slam claw */
+  function claw(side, big) {
+    const k = big ? 1.5 : 0.85;
+    const armN = node(body, side * 0.34 * S, -0.04 * S, 0.16 * S);
+    const mdA = MD();
+    box(mdA, { x: 0, y: 0, z: 0, w: 0.05 * S * k, d: 0.05 * S * k, h: 0.2 * S * k, ry: side * 0.5, rx: 1.25, col: shellB });
+    armN.add(mk(mdA));
+    const pinch = node(armN, side * 0.12 * S * k, 0.04 * S, 0.18 * S * k);
+    const mdP = MD();
+    lathe(mdP, [[0, -0.06 * S * k], [0.1 * S * k, 0], [0.11 * S * k, 0.11 * S * k], [0.025 * S * k, 0.23 * S * k], [0, 0.24 * S * k]],
+      { seg: 8, ex: 0.75, col: shellC, cols: [belly, shellC, shellC] });
+    box(mdP, { x: 0, y: 0.12 * S * k, z: 0.065 * S * k, w: 0.024 * S * k, d: 0.017 * S * k, h: 0.12 * S * k, tw: 0.002, td: 0.002, rx: 0.35, col: spike });
+    const pm = mk(mdP); pm.rotation.x = -0.9;
+    pinch.add(pm);
+    return { armN, pinch };
+  }
+  const clawL = claw(-1, true), clawR = claw(1, false);
+  function legs(side) {
+    const md = MD();
+    for (let i = 0; i < 3; i++) {
+      const z = (i - 1) * 0.17 * S - 0.03 * S;
+      box(md, { x: side * 0.3 * S, y: 0.2 * S, z, w: 0.022 * S, d: 0.026 * S, h: 0.17 * S, rz: side * 1.15, col: shellB });
+      box(md, { x: side * 0.46 * S, y: 0.22 * S, z, w: 0.018 * S, d: 0.022 * S, h: -0.26 * S, tw: 0.008 * S, td: 0.01 * S, rz: side * 0.35, col: shellC });
+    }
+    const m = mk(md); root.add(m); return m;
+  }
+  const legL = legs(-1), legR = legs(1);
+  const shadow = blobShadow(0.52 * S);
+  root.add(shadow);
+  return { root, body, crescent, crescentHalo: halo, crN, eyeGlow, clawL, clawR, legL, legR, shadow, parts, S };
+}
+
+/* ── quest items ── */
+function buildCrescentItem() {
+  const md = MD();
+  const glass = [0.88, 0.95, 0.92], glassD = [0.66, 0.82, 0.86];
+  const R0 = 0.5, R1 = 0.3;
+  for (let s = 0; s < 10; s++) {
+    const a0 = -0.3 + (s / 10) * 3.7, a1 = -0.3 + ((s + 1) / 10) * 3.7;
+    const th = 0.08 * (1 - Math.abs(s / 10 - 0.5) * 1.2);
+    const th1 = 0.08 * (1 - Math.abs((s + 1) / 10 - 0.5) * 1.2);
+    const p00 = [Math.cos(a0) * R0, Math.sin(a0) * R0, th], p01 = [Math.cos(a0) * R0, Math.sin(a0) * R0, -th];
+    const p10 = [Math.cos(a1) * R0, Math.sin(a1) * R0, th1], p11 = [Math.cos(a1) * R0, Math.sin(a1) * R0, -th1];
+    const q00 = [Math.cos(a0) * R1, Math.sin(a0) * R1, th * 0.6], q01 = [Math.cos(a0) * R1, Math.sin(a0) * R1, -th * 0.6];
+    const q10 = [Math.cos(a1) * R1, Math.sin(a1) * R1, th1 * 0.6], q11 = [Math.cos(a1) * R1, Math.sin(a1) * R1, -th1 * 0.6];
+    pushQuad(md, p00, p10, q10, q00, glass);
+    pushQuad(md, q01, q11, p11, p01, glass);
+    pushQuad(md, p00, p01, p11, p10, glassD);
+    pushQuad(md, q10, q11, q01, q00, glassD);
+  }
+  const m = mdMesh(md, GLASS_MAT.clone());
+  m.frustumCulled = false;
+  return m;
+}
+function buildHeartItem() {
+  const md = MD();
+  const red = [0.78, 0.22, 0.28], redD = [0.55, 0.13, 0.2];
+  lathe(md, [[0, -0.14], [0.1, -0.02], [0.11, 0.06], [0.05, 0.12], [0, 0.09]], { seg: 8, ex: 0.7, col: red, cols: [redD, red, red, redD] });
+  lathe(md, [[0, 0.06], [0.055, 0.1], [0, 0.15]], { seg: 6, x: -0.05, ex: 0.7, col: red });
+  lathe(md, [[0, 0.06], [0.055, 0.1], [0, 0.15]], { seg: 6, x: 0.05, ex: 0.7, col: red });
+  const m = mdMesh(md, GLASS_MAT.clone());
+  m.frustumCulled = false;
+  return m;
+}
+function buildMoonfish() {
+  const md = MD();
+  const silver = [0.82, 0.88, 0.92], fin = [0.6, 0.72, 0.82];
+  lathe(md, [[0, -0.16], [0.05, -0.06], [0.06, 0.02], [0.03, 0.1], [0, 0.14]], { seg: 7, ex: 0.55, col: silver });
+  box(md, { x: 0, y: 0.12, z: 0, w: 0.005, d: 0.05, h: 0.09, tw: 0.001, td: 0.015, col: fin });
+  box(md, { x: 0, y: -0.16, z: 0, w: 0.004, d: 0.04, h: -0.07, tw: 0.001, td: 0.06, col: fin });
+  const m = mdMesh(md, TOON);
+  m.frustumCulled = false;
+  m.visible = false;
+  return m;
+}
+</script>

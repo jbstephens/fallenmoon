@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fallen Moon">
+<title>Fallen Moon</title>
+<link rel="icon" href="data:,">
+<script src="https://ses.q5labs.co/lib/controller.js"></script>
+<style>
+  * {
+    margin: 0; padding: 0; box-sizing: border-box;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #0b0e14;
+    font-family: Georgia, 'Times New Roman', serif;
+    color: #ece4d2;
+    touch-action: none;
+  }
+
+  /* ── fixed 1280x720 stage, CSS-scaled letterbox ── */
+  #stage {
+    position: fixed; left: 50%; top: 50%;
+    width: 1280px; height: 720px;
+    transform: translate(-50%,-50%) scale(1);
+    transform-origin: center center;
+    background: #f4ecd8;
+    overflow: hidden;
+  }
+  #gl { position: absolute; inset: 0; display: block; }
+
+  /* subtle corner vignette — cheap, static, no filters */
+  #vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 92% 88% at 50% 46%,
+      rgba(0,0,0,0) 62%, rgba(24,18,30,0.16) 88%, rgba(20,14,28,0.34) 100%);
+  }
+
+  /* ═══ in-game HUD ═══ */
+  #hud { position: absolute; inset: 0; pointer-events: none; display: none; }
+  body.st-play #hud, body.st-dialog #hud, body.st-cine #hud { display: block; }
+  #hearts { position: absolute; left: 26px; top: 20px; }
+  #questLine {
+    position: absolute; left: 50%; top: 24px; transform: translateX(-50%);
+    font-size: 15px; letter-spacing: 4px; color: #f2ead4;
+    text-shadow: 0 1px 3px rgba(30,20,10,0.85), 0 0 14px rgba(30,20,10,0.4);
+    white-space: nowrap;
+    opacity: 0; transition: opacity 0.8s ease;
+  }
+  #questLine.on { opacity: 1; }
+
+  /* context prompt near the player ("✕ TALK") */
+  #prompt {
+    position: absolute; left: 50%; top: 470px; transform: translateX(-50%);
+    padding: 7px 22px;
+    background: rgba(22,20,26,0.78);
+    border: 1px solid rgba(214,196,150,0.5);
+    border-radius: 3px;
+    font-size: 17px; letter-spacing: 3px; color: #f2ead4;
+    display: none; pointer-events: none;
+  }
+  body.st-play #prompt.on { display: block; }
+  #prompt b { color: #e8cf9a; font-weight: normal; }
+
+  /* dialogue box */
+  #dlg {
+    position: absolute; left: 50%; bottom: 46px; transform: translateX(-50%);
+    width: 760px; min-height: 118px;
+    padding: 16px 30px 18px;
+    background: rgba(20,19,25,0.85);
+    border: 1px solid rgba(214,196,150,0.55);
+    border-radius: 4px;
+    display: none; pointer-events: none;
+  }
+  body.st-dialog #dlg, body.st-cine #dlg.on { display: block; }
+  #dlgName {
+    font-size: 14px; letter-spacing: 5px; color: #d8bd85;
+    margin-bottom: 8px;
+  }
+  #dlgText {
+    font-size: 21px; line-height: 1.5; color: #f0e9d8;
+    min-height: 34px;
+  }
+  #dlgMore {
+    position: absolute; right: 20px; bottom: 10px;
+    font-size: 16px; color: #d8bd85;
+    animation: dlgpulse 1.2s ease-in-out infinite;
+  }
+  @keyframes dlgpulse { 0%,100% { opacity: 0.9; } 50% { opacity: 0.25; } }
+
+  /* distant villager line during the payoff (no box — a voice on the wind) */
+  #floatLine {
+    position: absolute; left: 50%; bottom: 190px; transform: translateX(-50%);
+    font-size: 22px; font-style: italic; letter-spacing: 2px; color: #f4ecda;
+    text-shadow: 0 1px 4px rgba(20,14,26,0.9);
+    opacity: 0; transition: opacity 1.2s ease;
+    pointer-events: none; white-space: nowrap;
+  }
+  #floatLine.on { opacity: 1; }
+
+  /* item toast — "THE MOONGLASS SWORD" */
+  #itemToast {
+    position: absolute; left: 50%; top: 158px; transform: translateX(-50%);
+    text-align: center; pointer-events: none;
+    opacity: 0;
+  }
+  #itemToast .it1 {
+    font-size: 30px; letter-spacing: 7px; color: #f6efdd;
+    text-shadow: 0 2px 6px rgba(30,20,12,0.8);
+  }
+  #itemToast .it2 {
+    margin-top: 6px; font-size: 14px; font-style: italic;
+    letter-spacing: 2px; color: #e0cfa4;
+    text-shadow: 0 1px 4px rgba(30,20,12,0.8);
+  }
+  #itemToast.show { animation: toast 3.4s ease-out forwards; }
+  @keyframes toast {
+    0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    12% { opacity: 1; transform: translateX(-50%) translateY(0); }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* ═══ title screen ═══ */
+  #titleUI { position: absolute; inset: 0; display: none; pointer-events: none; }
+  body.st-title #titleUI { display: block; }
+  #tLogo {
+    position: absolute; left: 0; right: 0; top: 128px;
+    text-align: center;
+    font-size: 88px; letter-spacing: 26px; text-indent: 26px;
+    color: #f7f1e2;
+    text-shadow: 0 2px 10px rgba(60,38,20,0.55), 0 0 40px rgba(255,240,210,0.35);
+  }
+  #tPhases {
+    position: absolute; left: 0; right: 0; top: 118px;
+    text-align: center;
+    font-size: 15px; letter-spacing: 12px; text-indent: 12px; color: #efe0b8;
+    text-shadow: 0 1px 4px rgba(60,38,20,0.6);
+  }
+  #tSub {
+    position: absolute; left: 0; right: 0; top: 246px;
+    text-align: center;
+    font-size: 16px; letter-spacing: 10px; text-indent: 10px; color: #f0e2bf;
+    text-shadow: 0 1px 4px rgba(60,38,20,0.6);
+  }
+  #tRule {
+    position: absolute; left: 50%; top: 236px; transform: translateX(-50%);
+    width: 320px; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(240,226,191,0.75), transparent);
+  }
+  #tMenu { position: absolute; left: 0; right: 0; top: 480px; text-align: center; }
+  .titem {
+    display: block; margin: 9px auto; width: 300px;
+    padding: 9px 0;
+    font-size: 21px; letter-spacing: 8px; text-indent: 8px;
+    color: #d9cdb2; text-shadow: 0 1px 4px rgba(40,26,14,0.7);
+  }
+  .titem.sel {
+    color: #fff7e4;
+    background: linear-gradient(90deg, transparent, rgba(30,24,20,0.45), transparent);
+  }
+  .titem.sel::before { content: '\2726\00a0\00a0'; color: #e8cf9a; text-indent: 0; }
+  .titem.gone { display: none; }
+  #tHint {
+    position: absolute; left: 0; right: 0; bottom: 30px;
+    text-align: center;
+    font-size: 13px; letter-spacing: 3px; color: #efe5cd;
+    text-shadow: 0 1px 3px rgba(40,26,14,0.8);
+  }
+
+  /* ═══ pause ═══ */
+  #pauseUI {
+    position: absolute; inset: 0;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(14,13,20,0.55);
+  }
+  body.st-pause #pauseUI { display: flex; }
+  #pauseUI .pbox {
+    width: 470px; padding: 30px 40px 26px;
+    background: rgba(21,20,27,0.94);
+    border: 1px solid rgba(214,196,150,0.5);
+    border-radius: 4px; text-align: center;
+  }
+  #pauseUI h2 { font-size: 26px; letter-spacing: 12px; text-indent: 12px; color: #f2ead4; font-weight: normal; margin-bottom: 18px; }
+  .pitem {
+    font-size: 19px; letter-spacing: 6px; text-indent: 6px;
+    color: #b6ab93; padding: 8px 0; margin: 2px 0;
+  }
+  .pitem.sel { color: #fff5e0; }
+  .pitem.sel::before { content: '\2726\00a0\00a0'; color: #e8cf9a; }
+  #pControls {
+    margin-top: 18px; padding-top: 14px;
+    border-top: 1px solid rgba(214,196,150,0.25);
+    font-size: 12.5px; line-height: 2; letter-spacing: 2px; color: #9a917c;
+  }
+  #pControls b { color: #d8bd85; font-weight: normal; }
+
+  /* ═══ TO BE CONTINUED ═══ */
+  #tbc {
+    position: absolute; inset: 0;
+    display: none; align-items: center; justify-content: center; flex-direction: column;
+    background: #10131f;
+    opacity: 0; transition: opacity 1.4s ease;
+  }
+  body.st-tbc #tbc { display: flex; }
+  #tbc.on { opacity: 1; }
+  #tbcArt { display: block; margin-bottom: 8px; }
+  #tbcTitle {
+    font-size: 34px; letter-spacing: 16px; text-indent: 16px; color: #e9e2cf;
+    margin-top: 10px;
+  }
+  #tbcSub {
+    margin-top: 14px; font-size: 15px; font-style: italic;
+    letter-spacing: 3px; color: #9aa4c0;
+  }
+  #tbcGo {
+    margin-top: 34px; font-size: 14px; letter-spacing: 4px; color: #cbbf9f;
+    animation: dlgpulse 1.6s ease-in-out infinite;
+  }
+
+  /* ═══ full-screen fades / glare ═══ */
+  #glare {
+    position: absolute; inset: 0; background: #fff8ea;
+    opacity: 0; pointer-events: none;
+  }
+  #fadeBlack {
+    position: absolute; inset: 0; background: #0b0e14;
+    opacity: 1; pointer-events: none;
+    transition: opacity 1.1s ease;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl" width="1280" height="720"></canvas>
+  <div id="vignette"></div>
+
+  <div id="hud">
+    <canvas id="hearts" width="360" height="110"></canvas>
+    <div id="questLine"></div>
+  </div>
+  <div id="prompt"></div>
+  <div id="dlg">
+    <div id="dlgName"></div>
+    <div id="dlgText"></div>
+    <div id="dlgMore">&#10005;</div>
+  </div>
+  <div id="floatLine"></div>
+  <div id="itemToast"><div class="it1"></div><div class="it2"></div></div>
+
+  <div id="titleUI">
+    <div id="tPhases">&#9675; &#9684; &#9681; &#9686; &#9679; &#9686; &#9681; &#9684;</div>
+    <div id="tLogo">FALLEN MOON</div>
+    <div id="tRule"></div>
+    <div id="tSub">THE EIGHT PHASES &middot; I &middot; BRIGHTHARBOR</div>
+    <div id="tMenu">
+      <div class="titem" id="ti0">NEW GAME</div>
+      <div class="titem" id="ti1">CONTINUE</div>
+    </div>
+    <div id="tHint"></div>
+  </div>
+
+  <div id="pauseUI">
+    <div class="pbox">
+      <h2>PAUSED</h2>
+      <div class="pitem" id="pi0">RESUME</div>
+      <div class="pitem" id="pi1">RETURN TO TITLE</div>
+      <div id="pControls"></div>
+    </div>
+  </div>
+
+  <div id="tbc">
+    <canvas id="tbcArt" width="720" height="300"></canvas>
+    <div id="tbcTitle">TO BE CONTINUED</div>
+    <div id="tbcSub">The Half Shield lies beyond the Parched Forest. They say the tide follows it home.</div>
+    <div id="tbcGo"></div>
+  </div>
+
+  <div id="glare"></div>
+  <div id="fadeBlack"></div>
+</div>

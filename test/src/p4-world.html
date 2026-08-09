@@ -1,0 +1,1215 @@
+<script>
+/* ═══════════════════ p4 — the world: Brightharbor & the Dry Bay ═══════════════════
+   Merged BufferGeometry chunks, MeshBasicMaterial + baked vertex colors.
+   Hard noon light with colored teal shade, painterly toon-stepped bake.       */
+
+/* ── renderer / scene / lights ── */
+const canvas = el('gl');
+const renderer = new THREE.WebGLRenderer({
+  canvas, antialias: false, powerPreference: 'high-performance', stencil: false,
+});
+renderer.setPixelRatio(1);
+renderer.setSize(VW, VH, false);
+
+const scene = new THREE.Scene();
+const FOG0 = { col: col(0xf3e6cf), near: 68, far: 185 };
+const FOG_GROTTO = { col: col(0x2c3038), near: 10, far: 46 };
+scene.fog = new THREE.Fog(0xf3e6cf, FOG0.near, FOG0.far);
+scene.background = null;   // sky dome covers
+
+const camera = new THREE.PerspectiveCamera(55, VW / VH, 0.2, 700);
+
+/* only characters are lit; the world is baked (Powder Peak lesson) */
+const sunLight = new THREE.DirectionalLight(0xfff0d8, 0.92);
+sunLight.position.set(18, 60, 10);
+scene.add(sunLight);
+const hemiLight = new THREE.HemisphereLight(0xcfdcec, 0xdec49e, 0.42);
+scene.add(hemiLight);
+
+/* ── noon bake (world geometry only) ── */
+const SUNDIR = (() => { const v = [0.24, 0.94, 0.14]; const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; })();
+const SHADOW_DIR = [0.94, 0.34];   // ground direction shadows stretch toward at dusk (normalized-ish)
+function bakeCol(nx, ny, nz, c, out) {
+  const d = nx * SUNDIR[0] + ny * SUNDIR[1] + nz * SUNDIR[2];
+  if (d > 0.55) { out[0] = Math.min(1, c[0] * 1.08 + 0.02); out[1] = Math.min(1, c[1] * 1.04 + 0.01); out[2] = c[2] * 0.98; }
+  else if (d > 0.1) { out[0] = Math.min(1, c[0] * 1.0 + 0.01); out[1] = c[1] * 0.97; out[2] = c[2] * 0.95; }
+  else if (d > -0.15) { out[0] = c[0] * 0.8; out[1] = c[1] * 0.81; out[2] = c[2] * 0.9; }
+  else { out[0] = c[0] * 0.56; out[1] = c[1] * 0.62; out[2] = Math.min(1, c[2] * 0.78 + 0.06); }
+}
+const _bc = [0, 0, 0];
+function pushTriW(md, ax, ay, az, bx, by, bz, cx, cy, cz, c, flip) {
+  if (flip) { const t1 = bx, t2 = by, t3 = bz; bx = cx; by = cy; bz = cz; cx = t1; cy = t2; cz = t3; }
+  let ux = bx - ax, uy = by - ay, uz = bz - az;
+  let vx = cx - ax, vy = cy - ay, vz = cz - az;
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  bakeCol(nx / l, ny / l, nz / l, c, _bc);
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  md.c.push(_bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2]);
+}
+function boxW(md, o) {   // baked-light version of box()
+  const w = o.w, d = o.d, h = o.h;
+  const tw = o.tw !== undefined ? o.tw : w, td = o.td !== undefined ? o.td : d;
+  const sx = o.shx || 0, sz = o.shz || 0;
+  const cs = [
+    [-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d],
+    [-tw + sx, h, -td + sz], [tw + sx, h, -td + sz], [tw + sx, h, td + sz], [-tw + sx, h, td + sz],
+  ];
+  for (let i = 0; i < 8; i++) {
+    const p = _rot(cs[i][0], cs[i][1], cs[i][2], o.rx || 0, o.ry || 0, o.rz || 0);
+    cs[i] = [p[0] + o.x, p[1] + o.y, p[2] + o.z];
+  }
+  const qd = (a, b, c2, dd, cc) => {
+    pushTriW(md, a[0], a[1], a[2], b[0], b[1], b[2], c2[0], c2[1], c2[2], cc);
+    pushTriW(md, a[0], a[1], a[2], c2[0], c2[1], c2[2], dd[0], dd[1], dd[2], cc);
+  };
+  qd(cs[4], cs[5], cs[6], cs[7], o.col);
+  if (!o.noBottom) qd(cs[3], cs[2], cs[1], cs[0], o.colB || o.col);
+  qd(cs[0], cs[1], cs[5], cs[4], o.col);
+  qd(cs[2], cs[3], cs[7], cs[6], o.col);
+  qd(cs[1], cs[2], cs[6], cs[5], o.col);
+  qd(cs[3], cs[0], cs[4], cs[7], o.col);
+}
+function latheW(md, prof, o) {
+  const seg = o.seg || 8, ex = o.ex || 1;
+  const a0 = o.a0 !== undefined ? o.a0 : 0, a1 = o.a1 !== undefined ? o.a1 : TAU;
+  const inward = !!o.inward;
+  let pyMin = 1e9, pyMax = -1e9;
+  for (const p of prof) { pyMin = Math.min(pyMin, p[1]); pyMax = Math.max(pyMax, p[1]); }
+  const pyMid = (pyMin + pyMax) / 2 + (o.y || 0);
+  const flatPush = (m, ax, ay, az, bx, by, bz, cx, cy, cz, c) => {
+    m.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+    m.c.push(c[0], c[1], c[2], c[0], c[1], c[2], c[0], c[1], c[2]);
+  };
+  const base = o.flat ? flatPush : (m, ax, ay, az, bx, by, bz, cx, cy, cz, c) =>
+    pushTriW(m, ax, ay, az, bx, by, bz, cx, cy, cz, c, false);
+  // winding corrected per-face: normals point OUT of the axis (or IN for o.inward)
+  const tri = (A, B, C, c) => {
+    const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]);
+    const ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]);
+    const nz = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+    const mx = (A[0] + B[0] + C[0]) / 3 - (o.x || 0), mz = (A[2] + B[2] + C[2]) / 3 - (o.z || 0);
+    const my = (A[1] + B[1] + C[1]) / 3 - pyMid;
+    let hint = nx * mx + nz * mz;
+    if (Math.abs(hint) < 1e-8) hint = ny * my;
+    const flip = inward ? hint > 0 : hint < 0;
+    if (flip) base(md, A[0], A[1], A[2], C[0], C[1], C[2], B[0], B[1], B[2], c);
+    else base(md, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], c);
+  };
+  for (let i = 0; i < prof.length - 1; i++) {
+    const [r0, y0] = prof[i], [r1, y1] = prof[i + 1];
+    let c = (o.cols && (o.cols[i] || o.cols[o.cols.length - 1])) || o.col;
+    for (let s = 0; s < seg; s++) {
+      const t0 = a0 + (a1 - a0) * s / seg, t1 = a0 + (a1 - a0) * (s + 1) / seg;
+      if (o.skip && o.skip(t0, t1, i)) continue;
+      if (o.segJitter) {
+        const j = 1 + hash2(s * 7 + i, 13) * o.segJitter;
+        c = [clamp(c[0] * j, 0, 1), clamp(c[1] * j, 0, 1), clamp(c[2] * j, 0, 1)];
+      }
+      const p00 = _pt(r0, y0, t0, ex, o), p01 = _pt(r0, y0, t1, ex, o);
+      const p10 = _pt(r1, y1, t0, ex, o), p11 = _pt(r1, y1, t1, ex, o);
+      if (r0 < 0.0001) tri(p00, p11, p10, c);
+      else if (r1 < 0.0001) tri(p00, p01, p10, c);
+      else { tri(p00, p01, p11, c); tri(p00, p11, p10, c); }
+    }
+  }
+}
+
+/* ── key world places ── */
+const WHEEL_POS = { x: -38, z: -78 };
+const GROTTO_A = { x: 30, z: 150, r: 14 };     // puzzle chamber
+const GROTTO_B = { x: 62, z: 166, r: 13 };     // boss arena
+const GROTTO_ENT = { x: 30, z: 133 };
+const MIRROR_POS = { x: 26, z: 146 };
+const KELPWALL = { x: 46.5, z: 158 };
+const WRECK = { x: -45, z: 95 };
+const REFILL_POOL = { x: 16, z: 26, r: 4.2 };
+const FINN_POS = { x: 41.4, z: -16 };
+const TOCK_POS = { x: -6.6, z: -29 };
+const PEARL_BOAT = { x: -24, z: -10 };
+const WAKE_BOAT = { x: 8, z: 5 };
+
+/* ── terrain ── */
+const POOLS = [
+  REFILL_POOL,
+  { x: -26, z: 48, r: 3.4 }, { x: 36, z: 60, r: 3.8 }, { x: -44, z: 80, r: 3.6 },
+];
+function gauss(d2, s2) { return Math.exp(-d2 / s2); }
+function groundH(x, z) {
+  if (x > 300) return 0;                          // portrait stage plane
+  // land ↔ seabed blend
+  const landT = smoothstep((14 - z) / 26);        // 1 on land (z < -12), 0 in bay (z > 14)
+  const land = 1.7 + Math.max(0, -z - 12) * 0.045 + vnoise(x * 0.05, z * 0.05) * 0.5;
+  const sea = -2.6 + vnoise(x * 0.11, z * 0.11) * 0.35;
+  let h = lerp(sea, land, landT);
+  // moonwheel hill
+  const dwx = x - WHEEL_POS.x, dwz = z - WHEEL_POS.z;
+  h += 6.5 * gauss(dwx * dwx + dwz * dwz, 640);
+  // tidepool depressions
+  for (let i = 0; i < POOLS.length; i++) {
+    const p = POOLS[i], dx = x - p.x, dz = z - p.z;
+    h -= 1.0 * gauss(dx * dx + dz * dz, p.r * p.r * 1.6);
+  }
+  // grotto interior floor flattens
+  const da = Math.hypot(x - GROTTO_A.x, z - GROTTO_A.z);
+  const db = Math.hypot(x - GROTTO_B.x, z - GROTTO_B.z);
+  if (da < GROTTO_A.r + 4 || db < GROTTO_B.r + 4) {
+    const t = smoothstep(1 - (Math.min(da - GROTTO_A.r, db - GROTTO_B.r)) / 4);
+    h = lerp(h, -3.1, clamp(t, 0, 1));
+  }
+  // rim rises wall the world — smooth dunes/headland, not spikes
+  const ex = Math.max(0, Math.abs(x) - 90) + Math.max(0, -z - 90) + Math.max(0, z - 176);
+  h += Math.min(26, ex * ex * 0.045) * (0.85 + vnoise(x * 0.04, z * 0.04) * 0.15);
+  return h;
+}
+/* ── grotto interior tests ── */
+function distSeg(px, pz, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az;
+  const t = clamp(((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+  return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
+}
+function inGrottoAt(x, z) {
+  if (Math.hypot(x - GROTTO_A.x, z - GROTTO_A.z) < GROTTO_A.r + 1) return true;
+  if (Math.hypot(x - GROTTO_B.x, z - GROTTO_B.z) < GROTTO_B.r + 1) return true;
+  if (distSeg(x, z, 41, 155.5, 53, 161.5) < 3.4) return true;
+  if (distSeg(x, z, GROTTO_ENT.x, GROTTO_ENT.z, GROTTO_A.x, GROTTO_A.z - GROTTO_A.r + 3) < 3.2) return true;
+  return false;
+}
+
+/* ── shade zones (sanctuary mechanic; capsules that stretch at dusk) ── */
+let shadeGrow = 0;      // 0 noon → 1 after the first phase is restored
+const SHADE = [
+  { x: WAKE_BOAT.x - 1.2, z: WAKE_BOAT.z + 0.5, r: 2.6, tag: 'wakeboat' },
+  { x: -24, z: -11.5, r: 2.4, tag: 'pearlboat' },
+  { x: 44.5, z: -13.4, r: 2.6, tag: 'lighthouse' },
+  { x: -8.3, z: -31.5, r: 1.9, tag: 'well' },
+  { x: -37, z: -34.5, r: 2.8, tag: 'house0' }, { x: -21, z: -42.5, r: 2.5, tag: 'house1' },
+  { x: 7, z: -40.5, r: 2.5, tag: 'house2' }, { x: 23, z: -30.5, r: 2.4, tag: 'house3' },
+  { x: 12, z: 52, r: 2.3, tag: 'rockA' }, { x: -28, z: 72, r: 2.5, tag: 'rockB' },
+  { x: 48, z: 84, r: 2.1, tag: 'rockC' },
+  { x: WRECK.x + 1.5, z: WRECK.z - 2, r: 3.0, tag: 'wreck' },
+  { x: 25, z: 128, r: 2.4, tag: 'grottomouth' },
+];
+function shadeCapsule(s) {
+  const st = s.r * 1.15 * shadeGrow;    // stretched length at full dusk (+~30% area)
+  return { ax: s.x, az: s.z, bx: s.x + SHADOW_DIR[0] * st, bz: s.z + SHADOW_DIR[1] * st, r: s.r };
+}
+function inShadeAt(x, z) {
+  if (inGrottoAt(x, z)) return true;
+  for (let i = 0; i < SHADE.length; i++) {
+    const c = shadeCapsule(SHADE[i]);
+    if (distSeg(x, z, c.ax, c.az, c.bx, c.bz) < c.r) return true;
+  }
+  return false;
+}
+function nearestShadeSpot(x, z) {
+  let best = SHADE[0], bd = Infinity;
+  for (const s of SHADE) {
+    const d = Math.hypot(x - s.x, z - s.z);
+    if (d < bd) { bd = d; best = s; }
+  }
+  // inside grotto → wake at the grotto mouth pool
+  if (inGrottoAt(x, z)) return { x: 25, z: 128 };
+  return { x: best.x, z: best.z };
+}
+
+/* ── colliders (circles) ── */
+const COLL = [];
+function addColl(x, z, r) { COLL.push({ x, z, r }); return COLL[COLL.length - 1]; }
+function collide(px, pz, pr) {
+  let x = px, z = pz;
+  for (let i = 0; i < COLL.length; i++) {
+    const c = COLL[i];
+    if (c.off) continue;
+    const dx = x - c.x, dz = z - c.z;
+    const d2 = dx * dx + dz * dz, rr = c.r + pr;
+    if (d2 < rr * rr && d2 > 0.0001) {
+      const d = Math.sqrt(d2);
+      x = c.x + dx / d * rr; z = c.z + dz / d * rr;
+    }
+  }
+  return [clamp(x, -98, 98), clamp(z, -98, 184)];
+}
+
+/* ── ground colors ── */
+const C_GRASS = col(0xaaa464), C_GRASS2 = col(0x8f9155), C_PATH = col(0xd8c8a0),
+      C_SAND = col(0xe0d2ae), C_MUD = col(0xc9b593), C_MUD2 = col(0xb5a17f),
+      C_CRACK = col(0x94805f), C_POOLBED = col(0x8fb2a2), C_SALT = col(0xefe9dd),
+      C_GROTTOFLOOR = col(0x746c60), C_STONE = col(0x9d9689), C_STONE2 = col(0x837c6e),
+      C_BRUSH = col(0x857a48);
+const PATHS = [
+  [[0, -24], [20, -20], [36, -17], [FINN_POS.x - 2, FINN_POS.z]],
+  [[0, -24], [-8, -29]],
+  [[0, -24], [-14, -44], [-30, -62], [WHEEL_POS.x, WHEEL_POS.z + 4]],
+  [[0, -24], [4, -6], [8, 10], [12, 24]],
+];
+function pathDist(x, z) {
+  let d = 1e9;
+  for (const path of PATHS) {
+    for (let i = 0; i < path.length - 1; i++) {
+      d = Math.min(d, distSeg(x, z, path[i][0], path[i][1], path[i + 1][0], path[i + 1][1]));
+    }
+  }
+  return d;
+}
+const _gc = [0, 0, 0];
+function groundColor(x, z, y) {
+  if (x > 300) { _gc[0] = 0.58; _gc[1] = 0.56; _gc[2] = 0.53; return _gc; }   // portrait
+  if (inGrottoAt(x, z)) {
+    mix3(col(0x565048), C_POOLBED, 0.12 + vnoise(x * 0.3, z * 0.3) * 0.1, _gc);
+    return _gc;
+  }
+  const n = vnoise(x * 0.16, z * 0.16);
+  const fine = vnoise(x * 0.85 + 3, z * 0.85) * 0.5;
+  if (y > 1.1) {          // bleached grass-gold headland
+    mix3(C_GRASS, C_GRASS2, clamp(0.5 + 0.6 * vnoise(x * 0.3 + 9, z * 0.3) + fine * 0.4, 0, 1), _gc);
+    // dry-brush flecks
+    if (vnoise(x * 1.3, z * 1.3 + 7) > 0.55) mix3(_gc, C_BRUSH, 0.45, _gc);
+    const pd = pathDist(x, z);
+    if (pd < 1.5) mix3(_gc, C_PATH, 0.9, _gc);
+    else if (pd < 2.6) mix3(_gc, C_PATH, 0.45 * (1 - (pd - 1.5) / 1.1), _gc);
+    return _gc;
+  }
+  if (y > -1.0) {         // the old tide line — pale sand, salt streaks, tide rings
+    mix3(C_SAND, C_MUD, smoothstep((1.0 - y) / 2.0) * 0.5 + fine * 0.2, _gc);
+    if (vnoise(x * 0.5 + 11, z * 0.5) > 0.5) mix3(_gc, C_SALT, 0.35, _gc);
+    // the sea left its marks: dark rings at old water heights
+    for (const ty of [0.55, 0.05, -0.45]) {
+      if (Math.abs(y - ty + vnoise(x * 0.4, z * 0.4) * 0.08) < 0.05) mix3(_gc, C_CRACK, 0.5, _gc);
+    }
+    if (vnoise(x * 1.6 + 5, z * 1.6) > 0.72) mix3(_gc, C_MUD2, 0.5, _gc);  // pebble specks
+    return _gc;
+  }
+  // dry seabed: cracked mud
+  mix3(C_MUD, C_MUD2, clamp(0.5 + 0.5 * n + fine * 0.5, 0, 1), _gc);
+  const crack = vnoise(x * 0.55, z * 0.55);
+  if (Math.abs(crack) < 0.085) mix3(_gc, C_CRACK, 0.9, _gc);
+  const crack2 = vnoise(x * 1.1 + 31, z * 1.1 - 8);
+  if (Math.abs(crack2) < 0.05) mix3(_gc, C_CRACK, 0.6, _gc);
+  for (const p of POOLS) {
+    const d = Math.hypot(x - p.x, z - p.z);
+    if (d < p.r * 0.75) mix3(_gc, C_POOLBED, 0.85, _gc);
+    else if (d < p.r * 1.5) mix3(_gc, C_SALT, 0.7 * (1 - (d - p.r * 0.75) / (p.r * 0.75)), _gc);
+  }
+  return _gc;
+}
+
+/* ── chunked world build ── */
+const WORLD_MAT = new THREE.MeshBasicMaterial({ vertexColors: true });
+const CHUNK = 80;
+const chunkMap = new Map();
+const chunks = [];
+function chunkFor(x, z) {
+  const cx = Math.floor((x + 110) / CHUNK), cz = Math.floor((z + 110) / CHUNK);
+  const key = cx + '_' + cz;
+  let c = chunkMap.get(key);
+  if (!c) {
+    c = { md: MD(), cx: cx * CHUNK - 110 + CHUNK / 2, cz: cz * CHUNK - 110 + CHUNK / 2, mesh: null };
+    chunkMap.set(key, c); chunks.push(c);
+  }
+  return c.md;
+}
+/* ground sheet — per-vertex painterly colors */
+function pushTriWV(md, ax, ay, az, bx, by, bz, cx, cy, cz, cA, cB, cC) {
+  let ux = bx - ax, uy = by - ay, uz = bz - az;
+  let vx = cx - ax, vy = cy - ay, vz = cz - az;
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  nx /= l; ny /= l; nz /= l;
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  for (const c of [cA, cB, cC]) {
+    bakeCol(nx, ny, nz, c, _bc);
+    md.c.push(_bc[0], _bc[1], _bc[2]);
+  }
+}
+(function buildGround() {
+  const STEP = 2.2;
+  const gc = (x, z) => {
+    const y = groundH(x, z);
+    const c = groundColor(x, z, y);
+    return [c[0], c[1], c[2], y];
+  };
+  for (let x = -110; x < 110; x += STEP) {
+    for (let z = -110; z < 186; z += STEP) {
+      const md = chunkFor(x + STEP / 2, z + STEP / 2);
+      const c00 = gc(x, z), c10 = gc(x + STEP, z), c01 = gc(x, z + STEP), c11 = gc(x + STEP, z + STEP);
+      pushTriWV(md, x, c00[3], z, x, c01[3], z + STEP, x + STEP, c11[3], z + STEP, c00, c01, c11);
+      pushTriWV(md, x, c00[3], z, x + STEP, c11[3], z + STEP, x + STEP, c10[3], z, c00, c11, c10);
+    }
+  }
+})();
+
+/* ═══════════ props (all baked into chunks) ═══════════ */
+const C_WOOD = col(0x8a6f52), C_WOOD2 = col(0x6e5740), C_WOODW = col(0xa9927a),
+      C_WHITE = col(0xe8ddc8), C_ROOF = col(0xb26243), C_ROOF2 = col(0x8f4a34),
+      C_KELP = col(0x9a8f5a), C_KELP2 = col(0x857a48), C_ROCK = col(0x9a9280),
+      C_ROCK2 = col(0x7f786a), C_NET = col(0xb0a184), C_MOON = col(0xd9e2de);
+
+function propHouse(x, z, ry, big) {
+  const md = chunkFor(x, z);
+  const s = big ? 1.25 : 1, y = groundH(x, z) - 0.25;
+  const w = 3.2 * s, d = 2.6 * s, h = 2.5 * s;
+  boxW(md, { x, y, z, w, d, h, ry, col: C_WHITE, noBottom: true });
+  // plinth of stone at the base
+  boxW(md, { x, y: y - 0.05, z, w: w + 0.08, d: d + 0.08, h: 0.4, ry, col: C_STONE2 });
+  // door (front face) + two small shuttered windows
+  const dxr = Math.sin(ry), dzr = Math.cos(ry);
+  boxW(md, { x: x - dxr * (d - 0.02), y, z: z - dzr * (d - 0.02), w: 0.5, d: 0.09, h: 1.75, ry, col: col(0x4a3d30) });
+  boxW(md, { x: x - dxr * (d - 0.02) + Math.cos(ry) * w * 0.55, y: y + 1.15, z: z - dzr * (d - 0.02) - Math.sin(ry) * w * 0.55, w: 0.38, d: 0.09, h: 0.55, ry, col: col(0x3d4a52) });
+  boxW(md, { x: x - dxr * (d - 0.02) - Math.cos(ry) * w * 0.55, y: y + 1.15, z: z - dzr * (d - 0.02) + Math.sin(ry) * w * 0.55, w: 0.38, d: 0.09, h: 0.55, ry, col: col(0x3d4a52) });
+  // roof: solid gabled mass with deep eaves, terracotta
+  boxW(md, { x, y: y + h - 0.08, z, w: w * 1.22, d: d * 1.28, h: 0.22, ry, col: C_ROOF2 });   // eaves plate
+  boxW(md, { x, y: y + h + 0.1, z, w: w * 1.12, d: d * 1.16, h: 1.55 * s, tw: w * 0.62, td: 0.05, ry, col: C_ROOF, colB: C_ROOF2 });
+  boxW(md, { x, y: y + h + 0.1 + 1.5 * s, z, w: w * 0.68, d: 0.14, h: 0.17, ry, col: C_ROOF2 });
+  // chimney
+  boxW(md, { x: x + w * 0.5, y: y + h + 0.8, z, w: 0.3, d: 0.3, h: 1.0, ry, col: C_STONE });
+  addColl(x, z, Math.max(w, d) + 0.45);
+}
+function propLighthouse(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z) - 0.3;
+  latheW(md, [[2.0, 0], [1.5, 4.5], [1.35, 7.5]], { seg: 10, x, y, z, col: C_WHITE, cols: [C_WHITE, C_WHITE] });
+  latheW(md, [[1.55, 3.0], [1.45, 4.0]], { seg: 10, x, y, z, col: C_ROOF });   // faded band
+  latheW(md, [[1.7, 7.5], [1.7, 8.3], [1.2, 8.3]], { seg: 10, x, y, z, col: C_STONE2 });  // gallery
+  latheW(md, [[1.05, 8.3], [0.95, 9.6]], { seg: 8, x, y, z, col: col(0x3d434a) });        // lamp room (dark, cold)
+  latheW(md, [[1.25, 9.6], [0.0, 10.6]], { seg: 8, x, y, z, col: C_ROOF2 });
+  // door (west face) — kelp grows over it (separate cuttable patch)
+  boxW(md, { x: x - 1.78, y, z, w: 0.12, d: 0.6, h: 1.9, col: col(0x4a3d30) });
+  addColl(x, z, 2.4);
+}
+function propBoat(x, z, ry, tilt, len) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z) + 0.1;
+  const L = len || 4.6;
+  // hull: lathe half-shell, tilted
+  latheW(md, [[0.0, -0.4], [L * 0.21, 0.0], [L * 0.24, 0.75], [L * 0.19, 1.05]],
+    { seg: 9, ex: 2.4, x, y: y + 0.35, z, ry, col: C_WOOD, cols: [C_WOOD2, C_WOOD, C_WOODW] });
+  // keel strake
+  boxW(md, { x, y: y + 1.28, z, w: 0.12, d: L * 0.52, h: 0.12, ry, rz: tilt, col: C_WOOD2 });
+  addColl(x + Math.sin(ry) * L * 0.22, z + Math.cos(ry) * L * 0.22, 1.4);
+  addColl(x - Math.sin(ry) * L * 0.22, z - Math.cos(ry) * L * 0.22, 1.4);
+  addColl(x, z, 1.5);
+}
+function propWakeBoat() {
+  // the hero's lean-to: a big hull heeled right over, open on the south side
+  const md = chunkFor(WAKE_BOAT.x, WAKE_BOAT.z);
+  const x = WAKE_BOAT.x, z = WAKE_BOAT.z, y = groundH(x, z);
+  latheW(md, [[0.0, -0.3], [1.5, 0.2], [1.7, 1.6], [1.45, 2.3]],
+    { seg: 10, ex: 2.2, x, y: y + 1.15, z, ry: 0.45,
+      col: C_WOOD, cols: [C_WOOD2, C_WOOD, C_WOODW], a0: Math.PI * 0.9, a1: Math.PI * 2.12 });
+  // inner skin so the lean-to reads from its open side — shaded planking
+  latheW(md, [[0.05, -0.25], [1.46, 0.22], [1.66, 1.6], [1.41, 2.26]],
+    { seg: 10, ex: 2.2, x, y: y + 1.15, z, ry: 0.45, inward: true,
+      col: mix3(C_WOOD2, [0.16, 0.2, 0.3], 0.35), a0: Math.PI * 0.9, a1: Math.PI * 2.12 });
+  // keel strake rides the shell rim; a stout timber props the lean-to open
+  boxW(md, { x: x - 0.6, y: y + 3.15, z, w: 0.13, d: 2.6, h: 0.22, ry: 0.45, rz: 0.5, col: C_WOOD2 });
+  boxW(md, { x: x - 1.8, y, z: z + 2.6, w: 0.22, d: 0.22, h: 2.4, tw: 0.14, td: 0.14, rx: -0.45, col: C_WOOD2 });
+  addColl(x + 0.8, z - 1.6, 1.3);
+  addColl(x + 1.6, z + 0.6, 1.1);
+}
+function propWell(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z) - 0.1;
+  latheW(md, [[1.05, 0], [1.0, 0.8], [0.82, 0.85]], { seg: 9, x, y, z, col: C_STONE, cols: [C_STONE, C_STONE2] });
+  boxW(md, { x: x - 0.9, y: y + 0.6, z, w: 0.09, d: 0.09, h: 1.5, col: C_WOOD2 });
+  boxW(md, { x: x + 0.9, y: y + 0.6, z, w: 0.09, d: 0.09, h: 1.5, col: C_WOOD2 });
+  boxW(md, { x, y: y + 2.1, z, w: 1.35, d: 0.75, h: 0.35, tw: 0.15, td: 0.1, col: C_ROOF2 });
+  addColl(x, z, 1.35);
+}
+function propRock(x, z, s, tall) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z) - 0.4;
+  const h = tall ? 3.1 * s : 1.1 * s;
+  // slab + leaning companion: a broken sea-stack, not a tent
+  latheW(md, [[1.0 * s, 0], [0.85 * s, h * 0.45], [0.62 * s, h * 0.82], [0.22 * s, h]],
+    { seg: 6, ex: 0.66 + vnoise(x, z) * 0.2, x, y, z, ry: x * 0.7,
+      col: C_ROCK, cols: [C_ROCK2, C_ROCK, C_ROCK] });
+  boxW(md, { x: x + 0.7 * s, y, z: z + 0.4 * s, w: 0.42 * s, d: 0.3 * s, h: h * 0.55, tw: 0.2 * s, td: 0.16 * s, rx: 0.16, ry: x, col: C_ROCK2 });
+  boxW(md, { x: x - 0.6 * s, y, z: z - 0.3 * s, w: 0.3 * s, d: 0.24 * s, h: h * 0.3, tw: 0.14 * s, td: 0.1 * s, ry: z, col: C_ROCK });
+  addColl(x, z, 0.95 * s);
+}
+function propKelpClump(x, z, n, r) {
+  // dead backdrop kelp (not cuttable — texture for the bay)
+  const md = chunkFor(x, z);
+  const rnd = mulberry32((x * 73 + z * 131) | 0);
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * TAU, d = Math.sqrt(rnd()) * r;
+    const kx = x + Math.cos(a) * d, kz = z + Math.sin(a) * d;
+    const y = groundH(kx, kz), h = 1.0 + rnd() * 1.4, lean = (rnd() - 0.5) * 0.5;
+    boxW(md, { x: kx, y, z: kz, w: 0.08, d: 0.05, h, tw: 0.02, td: 0.01, rx: lean, ry: rnd() * TAU, col: rnd() > 0.5 ? C_KELP : C_KELP2 });
+  }
+}
+function propNet(x, z, ry) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  boxW(md, { x, y, z, w: 1.4, d: 0.9, h: 0.35, tw: 1.1, td: 0.6, ry, col: C_NET });
+  for (let i = 0; i < 4; i++) {
+    latheW(md, [[0, 0], [0.14, 0.1], [0.08, 0.28], [0, 0.34]],
+      { seg: 5, x: x + hash2(i, 1) * 0.9, y: y + 0.3, z: z + hash2(i, 7) * 0.5, col: C_SALT });
+  }
+}
+function propBarrel(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  latheW(md, [[0.3, 0], [0.36, 0.4], [0.3, 0.8]], { seg: 7, x, y, z, col: C_WOOD, cols: [C_WOOD2, C_WOOD] });
+  addColl(x, z, 0.42);
+}
+function propLampPost(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  boxW(md, { x, y, z, w: 0.07, d: 0.07, h: 2.6, col: C_WOOD2 });
+  boxW(md, { x, y: y + 2.6, z: z + 0.25, w: 0.05, d: 0.35, h: 0.05, col: C_WOOD2 });
+  boxW(md, { x, y: y + 2.25, z: z + 0.52, w: 0.14, d: 0.14, h: 0.3, tw: 0.1, td: 0.1, col: col(0x5a5248) });  // cold lantern
+  addColl(x, z, 0.25);
+}
+function propQuay() {
+  // old harbor wall along the vanished waterline, gap at the bay path
+  for (let x = -46; x <= 58; x += 4) {
+    if (x > 2 && x < 16) continue;                 // the walk-out gap
+    const z = 11 + vnoise(x * 0.2, 3) * 1.2;
+    const md = chunkFor(x, z);
+    const y = groundH(x, z);
+    boxW(md, { x, y: y - 0.3, z, w: 2.05, d: 0.8, h: 1.15 + vnoise(x, 8) * 0.2, ry: vnoise(x, 4) * 0.1, col: C_STONE, colB: C_STONE2 });
+    addColl(x, z, 1.7);
+  }
+  // bollards
+  for (const bx of [-30, -10, 30, 46]) {
+    const md = chunkFor(bx, 10);
+    const y = groundH(bx, 10);
+    latheW(md, [[0.16, 0], [0.13, 0.55], [0.18, 0.66], [0, 0.72]], { seg: 6, x: bx, y: y + 0.8, z: 10.2, col: C_WOOD2 });
+  }
+}
+function propWreck() {
+  const x = WRECK.x, z = WRECK.z;
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  // big fishing boat, heeled hard over, half-swallowed by the mud
+  latheW(md, [[0.0, -0.7], [1.9, -0.1], [2.2, 1.5], [1.85, 2.2]],
+    { seg: 10, ex: 2.6, x, y: y + 0.7, z, ry: 0.85, col: C_WOOD, cols: [C_WOOD2, C_WOOD, C_WOODW] });
+  boxW(md, { x, y: y + 2.4, z, w: 0.16, d: 4.6, h: 0.2, ry: 0.85, rz: 0.12, col: C_WOOD2 });   // rail strake
+  // deckhouse, tilted with the hull
+  boxW(md, { x: x - 0.8, y: y + 1.9, z: z + 0.6, w: 1.0, d: 0.9, h: 1.0, ry: 0.85, rz: 0.22, col: C_WOODW, colB: C_WOOD2 });
+  // snapped mast leaning to the mud, crow's nest ring at its foot
+  boxW(md, { x: x + 1.2, y: y + 2.0, z: z - 1.2, w: 0.14, d: 0.14, h: 4.6, rx: 1.12, ry: 0.4, col: C_WOOD2 });
+  latheW(md, [[0.55, 0], [0.5, 0.35]], { seg: 7, x: x + 4.6, y: y + 0.1, z: z - 3.6, col: C_WOOD2 });
+  // exposed bow ribs ahead of the hull — the rest of her, picked clean
+  for (let i = 0; i < 5; i++) {
+    const rx2 = x + 4.2 + i * 1.15, rz = z + 2.6 + i * 0.75;
+    const md2 = chunkFor(rx2, rz);
+    const ry2 = groundH(rx2, rz);
+    const hgt = 2.0 - i * 0.22;
+    boxW(md2, { x: rx2 - 1.3, y: ry2 - 0.2, z: rz, w: 0.12, d: 0.16, h: hgt, rz: 0.5, ry: 0.75, col: C_WOOD2 });
+    boxW(md2, { x: rx2 + 1.3, y: ry2 - 0.2, z: rz, w: 0.12, d: 0.16, h: hgt, rz: -0.5, ry: 0.75, col: C_WOOD2 });
+    boxW(md2, { x: rx2, y: ry2 - 0.3, z: rz, w: 1.4, d: 0.14, h: 0.18, ry: 0.75, col: C_WOOD });
+  }
+  addColl(x, z, 2.4); addColl(x + 2.2, z + 2.6, 1.6); addColl(x - 2, z - 2.4, 1.6);
+}
+function propMoonwheel() {
+  const x = WHEEL_POS.x, z = WHEEL_POS.z;
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  // broad stepped plinth rising clear of the hilltop
+  latheW(md, [[4.6, -0.6], [4.2, 0.45], [3.3, 0.55], [3.0, 1.05], [2.1, 1.15], [1.9, 1.5]],
+    { seg: 14, x, y, z, col: C_STONE, cols: [C_STONE2, C_STONE, C_STONE2, C_STONE, C_STONE2] });
+  // two upright pylons holding the wheel, carved taper
+  for (const s of [-1, 1]) {
+    boxW(md, { x: x + s * 3.1, y: y + 1.0, z, w: 0.6, d: 0.75, h: 3.9, tw: 0.4, td: 0.55, ry: 0.25, col: C_STONE, colB: C_STONE2 });
+    boxW(md, { x: x + s * 3.1, y: y + 4.85, z, w: 0.72, d: 0.85, h: 0.35, ry: 0.25, col: C_STONE2 });
+    // moon-sigil boss on each pylon face
+    latheW(md, [[0.3, 0], [0.24, 0.09]], { seg: 8, x: x + s * 3.1, y: y + 2.6, z: z + 0.78, ry: 0.25, col: C_MOON });
+  }
+  // eight weathered menhirs ring the plinth — one per phase
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * TAU + 0.4;
+    const sx = x + Math.cos(a) * 6.6, sz = z + Math.sin(a) * 6.6;
+    const hh = 1.0 + (i % 3) * 0.22;
+    latheW(md, [[0.34, -0.2], [0.28, hh * 0.55], [0.16, hh]],
+      { seg: 6, ex: 0.72, x: sx, y: groundH(sx, sz), z: sz, ry: a + i, col: C_STONE, cols: [C_STONE2, C_STONE] });
+  }
+}
+/* the wheel ring itself — its own mesh (it turns during the payoff) */
+let wheelRing = null, wheelSocketNodes = [];
+function buildWheelRing() {
+  const g = new THREE.Group();
+  const md = MD();
+  const R = 3.1, T = 0.34;
+  const NSEG = 24;
+  for (let s = 0; s < NSEG; s++) {
+    const a0 = s / NSEG * TAU, a1 = (s + 1) / NSEG * TAU;
+    const mkring = (rr, tt, c) => {
+      const p00 = [Math.cos(a0) * (rr + tt), Math.sin(a0) * (rr + tt), T * 0.55];
+      const p01 = [Math.cos(a0) * (rr + tt), Math.sin(a0) * (rr + tt), -T * 0.55];
+      const p10 = [Math.cos(a1) * (rr + tt), Math.sin(a1) * (rr + tt), T * 0.55];
+      const p11 = [Math.cos(a1) * (rr + tt), Math.sin(a1) * (rr + tt), -T * 0.55];
+      const q00 = [Math.cos(a0) * (rr - tt), Math.sin(a0) * (rr - tt), T * 0.55];
+      const q01 = [Math.cos(a0) * (rr - tt), Math.sin(a0) * (rr - tt), -T * 0.55];
+      const q10 = [Math.cos(a1) * (rr - tt), Math.sin(a1) * (rr - tt), T * 0.55];
+      const q11 = [Math.cos(a1) * (rr - tt), Math.sin(a1) * (rr - tt), -T * 0.55];
+      pushTriW(md, p00[0], p00[1], p00[2], p10[0], p10[1], p10[2], q10[0], q10[1], q10[2], c);
+      pushTriW(md, p00[0], p00[1], p00[2], q10[0], q10[1], q10[2], q00[0], q00[1], q00[2], c);
+      pushTriW(md, q01[0], q01[1], q01[2], q11[0], q11[1], q11[2], p11[0], p11[1], p11[2], c);
+      pushTriW(md, q01[0], q01[1], q01[2], p11[0], p11[1], p11[2], p01[0], p01[1], p01[2], c);
+      pushTriW(md, p00[0], p00[1], p00[2], p01[0], p01[1], p01[2], p11[0], p11[1], p11[2], c);
+      pushTriW(md, p00[0], p00[1], p00[2], p11[0], p11[1], p11[2], p10[0], p10[1], p10[2], c);
+    };
+    mkring(R, T, s % 3 ? C_STONE : C_STONE2);
+  }
+  // 8 sockets: carved recesses with pale moonglass rims — MERGED into the
+  // ring geometry (they turn with it; one draw call for the whole wheel)
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * TAU + Math.PI / 2;
+    const sx = Math.cos(a) * R, sy = Math.sin(a) * R;
+    const mdS = MD();
+    latheW(mdS, [[0.5, 0], [0.42, 0.1], [0.0, 0.12]], { seg: 8, flat: true, col: col(0x30373a) });
+    latheW(mdS, [[0.56, -0.02], [0.5, 0.06]], { seg: 8, flat: true, col: C_MOON });
+    // rotate socket axis (+y) onto +z, then translate onto the rim
+    for (let v = 0; v < mdS.p.length; v += 3) {
+      const px2 = mdS.p[v], py2 = mdS.p[v + 1], pz2 = mdS.p[v + 2];
+      md.p.push(px2 + sx, -pz2 + sy, py2 + T * 0.56);
+    }
+    for (let v = 0; v < mdS.c.length; v++) md.c.push(mdS.c[v]);
+  }
+  const ring = mdMesh(md, WORLD_MAT, false);
+  ring.frustumCulled = false;
+  g.add(ring);
+  const y = groundH(WHEEL_POS.x, WHEEL_POS.z);
+  g.position.set(WHEEL_POS.x, y + 4.6, WHEEL_POS.z);
+  g.rotation.y = 0.25;          // faces the bay, slightly turned
+  scene.add(g);
+  return g;
+}
+function propFence(x0, z0, x1, z1) {
+  const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 1.6);
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, x = lerp(x0, x1, t), z = lerp(z0, z1, t);
+    const md = chunkFor(x, z);
+    const y = groundH(x, z);
+    boxW(md, { x, y, z, w: 0.06, d: 0.06, h: 0.95, col: C_WOOD2 });
+    if (i < n) {
+      const nx = lerp(x0, x1, (i + 1) / n), nz = lerp(z0, z1, (i + 1) / n);
+      const mx = (x + nx) / 2, mz = (z + nz) / 2;
+      boxW(md, { x: mx, y: (groundH(x, z) + groundH(nx, nz)) / 2 + 0.62, z: mz, w: 0.04, d: Math.hypot(nx - x, nz - z) / 2, h: 0.08, ry: Math.atan2(nx - x, nz - z), col: C_WOOD });
+    }
+  }
+}
+
+/* ── the grotto: massif, interior domes, crack, mural ── */
+function buildGrotto() {
+  const rocks = [];
+  const ring = (cx, cz, R, n, gaps) => {
+    for (let i = 0; i < n; i++) {
+      const a = i / n * TAU;
+      let skip = false;
+      for (const g of gaps) { let d = Math.abs(((a - g[0]) % TAU + TAU) % TAU); if (d > Math.PI) d = TAU - d; if (d < g[1]) skip = true; }
+      if (skip) continue;
+      rocks.push([cx + Math.cos(a) * R, cz + Math.sin(a) * R]);
+    }
+  };
+  // chamber A ring: gaps at entrance (south, a≈-π/2 → atan2 form: angle of (0,-1) = -π/2 → normalize 3π/2) and corridor (toward B: atan2(16,32)≈0.46)
+  ring(GROTTO_A.x, GROTTO_A.z, GROTTO_A.r + 3.4, 14, [[Math.PI * 1.5, 0.42], [0.46, 0.4]]);
+  ring(GROTTO_B.x, GROTTO_B.z, GROTTO_B.r + 3.4, 13, [[0.46 + Math.PI, 0.42]]);
+  // entrance throat walls
+  rocks.push([25.2, 137], [34.8, 137], [24.6, 132], [35.4, 132]);
+  for (const r of rocks) {
+    const md = chunkFor(r[0], r[1]);
+    const y = groundH(r[0], r[1]) - 1.5;
+    const s = 2.6 + vnoise(r[0], r[1]) * 0.9;
+    latheW(md, [[s, 0], [s * 1.1, 3.5], [s * 0.55, 8.5], [0, 11]],
+      { seg: 7, ex: 0.85, x: r[0], y, z: r[1], ry: r[0] * 1.3, col: C_ROCK, cols: [C_ROCK2, C_ROCK, C_ROCK2] });
+    addColl(r[0], r[1], s * 0.98);
+  }
+  // exterior mound caps (seen from the bay) — grounded, dune-scale.
+  // chamber A's cap leaves a gap over the entrance (south) for the mouth.
+  const mouthSkip = (t0, t1, band) => band < 2 && t0 > Math.PI * 1.32 && t0 < Math.PI * 1.68;
+  for (const cap of [[GROTTO_A.x, GROTTO_A.z, 21, true], [GROTTO_B.x, GROTTO_B.z, 19], [46, 158, 15]]) {
+    const md = chunkFor(cap[0], cap[1]);
+    latheW(md, [[cap[2] * 1.05, -2.5], [cap[2], 4.5], [cap[2] * 0.62, 10.5], [0, 13.5]],
+      { seg: 12, ex: 0.9, x: cap[0], y: 0, z: cap[1], col: C_ROCK, cols: [C_ROCK2, C_ROCK, C_ROCK2],
+        skip: cap[3] ? mouthSkip : null });
+  }
+  // the MOUTH: a dark throat + portal stones so the entrance reads from the bay
+  (function mouth() {
+    const md = chunkFor(GROTTO_ENT.x, GROTTO_ENT.z);
+    const dark = [0.09, 0.09, 0.11];
+    // black gullet plane just inside the opening
+    const gx = GROTTO_ENT.x, gz = 140;
+    md.p.push(gx - 3.4, -3.5, gz, gx + 3.4, -3.5, gz, gx + 3.4, 6.5, gz,
+              gx - 3.4, -3.5, gz, gx + 3.4, 6.5, gz, gx - 3.4, 6.5, gz);
+    for (let i = 0; i < 6; i++) md.c.push(dark[0], dark[1], dark[2]);
+    // portal stones + lintel
+    for (const s of [-1, 1]) {
+      latheW(md, [[2.0, -3.2], [1.7, 2.8], [0.8, 6.8]], { seg: 6, ex: 0.8, x: gx + s * 4.4, y: 0, z: 134, ry: s, col: C_ROCK, cols: [C_ROCK2, C_ROCK] });
+    }
+    boxW(md, { x: gx, y: 5.6, z: 134, w: 5.4, d: 1.6, h: 1.7, tw: 4.2, td: 1.1, col: C_ROCK2 });
+    // a carved moon sigil over the lintel — this place matters
+    latheW(md, [[0.55, 0], [0.42, 0.14]], { seg: 10, x: gx, y: 6.4, z: 133.2, col: C_MOON });
+  })();
+  // interior domes — DoubleSide mesh, FLAT authored ambient (no sun bake):
+  // warm sand-bounce low, cool stone high, per-segment strata jitter
+  const C_CAVE_LO = col(0x6d5f4e), C_CAVE_MID = col(0x565049), C_CAVE_HI = col(0x413d3b);
+  const mdDome = MD();
+  const domeIn = (cx, cz, R, crack) => {
+    latheW(mdDome, [[R + 1.5, -3.4], [R + 0.8, 1.5], [R * 0.62, 6.2], [0, 8.6]], {
+      seg: 14, x: cx, y: 0, z: cz, inward: true, flat: true, segJitter: 0.14,
+      col: C_CAVE_MID, cols: [C_CAVE_LO, C_CAVE_MID, C_CAVE_HI],
+      skip: crack ? ((t0, t1, band) => band >= 2 && t0 > 3.6 && t0 < 4.4) : null,
+    });
+  };
+  domeIn(GROTTO_A.x, GROTTO_A.z, GROTTO_A.r, true);
+  domeIn(GROTTO_B.x, GROTTO_B.z, GROTTO_B.r, false);
+  const domeMesh = mdMesh(mdDome, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  domeMesh.matrixAutoUpdate = false; domeMesh.updateMatrix();
+  scene.add(domeMesh);
+  // corridor walls interior (flat ambient into the dome mesh)
+  for (const t of [0.25, 0.5, 0.75]) {
+    const wx = lerp(41, 53, t), wz = lerp(155.5, 161.5, t);
+    const px = -(161.5 - 155.5) / 13.4, pz = (53 - 41) / 13.4;
+    latheW(mdDome, [[2.2, -3.4], [1.9, 3.2], [0.6, 6.5]], { seg: 6, flat: true, segJitter: 0.12, x: wx + px * 5.0, y: 0, z: wz + pz * 5.0, col: C_CAVE_MID, cols: [C_CAVE_LO, C_CAVE_HI] });
+    latheW(mdDome, [[2.2, -3.4], [1.9, 3.2], [0.6, 6.5]], { seg: 6, flat: true, segJitter: 0.12, x: wx - px * 5.0, y: 0, z: wz - pz * 5.0, col: C_CAVE_MID, cols: [C_CAVE_LO, C_CAVE_HI] });
+  }
+  // stalactites + floor stones in chamber A (flat ambient)
+  const rnd = mulberry32(991);
+  for (let i = 0; i < 8; i++) {
+    const a = rnd() * TAU, d = 3 + rnd() * 9;
+    const sx = GROTTO_A.x + Math.cos(a) * d, sz = GROTTO_A.z + Math.sin(a) * d;
+    latheW(mdDome, [[0.35 + rnd() * 0.3, 6.9], [0, 4.4 + rnd() * 1.5]], { seg: 5, flat: true, x: sx, y: 0, z: sz, col: C_CAVE_HI });
+    if (i < 5) latheW(mdDome, [[0.5 + rnd() * 0.4, -3.3], [0.2, -1.9 - rnd()]], { seg: 5, flat: true, x: GROTTO_A.x + Math.cos(a + 1) * (d + 2), y: 0, z: GROTTO_A.z + Math.sin(a + 1) * (d + 2), col: C_CAVE_MID });
+  }
+  // the skylight crack glows — a warm unlit patch where the sun stabs in
+  latheW(mdDome, [[1.3, 7.55], [0.4, 7.9]], { seg: 6, flat: true, x: MIRROR_POS.x - 2.2, y: 0, z: MIRROR_POS.z - 1.5, col: [1, 0.96, 0.82] });
+  // THE LORE MURAL — boss chamber east wall: the moon, chained, the chain leading DOWN.
+  (function mural() {
+    const md = mdDome;
+    const wx = GROTTO_B.x + GROTTO_B.r - 1.2, wz = GROTTO_B.z;
+    const C_OCRE = col(0xb39a6a), C_OCRE2 = col(0x8a744c), C_MOONPALE = col(0xcfd2c4);
+    // moon disc (slightly proud of the wall, facing -x into the chamber)
+    latheW(md, [[0, 0], [2.2, 0.12], [2.3, 0.16]], { seg: 14, flat: true, x: wx, y: 3.2, z: wz, ry: 0, col: C_MOONPALE, cols: [C_MOONPALE, C_OCRE] });
+    // the crack across the carved moon
+    boxW(md, { x: wx - 0.2, y: 3.2, z: wz, w: 0.06, d: 2.1, h: 0.2, rx: 0.4, col: C_OCRE2 });
+    // chain links wrapping it and running down into the floor
+    for (let i = 0; i < 7; i++) {
+      const ly = 3.2 - i * 1.0;
+      latheW(md, [[0.42, 0], [0.3, 0.1], [0.42, 0.2]], { seg: 6, ex: 0.5, flat: true, x: wx - 0.35, y: Math.max(-3.2, ly), z: wz + (i % 2 ? 0.22 : -0.22), col: C_OCRE2 });
+      if (ly < -3.0) break;
+    }
+  })();
+  // mirror pedestal rock
+  const mdP = chunkFor(MIRROR_POS.x, MIRROR_POS.z);
+  latheW(mdP, [[0.9, -3.4], [0.7, -2.4], [0.5, -2.2]], { seg: 8, flat: true, x: MIRROR_POS.x, y: 0, z: MIRROR_POS.z, col: C_CAVE_MID });
+}
+
+/* ── cuttable kelp (patches rebuilt on cut) ── */
+const KELP_MAT = WORLD_MAT;
+const kelpPatches = [];
+function stalkGeom(md, kx, ky, kz, h, seed) {
+  const rnd = mulberry32(seed);
+  const lean = (rnd() - 0.5) * 0.4, ry = rnd() * TAU;
+  boxW(md, { x: kx, y: ky, z: kz, w: 0.1, d: 0.07, h: h * 0.55, tw: 0.07, td: 0.05, rx: lean, ry, col: C_KELP });
+  boxW(md, { x: kx + Math.sin(lean) * h * 0.4, y: ky + h * 0.5, z: kz, w: 0.07, d: 0.05, h: h * 0.5, tw: 0.015, td: 0.01, rx: lean * 1.8, ry, col: C_KELP2 });
+  // fronds
+  boxW(md, { x: kx + 0.12, y: ky + h * 0.45, z: kz, w: 0.16, d: 0.03, h: h * 0.3, tw: 0.02, td: 0.005, rz: -0.7, ry, col: C_KELP2 });
+  boxW(md, { x: kx - 0.12, y: ky + h * 0.35, z: kz, w: 0.16, d: 0.03, h: h * 0.32, tw: 0.02, td: 0.005, rz: 0.7, ry, col: C_KELP });
+}
+function makeKelpPatch(stalks, tag) {
+  const patch = { stalks: [], mesh: null, tag, cx: 0, cz: 0 };
+  for (const s of stalks) {
+    patch.stalks.push({ x: s[0], z: s[1], h: s[2] || (1.6 + vnoise(s[0], s[1]) * 0.6), cut: false });
+    patch.cx += s[0] / stalks.length; patch.cz += s[1] / stalks.length;
+  }
+  rebuildKelpPatch(patch);
+  kelpPatches.push(patch);
+  return patch;
+}
+function rebuildKelpPatch(patch) {
+  if (patch.mesh) { scene.remove(patch.mesh); patch.mesh.geometry.dispose(); patch.mesh = null; }
+  const md = MD();
+  let any = false;
+  for (const s of patch.stalks) {
+    if (s.cut) continue;
+    any = true;
+    stalkGeom(md, s.x, groundH(s.x, s.z), s.z, s.h, (s.x * 57 + s.z * 131) | 0);
+  }
+  if (any) {
+    patch.mesh = mdMesh(md, KELP_MAT, false);
+    patch.mesh.matrixAutoUpdate = false; patch.mesh.updateMatrix();
+    scene.add(patch.mesh);
+  }
+}
+/* Finn's door kelp */
+const doorKelp = makeKelpPatch([
+  [42.2, -14.9, 2.1], [42.4, -16.1, 2.3], [42.1, -17.0, 1.9], [42.7, -15.5, 1.7],
+], 'door');
+/* bay kelp forests */
+makeKelpPatch([[-8, 40], [-5, 44], [-9, 47], [-2, 42], [2, 46], [5, 41], [1, 38], [-4, 36]], 'bay1');
+makeKelpPatch([[28, 60], [31, 64], [34, 59], [30, 68], [36, 65], [27, 55], [38, 61]], 'bay2');
+makeKelpPatch([[-28, 54], [-24, 58], [-20, 55], [-26, 62], [-18, 60], [-22, 50], [-30, 59]], 'bay3');
+/* the burnable kelp wall in the grotto — separate patch + colliders */
+const wallKelp = makeKelpPatch([
+  [45.2, 156.4, 3.2], [46.0, 157.3, 3.4], [46.8, 158.2, 3.3], [47.6, 159.1, 3.4], [48.4, 160.0, 3.2],
+  [45.7, 156.9, 2.6], [47.2, 158.7, 2.7], [48.0, 159.5, 2.5],
+], 'wall');
+const wallColl = [addColl(45.8, 157.1, 1.6), addColl(47.4, 158.9, 1.6), addColl(48.6, 160.2, 1.4)];
+
+/* ── shade pool overlay (grows at dusk) ── */
+const POOL_MAT = new THREE.MeshBasicMaterial({
+  color: 0x2b4156, transparent: true, opacity: 0.36, depthWrite: false,
+});
+let poolMesh = null;
+/* static dark rests under the static NPCs/props (visual only) */
+const VISUAL_POOLS = [
+  { x: FINN_POS.x, z: FINN_POS.z, r: 0.55 }, { x: TOCK_POS.x, z: TOCK_POS.z, r: 0.5 },
+  { x: PEARL_BOAT.x - 0.5, z: PEARL_BOAT.z + 1.6, r: 0.45 },
+];
+function rebuildShadePools() {
+  if (poolMesh) { scene.remove(poolMesh); poolMesh.geometry.dispose(); }
+  const md = MD();
+  const c = [1, 1, 1];
+  const disc = (cx, cz, r, ex, ang) => {
+    const n = 14;
+    for (let s = 0; s < n; s++) {
+      const a0 = s / n * TAU, a1 = (s + 1) / n * TAU;
+      const p = (a) => {
+        const lx = Math.cos(a) * r, lz = Math.sin(a) * r * ex;
+        const wx2 = cx + lx * Math.cos(ang) - lz * Math.sin(ang);
+        const wz2 = cz + lx * Math.sin(ang) + lz * Math.cos(ang);
+        return [wx2, groundH(wx2, wz2) + 0.06, wz2];
+      };
+      const c0 = [cx, groundH(cx, cz) + 0.06, cz], pa = p(a0), pb = p(a1);
+      md.p.push(c0[0], c0[1], c0[2], pb[0], pb[1], pb[2], pa[0], pa[1], pa[2]);
+      md.c.push(c[0], c[1], c[2], c[0], c[1], c[2], c[0], c[1], c[2]);
+    }
+  };
+  const ang = Math.atan2(SHADOW_DIR[1], SHADOW_DIR[0]);
+  for (const s of SHADE) {
+    const st = s.r * 1.15 * shadeGrow;
+    // capsule ≈ stretched ellipse centered mid-way
+    disc(s.x + SHADOW_DIR[0] * st * 0.5, s.z + SHADOW_DIR[1] * st * 0.5, s.r + st * 0.5, s.r / (s.r + st * 0.5), ang);
+  }
+  for (const s of VISUAL_POOLS) disc(s.x, s.z, s.r * (1 + shadeGrow * 0.6), 0.8, ang);
+  poolMesh = mdMesh(md, POOL_MAT, false);
+  poolMesh.matrixAutoUpdate = false; poolMesh.updateMatrix();
+  poolMesh.renderOrder = 1;
+  scene.add(poolMesh);
+}
+
+/* ── refillable tidepool (payoff #3) ── */
+let tidewater = null, tidewaterT = 0, moonfish = null, tidepoolFilled = false;
+function buildTidewater() {
+  const md = MD();
+  const c1 = col(0x2e7392), c2 = col(0x55a3b5);
+  const n = 16, cx = REFILL_POOL.x, cz = REFILL_POOL.z, r = REFILL_POOL.r * 0.95;
+  for (let s = 0; s < n; s++) {
+    const a0 = s / n * TAU, a1 = (s + 1) / n * TAU;
+    const cc = s % 2 ? c1 : c2;
+    md.p.push(cx, 0, cz,
+      cx + Math.cos(a1) * r, 0, cz + Math.sin(a1) * r,
+      cx + Math.cos(a0) * r, 0, cz + Math.sin(a0) * r);
+    md.c.push(cc[0], cc[1], cc[2], c1[0], c1[1], c1[2], c1[0], c1[1], c1[2]);
+  }
+  const m = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92 }), false);
+  m.position.y = groundH(cx, cz) - 1.2;   // rises to -0.15 below rim when filled
+  m.visible = false;
+  m.frustumCulled = false;
+  scene.add(m);
+  tidewater = m;
+  moonfish = buildMoonfish();
+  scene.add(moonfish);
+}
+
+/* ── sky dome + sun + the first star ── */
+const SKY = { step: 0, t: 0 };   // t: 0..1 blend toward step-1 palette
+const SKY0 = { zen: col(0xbfd9ea), hor: col(0xf7ecd2), fog: col(0xf3e6cf), world: [1, 1, 1], hemi: 0.42, sunI: 0.92 };
+const SKY1 = { zen: col(0x8fa8cc), hor: col(0xf0bf8e), fog: col(0xe8cba8), world: [0.93, 0.87, 0.86], hemi: 0.34, sunI: 0.78 };
+let skyDome = null, sunDisc = null, starMesh = null, skyGrp = null;
+let starCoreMat = null, starFlareMat = null, starCoreMesh = null, starOp = 0;
+function setStarOp(v) {
+  starOp = v;
+  if (starCoreMat) { starCoreMat.opacity = v; starFlareMat.opacity = v * 0.3; }
+}
+function buildSky() {
+  skyGrp = new THREE.Group();
+  const geo = new THREE.SphereGeometry(430, 20, 12);
+  const cnt = geo.attributes.position.count;
+  const colors = new Float32Array(cnt * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
+  skyDome = new THREE.Mesh(geo, mat);
+  skyDome.renderOrder = -10;
+  skyDome.frustumCulled = false;
+  skyGrp.add(skyDome);
+  // sun: white-hot disc + halo (never postprocessing — geometry glow)
+  const sg = new THREE.Group();
+  const mdS = MD();
+  lathe(mdS, [[0, 0], [22, 0.01]], { seg: 14, col: [1, 0.98, 0.9] });
+  const sm = mdMesh(mdS, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: 0.95, depthWrite: false }), false);
+  sm.rotation.x = Math.PI / 2;
+  const mdH = MD();
+  lathe(mdH, [[0, 0], [58, 0.01]], { seg: 14, col: [1, 0.94, 0.78] });
+  const hm = mdMesh(mdH, new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }), false);
+  hm.rotation.x = Math.PI / 2;
+  sg.add(hm); sg.add(sm);
+  sg.position.set(90, 385, 55);
+  sg.lookAt(0, 0, 0);
+  skyGrp.add(sg);
+  sunDisc = sg;
+  // the first star (hidden until the payoff): a true point of light —
+  // bright core with a soft halo, plus a faint 4-point cross flare
+  const starTex = (() => {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 64;
+    const g = cv.getContext('2d');
+    const gr = g.createRadialGradient(32, 32, 1, 32, 32, 31);
+    gr.addColorStop(0, 'rgba(255,255,252,1)');
+    gr.addColorStop(0.12, 'rgba(255,255,248,0.95)');
+    gr.addColorStop(0.3, 'rgba(255,252,235,0.35)');
+    gr.addColorStop(1, 'rgba(255,250,230,0)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  })();
+  starMesh = new THREE.Group();
+  starCoreMat = new THREE.MeshBasicMaterial({
+    map: starTex, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const starCore = new THREE.Mesh(new THREE.PlaneGeometry(8.5, 8.5), starCoreMat);
+  starCore.frustumCulled = false;
+  starMesh.add(starCore);
+  starCoreMesh = starCore;
+  starFlareMat = new THREE.MeshBasicMaterial({
+    map: starTex, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const flareGeo = new THREE.BufferGeometry();
+  const fL = 15, fW = 0.9;
+  flareGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+    -fL, -fW, 0,  fL, -fW, 0,  fL, fW, 0,  -fL, -fW, 0,  fL, fW, 0,  -fL, fW, 0,
+    -fW, -fL, 0,  fW, -fL, 0,  fW, fL, 0,  -fW, -fL, 0,  fW, fL, 0,  -fW, fL, 0,
+  ]), 3));
+  flareGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([
+    0, 0.5, 1, 0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0, 0.5,
+    0.5, 0, 0.5, 1, 0.5, 1, 0.5, 0, 0.5, 1, 0.5, 0,
+  ]), 2));
+  const starFlare = new THREE.Mesh(flareGeo, starFlareMat);
+  starFlare.frustumCulled = false;
+  starMesh.add(starFlare);
+  starMesh.position.set(155, 62, 220);   // over the bay, in the payoff frame
+  starMesh.lookAt(0, 0, 0);
+  skyGrp.add(starMesh);
+  scene.add(skyGrp);
+  setSkyBlend(0);
+}
+const _z1 = [0, 0, 0], _h1 = [0, 0, 0];
+function setSkyBlend(t) {
+  SKY.t = t;
+  mix3(SKY0.zen, SKY1.zen, t, _z1);
+  mix3(SKY0.hor, SKY1.hor, t, _h1);
+  const pos = skyDome.geometry.attributes.position, colA = skyDome.geometry.attributes.color;
+  for (let i = 0; i < pos.count; i++) {
+    const vy = pos.getY(i) / 430;
+    const k = Math.pow(clamp(1 - Math.max(0, vy), 0, 1), 2.1);   // horizon-weighted
+    colA.setXYZ(i,
+      _z1[0] + (_h1[0] - _z1[0]) * k,
+      _z1[1] + (_h1[1] - _z1[1]) * k,
+      _z1[2] + (_h1[2] - _z1[2]) * k);
+  }
+  colA.needsUpdate = true;
+  const f = mix3(SKY0.fog, SKY1.fog, t);
+  scene.fog.color.setRGB(f[0], f[1], f[2]);
+  const w = mix3(SKY0.world, SKY1.world, t);
+  WORLD_MAT.color.setRGB(w[0], w[1], w[2]);
+  hemiLight.intensity = lerp(SKY0.hemi, SKY1.hemi, t);
+  sunLight.intensity = lerp(SKY0.sunI, SKY1.sunI, t);
+  sunLight.color.setRGB(1, lerp(0.95, 0.84, t), lerp(0.86, 0.68, t));
+  sunDisc.position.set(lerp(90, 130, t), lerp(385, 300, t), lerp(55, 30, t));
+  setStarOp(0);                    // star driven separately in the cinematic
+}
+
+/* ── portrait stage (screenshot review only — inside the sky dome, own mesh) ── */
+const PSTAGE = { x: 330, z: 150 };
+let pstageMesh = null;
+(function portraitStage() {
+  const md = MD();
+  boxW(md, { x: PSTAGE.x, y: -0.1, z: PSTAGE.z, w: 30, d: 30, h: 0.1, col: [0.58, 0.56, 0.53] });
+  boxW(md, { x: PSTAGE.x, y: 0, z: PSTAGE.z + 12, w: 30, d: 0.4, h: 22, col: [0.62, 0.6, 0.58] });
+  pstageMesh = mdMesh(md, WORLD_MAT, false);
+  pstageMesh.matrixAutoUpdate = false; pstageMesh.updateMatrix();
+  pstageMesh.frustumCulled = false;
+  pstageMesh.visible = false;          // only during portrait review
+  scene.add(pstageMesh);
+})();
+
+/* ── build the village & bay ── */
+propWakeBoat();
+propLighthouse(44, -16);
+propHouse(-38, -32, 0.3, true);
+propHouse(-22, -40, -0.2, false);
+propHouse(6, -38, 0.15, false);
+propHouse(22, -28, -0.4, false);
+propWell(-8, -30);
+propBoat(PEARL_BOAT.x, PEARL_BOAT.z, 1.2, 0.2, 5.2);
+propBoat(-40, 2, 0.8, -0.15, 4.0);
+propBoat(26, 6, -1.0, 0.1, 4.4);
+propBoat(58, 30, 2.2, 0.2, 5.0);
+propBoat(-58, 40, 1.9, -0.2, 4.2);
+propQuay();
+propNet(-14, 6, 0.4); propNet(34, 2, -0.7); propNet(12, 16, 0.2);
+propBarrel(39, -14); propBarrel(40.4, -13.2); propBarrel(-10, -26);
+propLampPost(4, -22); propLampPost(-6, -44); propLampPost(20, -18);
+propFence(-32, -60, -36, -70);
+propFence(-44, -70, -42, -78);
+propRock(12, 52, 1.4, true); propRock(-28, 72, 1.5, true); propRock(48, 84, 1.3, true);
+propRock(-60, 60, 1.8, false); propRock(66, 52, 1.6, false); propRock(0, 100, 1.2, false);
+propRock(-70, 20, 1.4, false); propRock(74, 6, 1.5, false);
+propKelpClump(-12, 90, 12, 8); propKelpClump(50, 110, 10, 7); propKelpClump(-60, 110, 12, 9);
+propKelpClump(14, 78, 8, 6);
+propWreck();
+propMoonwheel();
+buildGrotto();
+/* ── lived-in Brightharbor: doorstep and waterline clutter (all merged) ── */
+function propCrate(x, z, ry, s2) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  s2 = s2 || 1;
+  boxW(md, { x, y, z, w: 0.32 * s2, d: 0.32 * s2, h: 0.6 * s2, ry, col: C_WOOD, colB: C_WOOD2 });
+  boxW(md, { x, y: y + 0.28 * s2, z, w: 0.34 * s2, d: 0.05 * s2, h: 0.06 * s2, ry, col: C_WOOD2 });
+  addColl(x, z, 0.45 * s2);
+}
+function propRopeCoil(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  latheW(md, [[0.14, 0], [0.34, 0.05], [0.3, 0.16], [0.12, 0.2]], { seg: 8, x, y, z, col: C_NET, cols: [C_WOOD2, C_NET, C_NET] });
+}
+function propNetFrame(x, z, ry) {
+  // drying net stretched on a timber frame
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  const dx = Math.cos(ry), dz = -Math.sin(ry);
+  boxW(md, { x: x - dx * 1.3, y, z: z - dz * 1.3, w: 0.08, d: 0.08, h: 2.1, col: C_WOOD2 });
+  boxW(md, { x: x + dx * 1.3, y, z: z + dz * 1.3, w: 0.08, d: 0.08, h: 2.1, col: C_WOOD2 });
+  boxW(md, { x, y: y + 2.0, z, w: 1.42, d: 0.06, h: 0.09, ry: -ry, col: C_WOOD });
+  // the net: a sagging thin sheet, weathered
+  boxW(md, { x, y: y + 0.55, z, w: 1.25, d: 0.02, h: 1.45, tw: 1.32, td: 0.02, ry: -ry, col: mix3(C_NET, C_KELP2, 0.35) });
+  addColl(x - dx * 1.3, z - dz * 1.3, 0.2); addColl(x + dx * 1.3, z + dz * 1.3, 0.2);
+}
+function propPotStack(x, z) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  latheW(md, [[0.16, 0], [0.22, 0.14], [0.14, 0.32], [0.17, 0.36]], { seg: 7, x, y, z, col: C_ROOF, cols: [C_ROOF2, C_ROOF] });
+  latheW(md, [[0.13, 0.36], [0.18, 0.47], [0.11, 0.62], [0.14, 0.66]], { seg: 7, x: x + 0.04, y, z, col: C_ROOF2 });
+  latheW(md, [[0.14, 0], [0.19, 0.12], [0.12, 0.3]], { seg: 7, x: x + 0.42, y, z: z + 0.2, col: mix3(C_ROOF, C_SAND, 0.3) });
+  addColl(x, z, 0.4);
+}
+function propHandcart(x, z, ry) {
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  boxW(md, { x, y: y + 0.42, z, w: 0.55, d: 0.85, h: 0.3, tw: 0.62, td: 0.9, ry, col: C_WOOD, colB: C_WOOD2 });
+  for (const s3 of [-1, 1]) {
+    latheW(md, [[0.3, -0.02], [0.3, 0.02]], { seg: 9, ex: 1, x: x + Math.cos(ry) * 0.62 * s3, y: y + 0.32, z: z - Math.sin(ry) * 0.62 * s3, ry: 0, col: C_WOOD2 });
+  }
+  boxW(md, { x: x - Math.sin(ry) * 1.1, y: y + 0.32, z: z - Math.cos(ry) * 1.1, w: 0.05, d: 0.6, h: 0.07, ry, rx: 0.35, col: C_WOOD2 });
+  addColl(x, z, 0.9);
+}
+function propLaundry(x0, z0, x1, z1) {
+  // two posts, a line, and cloth drying in the endless noon
+  const md = chunkFor((x0 + x1) / 2, (z0 + z1) / 2);
+  const y0 = groundH(x0, z0), y1 = groundH(x1, z1);
+  boxW(md, { x: x0, y: y0, z: z0, w: 0.07, d: 0.07, h: 2.2, col: C_WOOD2 });
+  boxW(md, { x: x1, y: y1, z: z1, w: 0.07, d: 0.07, h: 2.2, col: C_WOOD2 });
+  const len = Math.hypot(x1 - x0, z1 - z0), ang = Math.atan2(x1 - x0, z1 - z0);
+  boxW(md, { x: (x0 + x1) / 2, y: (y0 + y1) / 2 + 2.08, z: (z0 + z1) / 2, w: 0.025, d: len / 2, h: 0.035, ry: ang, col: C_NET });
+  const cloths = [[0.25, col(0xc9d4d8)], [0.45, col(0xad6a5c)], [0.62, col(0xbda87c)], [0.8, col(0x8a9bab)]];
+  for (const [t, cc] of cloths) {
+    const cx2 = lerp(x0, x1, t), cz2 = lerp(z0, z1, t), cy2 = lerp(y0, y1, t) + 2.06;
+    boxW(md, { x: cx2, y: cy2, z: cz2, w: 0.28, d: 0.02, h: -0.62, tw: 0.24, td: 0.015, ry: ang, col: cc });
+  }
+}
+function propTrap(x, z, ry) {
+  // lobster trap: slatted box
+  const md = chunkFor(x, z);
+  const y = groundH(x, z);
+  boxW(md, { x, y, z, w: 0.34, d: 0.22, h: 0.24, ry, col: C_WOOD2 });
+  boxW(md, { x, y: y + 0.05, z, w: 0.36, d: 0.16, h: 0.05, ry, col: C_WOOD });
+  boxW(md, { x, y: y + 0.16, z, w: 0.36, d: 0.16, h: 0.05, ry, col: C_WOOD });
+}
+/* doorstep clusters (houses at (-38,-32), (-22,-40), (6,-38), (22,-28)) */
+propCrate(-34.6, -35.9, 0.4); propCrate(-34.2, -35.2, 1.2, 0.8);
+propBarrel(-33.8, -36.5);
+propPotStack(-19.2, -43.3);
+propCrate(3.2, -41.2, 0.9); propCrate(3.9, -40.6, 0.2, 0.75);
+propBarrel(19.3, -31.5); propCrate(18.6, -30.8, -0.3, 0.85);
+propHandcart(-11, -33.5, 0.9);
+propLaundry(-30.5, -37.5, -26.5, -39.5);
+/* waterline: nets drying, traps, coiled rope by the quay */
+propNetFrame(-20, 4.5, 0.5); propNetFrame(24, 1.5, -0.4);
+propTrap(-27, 8.2, 0.3); propTrap(-26.2, 8.9, 1.1); propTrap(36.5, 5.8, -0.5);
+propRopeCoil(-8.5, 8.8); propRopeCoil(30.5, 7.4); propRopeCoil(35.8, 6.6);
+propBarrel(-15.5, 7.9); propCrate(-14.7, 8.6, 0.7, 0.8);
+
+/* dry tussocks scattered over the headland grass — texture for the land */
+(function tussocks() {
+  const rnd = mulberry32(4242);
+  let placed = 0;
+  for (let i = 0; i < 400 && placed < 90; i++) {
+    const x = (rnd() * 2 - 1) * 85, z = -8 - rnd() * 80;
+    const y = groundH(x, z);
+    if (y < 1.3 || y > 11) continue;
+    if (pathDist(x, z) < 2.8) continue;
+    let clear = true;
+    for (const c of COLL) { if (Math.hypot(x - c.x, z - c.z) < c.r + 0.8) { clear = false; break; } }
+    if (!clear) continue;
+    const md = chunkFor(x, z);
+    const s = 0.5 + rnd() * 0.6;
+    const cc = rnd() > 0.5 ? C_BRUSH : C_GRASS2;
+    for (let b = 0; b < 3; b++) {
+      boxW(md, { x: x + (rnd() - 0.5) * 0.3, y, z: z + (rnd() - 0.5) * 0.3, w: 0.05 * s, d: 0.02, h: (0.35 + rnd() * 0.3) * s, tw: 0.004, td: 0.004, rx: (rnd() - 0.5) * 0.6, ry: rnd() * TAU, col: cc });
+    }
+    placed++;
+  }
+})();
+/* salt-crystal formations at the pools (visual) */
+for (const p of POOLS) {
+  const md = chunkFor(p.x, p.z);
+  const rnd = mulberry32((p.x * 31 + p.z * 17) | 0);
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * TAU, d = p.r * (0.8 + rnd() * 0.5);
+    const sx = p.x + Math.cos(a) * d, sz = p.z + Math.sin(a) * d;
+    latheW(md, [[0, 0], [0.22, 0.14], [0.12, 0.5 + rnd() * 0.3], [0, 0.7 + rnd() * 0.3]],
+      { seg: 5, x: sx, y: groundH(sx, sz) - 0.05, z: sz, ry: rnd() * TAU, col: C_SALT });
+  }
+}
+
+/* finalize chunks into meshes */
+for (const c of chunks) {
+  if (!c.md.p.length) continue;
+  c.mesh = mdMesh(c.md, WORLD_MAT, false);
+  c.mesh.matrixAutoUpdate = false; c.mesh.updateMatrix();
+  scene.add(c.mesh);
+  c.md = null;
+}
+function cullChunks(cx, cz) {
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    if (!c.mesh) continue;
+    const dx = c.cx - cx, dz = c.cz - cz;
+    c.mesh.visible = (dx * dx + dz * dz) < 36100;    // 190 m
+  }
+}
+buildSky();
+rebuildShadePools();
+buildTidewater();
+wheelRing = buildWheelRing();
+
+/* ── the mirror-shell (grotto puzzle) + beams ── */
+const mirror = { group: null, angle: 2.6, target: Math.atan2(KELPWALL.z - MIRROR_POS.z, KELPWALL.x - MIRROR_POS.x) };
+(function buildMirror() {
+  const g = new THREE.Group();
+  const md = MD();
+  const nacre = [0.72, 0.76, 0.75], nacre2 = [0.58, 0.65, 0.68];
+  // scallop fan standing upright, slight cup
+  for (let i = 0; i < 7; i++) {
+    const a = (i - 3) * 0.22;
+    box(md, { x: 0, y: 0.35, z: 0, w: 0.11, d: 0.04, h: 1.05, tw: 0.24, td: 0.025, rz: a, col: i % 2 ? nacre : nacre2 });
+  }
+  lathe(md, [[0.22, 0.1], [0.16, 0.45]], { seg: 6, col: [0.5, 0.48, 0.44] });
+  const m = mdMesh(md, TOON);
+  m.frustumCulled = false;
+  g.add(m);
+  g.position.set(MIRROR_POS.x, groundH(MIRROR_POS.x, MIRROR_POS.z) + 0.15, MIRROR_POS.z);
+  g.rotation.y = mirror.angle;
+  scene.add(g);
+  mirror.group = g;
+})();
+/* falling sunbeam through the crack + reflected beam */
+const BEAM_MAT = new THREE.MeshBasicMaterial({
+  color: 0xfff2c8, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending,
+  depthWrite: false, side: THREE.DoubleSide, fog: false,
+});
+let beamDown = null, beamOut = null;
+(function buildBeams() {
+  const md = MD();
+  const c = [1, 1, 1];
+  // slanted shaft from the crack (high south-west) down to the mirror
+  const top = [MIRROR_POS.x - 2.2, 7.6, MIRROR_POS.z - 1.4], bot = [MIRROR_POS.x, 0.6, MIRROR_POS.z];
+  for (const off of [[-0.32, 0], [0, 0.32], [0.32, 0], [0, -0.32]]) {
+    pushQuad(md, [top[0] - off[0], top[1], top[2] - off[1]], [top[0] + off[0], top[1], top[2] + off[1]],
+      [bot[0] + off[0] * 0.6, bot[1], bot[2] + off[1] * 0.6], [bot[0] - off[0] * 0.6, bot[1], bot[2] - off[1] * 0.6], c);
+  }
+  beamDown = mdMesh(md, BEAM_MAT, false);
+  beamDown.position.y = groundH(MIRROR_POS.x, MIRROR_POS.z);
+  beamDown.frustumCulled = false;
+  scene.add(beamDown);
+  // reflected beam — child of a pivot at the mirror, aimed by mirror.angle
+  const md2 = MD();
+  const L = Math.hypot(KELPWALL.x - MIRROR_POS.x, KELPWALL.z - MIRROR_POS.z) + 1.5;
+  for (const off of [[0, 0.4], [0.4, 0]]) {
+    pushQuad(md2, [0.3, 1.15 - off[1] * 0.5, -off[0]], [0.3, 1.15 + off[1] * 0.5, off[0]],
+      [L, 0.9 + off[1], off[0] * 2], [L, 0.9 - off[1], -off[0] * 2], c);
+  }
+  beamOut = mdMesh(md2, BEAM_MAT.clone(), false);
+  beamOut.material.opacity = 0;
+  beamOut.frustumCulled = false;
+  beamOut.position.set(MIRROR_POS.x, groundH(MIRROR_POS.x, MIRROR_POS.z) + 0.15, MIRROR_POS.z);
+  scene.add(beamOut);
+})();
+
+/* ── interactable world items ── */
+/* shipwreck chest */
+const chest = { x: WRECK.x + 1.2, z: WRECK.z - 2.6, opened: false, lid: null, group: null, heart: null };
+(function buildChest() {
+  const g = new THREE.Group();
+  const mdB = MD();
+  const wood = col(0x7c5a3a), band = col(0x54432e);
+  box(mdB, { x: 0, y: 0, z: 0, w: 0.42, d: 0.3, h: 0.34, col: wood });
+  box(mdB, { x: 0, y: 0.0, z: 0, w: 0.44, d: 0.31, h: 0.09, col: band });
+  const base = mdMesh(mdB, TOON); base.frustumCulled = false;
+  g.add(base);
+  const lidN = new THREE.Group();
+  lidN.position.set(0, 0.34, -0.3);
+  const mdL = MD();
+  lathe(mdL, [[0.3, 0], [0.3, 0.001]], { seg: 8, a0: 0, a1: Math.PI, ex: 1, col: wood });
+  box(mdL, { x: 0, y: 0, z: 0.3, w: 0.42, d: 0.02, h: 0.2, rx: -1.35, col: wood });
+  box(mdL, { x: 0, y: 0.02, z: 0.3, w: 0.44, d: 0.025, h: 0.08, rx: -1.35, col: band });
+  const lid = mdMesh(mdL, TOON); lid.frustumCulled = false;
+  lidN.add(lid);
+  g.add(lidN);
+  g.position.set(chest.x, groundH(chest.x, chest.z) + 0.05, chest.z);
+  g.rotation.y = 0.7;
+  scene.add(g);
+  chest.group = g; chest.lid = lidN;
+  const heart = buildHeartItem();
+  heart.visible = false;
+  scene.add(heart);
+  chest.heart = heart;
+  addColl(chest.x, chest.z, 0.55);
+})();
+/* salt crystal pickups — ONE mesh, rebuilt on pickup */
+const saltPickups = [
+  { x: 5, z: 30 }, { x: -18, z: 44 }, { x: 30, z: 48 }, { x: -34, z: 64 },
+  { x: 14, z: 68 }, { x: 52, z: 72 }, { x: -48, z: 88 }, { x: 38, z: 96 },
+].map(p => ({ x: p.x, z: p.z, got: false }));
+let saltMesh = null;
+function rebuildSalt() {
+  if (saltMesh) { scene.remove(saltMesh); saltMesh.geometry.dispose(); saltMesh = null; }
+  const md = MD();
+  const c1 = [0.97, 0.95, 0.9], c2 = [0.92, 0.86, 0.92];
+  let any = false;
+  for (const s of saltPickups) {
+    if (s.got) continue;
+    any = true;
+    const y = groundH(s.x, s.z);
+    lathe(md, [[0, 0], [0.14, 0.12], [0.07, 0.42], [0, 0.55]], { seg: 5, x: s.x, y, z: s.z, col: c1 });
+    lathe(md, [[0, 0], [0.09, 0.08], [0.04, 0.26], [0, 0.34]], { seg: 5, x: s.x + 0.16, y, z: s.z + 0.1, ry: 0.9, col: c2 });
+  }
+  if (any) {
+    saltMesh = mdMesh(md, GLASS_MAT, false);
+    saltMesh.matrixAutoUpdate = false; saltMesh.updateMatrix();
+    scene.add(saltMesh);
+  }
+}
+rebuildSalt();
+/* the crescent horn — carried item mesh (boss hands it over) */
+const crescentItem = buildCrescentItem();
+crescentItem.visible = false;
+scene.add(crescentItem);
+</script>

@@ -1,0 +1,492 @@
+<script>
+/* ═══════════════════ p7 — flow, HUD, telemetry, main loop ═══════════════════ */
+
+let simTick = 0;
+function setState(s) {
+  state = s;
+  const cls = document.body.classList;
+  for (const k of ['st-title', 'st-play', 'st-dialog', 'st-pause', 'st-cine', 'st-tbc'])
+    cls.remove(k);
+  cls.add('st-' + s);
+}
+
+/* ── title ── */
+let titleFocus = 0, titleT = 0;
+function refreshTitleMenu() {
+  const hasSave = !!SAVE;
+  el('ti1').classList.toggle('gone', !hasSave);
+  if (!hasSave) titleFocus = 0;
+  el('ti0').classList.toggle('sel', titleFocus === 0);
+  el('ti1').classList.toggle('sel', titleFocus === 1);
+  el('tHint').textContent = 'MOVE · ✕ CONFIRM · ○ ROLL · △ MOONGLASS PULSE · START PAUSE      (WASD · J · K · L · P)';
+}
+function tickTitle() {
+  titleT += DT;
+  if ((IN.up || IN.down) && SAVE) {
+    titleFocus = 1 - titleFocus;
+    SFX.menu();
+    refreshTitleMenu();
+  }
+  if (IN.confirm) {
+    SFX.confirm();
+    fadeBlackEl.style.opacity = '1';
+    if (titleFocus === 0 || !SAVE) {
+      try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+      SAVE = defaultSave();
+      setTimeout(() => { startCine('wake'); }, 250);
+    } else {
+      setTimeout(() => { applySave(); }, 250);
+    }
+  }
+}
+function titleCam(now) {
+  // slow, high drift over the dry bay, looking home at Brightharbor
+  const t = now / 1000 * 0.025;
+  const a = 0.8 + t;
+  const cx = -6 + Math.cos(a) * 30, cz = 50 + Math.sin(a) * 12;
+  const cy = 16.5 + Math.sin(t * 1.9) * 1.0;
+  cineCam(cx, cy, cz, -4, 1, -30);
+}
+
+/* ── apply a save (CONTINUE) ── */
+function applySave() {
+  P.maxHearts = SAVE.mh; P.hearts = SAVE.mh;
+  P.salt = SAVE.salt;
+  P.sword = SAVE.sword;
+  if (P.sword) wick.sword.group.visible = true;
+  QUEST.phases = SAVE.ph;
+  if (SAVE.kelpDoor) {
+    for (const s of doorKelp.stalks) s.cut = true;
+    rebuildKelpPatch(doorKelp);
+    kelpDoorCut = true;
+    finn.x = 40.4; finn.z = -15.0;
+    finn.char.root.position.set(finn.x, groundH(finn.x, finn.z), finn.z);
+    finn.char.root.rotation.y = -Math.PI / 2 + 0.9;
+  }
+  if (SAVE.wallBurned) {
+    for (const s of wallKelp.stalks) s.cut = true;
+    rebuildKelpPatch(wallKelp);
+    for (const c of wallColl) c.off = true;
+  }
+  if (SAVE.wreckChest) {
+    chest.opened = true;
+    chest.lid.rotation.x = -1.9;
+  }
+  if (SAVE.q === 3 && SAVE.bossDone) {
+    P.carryCrescent = true;
+  }
+  if (SAVE.sky >= 1) {
+    setSkyBlend(1);
+    shadeGrow = 1;
+    rebuildShadePools();
+    setStarOp(0.95);
+    wheelRing.rotation.z = -Math.PI / 4;
+    crescentItem.visible = true;
+    crescentItem.scale.setScalar(0.8);
+    const a = Math.PI / 2 - Math.PI / 4;
+    const wy = groundH(WHEEL_POS.x, WHEEL_POS.z) + 4.2;
+    crescentItem.position.set(WHEEL_POS.x + Math.cos(a) * 3.1 * Math.cos(wheelRing.rotation.y), wy + Math.sin(a) * 3.1, WHEEL_POS.z - Math.cos(a) * 3.1 * Math.sin(wheelRing.rotation.y));
+  }
+  if (SAVE.tidepool) {
+    tidepoolFilled = true;
+    tidewater.visible = true;
+    tidewater.position.y = groundH(REFILL_POOL.x, REFILL_POOL.z) + 0.55;
+  }
+  P.x = SAVE.lastShade[0]; P.z = SAVE.lastShade[1];
+  P.heading = Math.PI;
+  P.area = areaAt(P.x, P.z);
+  setQuest(SAVE.q);
+  fadeBlackEl.style.opacity = '0';
+  CAM.ready = false;
+  setState('play');
+}
+
+/* ── pause ── */
+let pauseFocus = 0;
+function refreshPause() {
+  el('pi0').classList.toggle('sel', pauseFocus === 0);
+  el('pi1').classList.toggle('sel', pauseFocus === 1);
+  el('pControls').innerHTML =
+    '<b>✕</b> SWORD / TALK &nbsp;·&nbsp; <b>○</b> DODGE ROLL &nbsp;·&nbsp; <b>△</b> MOONGLASS PULSE<br>' +
+    '<b>KEYBOARD</b> — WASD MOVE · J SWORD · K ROLL · L PULSE<br>' +
+    'SHADE HEALS. THE SUN DOES NOT.';
+}
+function tickPause() {
+  if (IN.up || IN.down) { pauseFocus = 1 - pauseFocus; SFX.menu(); refreshPause(); }
+  if (IN.pause) { setState('play'); SFX.confirm(); return; }
+  if (IN.confirm) {
+    SFX.confirm();
+    if (pauseFocus === 0) setState('play');
+    else { storeSave(); location.reload(); }
+  }
+}
+
+/* ── HUD ── */
+let hudDirty = true, hudLastHearts = -1, hudLastMax = -1, hudLastSalt = -1;
+function drawHearts() {
+  if (P.hearts === hudLastHearts && P.maxHearts === hudLastMax && P.salt === hudLastSalt) return;
+  hudLastHearts = P.hearts; hudLastMax = P.maxHearts; hudLastSalt = P.salt;
+  const g = heartsCx;
+  g.clearRect(0, 0, 360, 110);
+  const heart = (x, y, s, fill) => {
+    g.beginPath();
+    g.moveTo(x, y + s * 0.32);
+    g.bezierCurveTo(x, y, x - s * 0.5, y - s * 0.08, x - s * 0.5, y + s * 0.22);
+    g.bezierCurveTo(x - s * 0.5, y + s * 0.52, x - s * 0.14, y + s * 0.72, x, y + s * 0.95);
+    g.bezierCurveTo(x + s * 0.14, y + s * 0.72, x + s * 0.5, y + s * 0.52, x + s * 0.5, y + s * 0.22);
+    g.bezierCurveTo(x + s * 0.5, y - s * 0.08, x, y, x, y + s * 0.32);
+    g.closePath();
+    if (fill) {
+      const gr = g.createLinearGradient(0, y - 4, 0, y + s);
+      gr.addColorStop(0, '#d4685a'); gr.addColorStop(0.5, '#b03e34'); gr.addColorStop(1, '#8c2c28');
+      g.fillStyle = gr;
+    } else {
+      g.fillStyle = 'rgba(22,20,26,0.55)';
+    }
+    g.fill();
+    g.lineWidth = 2;
+    g.strokeStyle = fill ? 'rgba(60,18,14,0.9)' : 'rgba(214,196,150,0.4)';
+    g.stroke();
+    if (fill) {
+      g.fillStyle = 'rgba(255,235,225,0.5)';
+      g.beginPath(); g.ellipse(x - s * 0.2, y + s * 0.18, s * 0.1, s * 0.16, -0.5, 0, TAU); g.fill();
+    }
+  };
+  for (let i = 0; i < P.maxHearts; i++) {
+    heart(24 + i * 34, 10, 26, i < P.hearts);
+  }
+  // salt crystals
+  if (P.salt > 0) {
+    const x = 24, y = 62;
+    g.save();
+    g.translate(x, y);
+    g.fillStyle = '#e8e2d4';
+    g.strokeStyle = 'rgba(120,110,120,0.8)';
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(0, 14); g.lineTo(-7, 4); g.lineTo(-3, -8); g.lineTo(4, -5); g.lineTo(8, 6);
+    g.closePath(); g.fill(); g.stroke();
+    g.restore();
+    g.font = '17px Georgia, serif';
+    g.fillStyle = '#efe8d6';
+    g.shadowColor = 'rgba(30,20,10,0.8)'; g.shadowBlur = 0; g.shadowOffsetY = 1;
+    g.fillText('× ' + P.salt, 42, 70);
+    g.shadowOffsetY = 0;
+  }
+}
+function updatePrompt() {
+  if (state !== 'play') { promptEl.classList.remove('on'); return; }
+  const ctx = currentInteract();
+  if (ctx) {
+    let label = ctx.label;
+    if (window.ArcadeController && ArcadeController.currentInputSource && ArcadeController.currentInputSource() === 'keyboard') {
+      label = label.replace('✕', 'J');
+    }
+    promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+    promptEl.classList.add('on');
+  } else promptEl.classList.remove('on');
+}
+
+/* ── portrait mode (art review screenshots only) ── */
+const PORTRAIT = { on: false, name: null, prev: null };
+function fmPortrait(name) {
+  const defs = {
+    wick: { who: 'wick', h: 1.24, d: 1.45, look: 1.08 },
+    finn: { who: 'finn', h: 1.28, d: 2.9, look: 1.1 },
+    tock: { who: 'tock', h: 1.05, d: 2.6, look: 0.95 },
+    pearl: { who: 'pearl', h: 0.72, d: 2.0, look: 0.62 },
+    crab: { who: 'crab', h: 0.6, d: 2.6, look: 0.35 },
+    wisp: { who: 'wisp', h: 1.8, d: 2.4, look: 1.8 },
+    king: { who: 'king', h: 2.4, d: 10.5, look: 1.9 },
+  };
+  const def = defs[name];
+  if (!def) return 'unknown: ' + name;
+  fmPortraitOff();
+  const store = { name };
+  if (def.who === 'wick') { store.px = P.x; store.pz = P.z; store.ph = P.heading; P.x = PSTAGE.x; P.z = PSTAGE.z; P.heading = 0.3; }
+  else if (def.who === 'finn') { store.npc = finn; }
+  else if (def.who === 'tock') { store.npc = tock; }
+  else if (def.who === 'pearl') { store.npc = pearl; }
+  else if (def.who === 'crab') { const cr = crabs[0]; store.crab = cr; store.cx = cr.x; store.cz = cr.z; store.ca = cr.ang; cr.x = PSTAGE.x; cr.z = PSTAGE.z; cr.ang = 0.4; }
+  else if (def.who === 'wisp') { const w = wisps[0]; store.wisp = w; store.wx = w.x; store.wz = w.z; store.wy = w.y; w.x = PSTAGE.x; w.z = PSTAGE.z; w.y = 1.8; }
+  else if (def.who === 'king') { store.bx = BOSS.x; store.bz = BOSS.z; store.ba = BOSS.ang; BOSS.x = PSTAGE.x; BOSS.z = PSTAGE.z; BOSS.ang = 0.25; }
+  if (store.npc) {
+    const n = store.npc;
+    store.nx = n.x; store.nz = n.z; store.nry = n.char.root.rotation.y; store.ny = n.char.root.position.y;
+    store.nbase = n.baseY;
+    n.x = PSTAGE.x; n.z = PSTAGE.z; n.baseY = 0;
+    n.char.root.position.set(PSTAGE.x, 0, PSTAGE.z);
+    n.char.root.rotation.y = 0.3;
+  }
+  PORTRAIT.on = true; PORTRAIT.name = name; PORTRAIT.prev = store; PORTRAIT.def = def;
+  pstageMesh.visible = true;
+  CAM.mode = 'cine';
+  return 'ok';
+}
+function fmPortraitOff() {
+  if (!PORTRAIT.on) return;
+  const s = PORTRAIT.prev;
+  if (s.px !== undefined) { P.x = s.px; P.z = s.pz; P.heading = s.ph; }
+  if (s.npc) { s.npc.x = s.nx; s.npc.z = s.nz; s.npc.baseY = s.nbase; s.npc.char.root.position.set(s.nx, s.ny, s.nz); s.npc.char.root.rotation.y = s.nry; }
+  if (s.crab) { s.crab.x = s.cx; s.crab.z = s.cz; s.crab.ang = s.ca; }
+  if (s.wisp) { s.wisp.x = s.wx; s.wisp.z = s.wz; s.wisp.y = s.wy; }
+  if (s.bx !== undefined) { BOSS.x = s.bx; BOSS.z = s.bz; BOSS.ang = s.ba; }
+  PORTRAIT.on = false;
+  pstageMesh.visible = false;
+  CAM.mode = 'follow'; CAM.ready = false;
+}
+
+/* ── telemetry ── */
+const TL = {
+  tick: 0, state: 'boot', x: 0, z: 0, hearts: 5, maxHearts: 5,
+  quest: 0, phases: 0, sword: false, salt: 0,
+  dlg: null, dlgLine: 0,
+  bossActive: false, bossPhase: 0, bossState: '', clawHits: 0,
+  skyStep: 0, skyT: 0, shade: false, inGrotto: false,
+  healTicks: 0, sunstruck: 0,
+  mirrorAngle: 0, beamOn: false, wallBurned: false,
+  kelpDoorCut: false, chestOpened: false, heartContainers: 0,
+  crabsAlive: 0, wispsAlive: 0,
+  calls: 0, tris: 0, fps: 60,
+  prompt: null, titleFocus: 0, pauseFocus: 0,
+  tidepool: false, shadeGrow: 0, everSun: false, carry: false,
+  saveExists: false, bootMs: 0, lowfx: LOWFX,
+  camYaw: 0, cinId: null, cinT: 0,
+  bossClawX: 0, bossClawZ: 0, bossX: 0, bossZ: 0,
+  nearCrabDist: 999, nearCrabHp: 0, nearWispDist: 999,
+  nearCrabX: 0, nearCrabZ: 0, pst: 'idle', iframes: 0, pulseT: 0,
+};
+window.__fm = TL;
+function syncTelemetry() {
+  TL.tick = simTick;
+  TL.state = state;
+  TL.x = P.x; TL.z = P.z;
+  TL.hearts = P.hearts; TL.maxHearts = P.maxHearts;
+  TL.quest = QUEST.q; TL.phases = QUEST.phases;
+  TL.sword = P.sword; TL.salt = P.salt;
+  TL.dlg = DS.id; TL.dlgLine = DS.line;
+  TL.bossActive = BOSS.active; TL.bossPhase = BOSS.phase;
+  TL.bossState = BOSS.st; TL.clawHits = BOSS.clawHits;
+  TL.skyStep = SAVE ? SAVE.sky : 0; TL.skyT = SKY.t;
+  TL.shade = P.shade; TL.inGrotto = inGrottoAt(P.x, P.z);
+  TL.healTicks = P.healTicks; TL.sunstruck = P.sunstruckCount;
+  TL.mirrorAngle = mirror.angle; TL.beamOn = beamOn; TL.mirrorDelta = mirrorDelta;
+  TL.wallBurned = wallBurned(); TL.kelpDoorCut = kelpDoorCut;
+  TL.chestOpened = chest.opened; TL.heartContainers = P.maxHearts - 5;
+  TL.crabsAlive = crabs.filter(c => !c.dead).length;
+  TL.wispsAlive = wisps.filter(w => !w.dead).length;
+  const pr = state === 'play' ? currentInteract() : null;
+  TL.prompt = pr ? pr.id : null;
+  TL.titleFocus = titleFocus; TL.pauseFocus = pauseFocus;
+  TL.tidepool = tidepoolFilled;
+  TL.shadeGrow = shadeGrow;
+  TL.everSun = P.everSun; TL.carry = P.carryCrescent;
+  TL.saveExists = !!SAVE;
+  TL.camYaw = CAM.yaw;
+  TL.cinId = CINE.id; TL.cinT = CINE.t;
+  const cp = bossClawPos();
+  TL.bossClawX = BOSS.st === 'dizzy' ? BOSS.x : (BOSS.slamPos[0] || cp[0]);
+  TL.bossClawZ = BOSS.st === 'dizzy' ? BOSS.z : (BOSS.slamPos[1] || cp[1]);
+  TL.bossX = BOSS.x; TL.bossZ = BOSS.z;
+  let ncd = 999, nch = 0, nwd = 999, ncx = 0, ncz = 0, nwx = 0, nwz = 0;
+  for (const cr of crabs) {
+    if (cr.dead) continue;
+    const d = Math.hypot(P.x - cr.x, P.z - cr.z);
+    if (d < ncd) { ncd = d; nch = cr.hp; ncx = cr.x; ncz = cr.z; }
+  }
+  TL.nearCrabX = ncx; TL.nearCrabZ = ncz;
+  for (const w2 of wisps) {
+    if (w2.dead) continue;
+    const d = Math.hypot(P.x - w2.x, P.z - w2.z);
+    if (d < nwd) { nwd = d; nwx = w2.x; nwz = w2.z; }
+  }
+  TL.nearWispX = nwx; TL.nearWispZ = nwz;
+  TL.pst = P.st; TL.iframes = P.iframes; TL.pulseT = P.pulseT;
+  TL.nearCrabDist = ncd; TL.nearCrabHp = nch; TL.nearWispDist = nwd;
+}
+const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
+window.__fmDebug = {
+  portrait: fmPortrait,
+  portraitOff: fmPortraitOff,
+  cam(px, py, pz, lx, ly, lz) { FREECAM.on = true; FREECAM.p = [px, py, pz]; FREECAM.l = [lx, ly, lz]; },
+  camOff() { FREECAM.on = false; CAM.ready = false; },
+  warp(x, z) { P.x = x; P.z = z; P.area = areaAt(x, z); CAM.ready = false; respawnLeftBehind(); },
+  hud(on) { el('hud').style.display = on ? '' : 'none'; },
+  face(h) { P.heading = h; },
+  camYaw(y) { CAM.yaw = y; },
+};
+
+/* ── sim dispatch ── */
+function tickSim() {
+  if (state !== 'pause') simTick++;      // the world holds its breath
+  if (P.hitstop > 0) { P.hitstop--; return; }
+  switch (state) {
+    case 'title': tickTitle(); break;
+    case 'play': {
+      const a = areaAt(P.x, P.z);
+      if (a !== P.area) { P.area = a; respawnLeftBehind(); }
+      tickPlayer();
+      for (const cr of crabs) tickCrab(cr);
+      for (const w of wisps) tickWisp(w);
+      tickBoss();
+      tickMirror();
+      tickChest();
+      tickSalt();
+      if (IN.pause) { setState('pause'); pauseFocus = 0; refreshPause(); SFX.menu(); }
+      break;
+    }
+    case 'dialog': tickDialog(); tickChest(); break;
+    case 'pause': tickPause(); break;
+    case 'cine':
+      tickCine();
+      if (CINE.id === 'wake' || CINE.id === 'sunstruck') tickChest();
+      break;
+    case 'tbc': tickTBC(); break;
+  }
+  if (itemGetT >= 0) {
+    itemGetT += DT;
+    if (itemGetT > 1.5) itemGetT = -1;
+  }
+}
+
+/* ── render-frame visuals ── */
+let grottoT = 0;
+const _fogC = [0, 0, 0];
+function updateVisuals(dtv, now) {
+  if (PORTRAIT.on) {
+    const d = PORTRAIT.def;
+    cineCam(PSTAGE.x + 0.8, d.h, PSTAGE.z + d.d, PSTAGE.x, d.look, PSTAGE.z);
+    skyGrp.position.set(camera.position.x, 0, camera.position.z);
+    animateWick(dtv, now);
+    animateNPCs(dtv);
+    animateEnemies(dtv, now);
+    animateBoss(dtv, now);
+    return;
+  }
+  if (state === 'title') titleCam(now);
+  animateWick(dtv, now);
+  animateNPCs(dtv);
+  animateEnemies(dtv, now);
+  animateBoss(dtv, now);
+  if (FREECAM.on) cineCam(FREECAM.p[0], FREECAM.p[1], FREECAM.p[2], FREECAM.l[0], FREECAM.l[1], FREECAM.l[2]);
+  else if (state !== 'title') updateCamera(dtv);   // titleCam owns the title vista
+  // fog: grotto vs open sky
+  const inG = inGrottoAt(P.x, P.z) && state !== 'title';
+  grottoT += (( inG ? 1 : 0) - grottoT) * Math.min(1, dtv * 2.4);
+  const sf = mix3(SKY0.fog, SKY1.fog, SKY.t);
+  mix3(sf, FOG_GROTTO.col, grottoT, _fogC);
+  scene.fog.color.setRGB(_fogC[0], _fogC[1], _fogC[2]);
+  scene.fog.near = lerp(FOG0.near, FOG_GROTTO.near, grottoT);
+  scene.fog.far = lerp(FOG0.far, FOG_GROTTO.far, grottoT);
+  // sky follows the camera
+  skyGrp.position.set(camera.position.x, 0, camera.position.z);
+  cullChunks(camera.position.x, camera.position.z);
+  // draw-call budget: far props and cast hide beyond the fog
+  {
+    const ccx = camera.position.x, ccz = camera.position.z;
+    const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
+    const inGv = near2(MIRROR_POS.x, MIRROR_POS.z, 60);
+    mirror.group.visible = inGv;
+    beamDown.visible = inGv;
+    beamOut.visible = inGv;
+    chest.group.visible = near2(chest.x, chest.z, 75);
+    wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
+    tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);
+    for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = near2(patch.cx, patch.cz, 70);
+    finn.char.root.visible = near2(finn.x, finn.z, 52);
+    tock.char.root.visible = near2(tock.x, tock.z, 52);
+    pearl.char.root.visible = near2(pearl.x, pearl.z, 52);
+  }
+  // glare overlay
+  if (glareA > 0 && state !== 'cine') {
+    glareA = Math.max(0, glareA - glareDecay * dtv);
+    glareEl.style.opacity = String(glareA);
+  } else if (state !== 'cine') glareEl.style.opacity = '0';
+  // heat shimmer motes in the open sun
+  if (psShimmer && state === 'play' && !P.shade && P.area === 'bay' && Math.random() < 0.25) {
+    const a = Math.random() * TAU, d = 3 + Math.random() * 9;
+    const sx = P.x + Math.cos(a) * d, sz = P.z + Math.sin(a) * d;
+    psShimmer.spawn(sx, groundH(sx, sz) + 0.4 + Math.random(), sz, 0, 0.55 + Math.random() * 0.4, 0, 1.6);
+  }
+  psSpark.update(dtv); psDust.update(dtv); psSparkle.update(dtv);
+  if (psShimmer) psShimmer.update(dtv);
+  // shade sparkles while healing
+  if (state === 'play' && P.shade && P.hearts < P.maxHearts && Math.random() < 0.12) {
+    psSparkle.spawn(P.x + (Math.random() - 0.5) * 0.8, groundH(P.x, P.z) + 0.3, P.z + (Math.random() - 0.5) * 0.8,
+      0, 0.7, 0, 0.8);
+  }
+  // tidepool water shimmer
+  if (tidewater && tidewater.visible) {
+    tidewater.material.opacity = 0.8 + Math.sin(now / 700) * 0.06;
+  }
+  // star twinkle — subtle scale + opacity flicker, two beat frequencies
+  if (starOp > 0.05 && state !== 'cine') {
+    const tw = starOp * (0.84 + 0.1 * Math.sin(now / 380) + 0.06 * Math.sin(now / 97));
+    starCoreMat.opacity = tw;
+    starFlareMat.opacity = tw * 0.28;
+    starCoreMesh.scale.setScalar(1 + 0.07 * Math.sin(now / 240));
+  }
+  // beams flicker gently
+  beamDown.material.opacity = 0.13 + Math.sin(now / 300) * 0.03;
+  // crescent carried on Wick's back
+  if (P.carryCrescent && state === 'play') {
+    crescentItem.visible = true;
+    crescentItem.scale.setScalar(0.55);
+    crescentItem.position.set(
+      P.x - Math.sin(P.heading) * 0.28,
+      groundH(P.x, P.z) + 1.15,
+      P.z - Math.cos(P.heading) * 0.28);
+    crescentItem.rotation.set(0, P.heading + Math.PI / 2, 0.35);
+  }
+  drawHearts();
+  updatePrompt();
+}
+
+/* ── main loop: fixed 60 Hz sim, decoupled render ── */
+let lastNow = performance.now(), accMs = 0;
+let fpsAcc = 0, fpsN = 0, fpsT = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dtReal = Math.min(0.1, (now - lastNow) / 1000);
+  lastNow = now;
+  gatherInput();
+  let n = 0;
+  const simming = state !== 'boot';
+  if (simming) {
+    if (TURBO > 0 && state !== 'title' && state !== 'pause') {
+      n = (typeof window.__fmTurbo === 'number') ? clamp(window.__fmTurbo, 1, 30) : TURBO;
+    } else {
+      accMs += dtReal * 1000;
+      n = Math.floor(accMs / 16.6667);
+      if (n > 5) { n = 5; accMs = 0; } else accMs -= n * 16.6667;
+    }
+  }
+  if (PORTRAIT.on) n = 0;
+  for (let k = 0; k < n; k++) {
+    tickSim();
+    if (k === 0) clearEdges();       // edges land on exactly one tick
+  }
+  if (n === 0) clearEdges();
+  const dtVis = Math.max(dtReal, n * DT);
+  updateVisuals(dtVis, now);
+  renderer.render(scene, camera);
+  TL.calls = renderer.info.render.calls;
+  TL.tris = renderer.info.render.triangles;
+  fpsAcc += dtReal; fpsN++;
+  if (fpsAcc > 0.5) { TL.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+  audioAmbient(dtReal, P.shade || inGrottoAt(P.x, P.z), SKY.t);
+  syncTelemetry();
+}
+
+/* ── boot ── */
+initBoss();
+refreshTitleMenu();
+refreshPause();
+setState('title');
+questEl.classList.remove('on');
+setTimeout(() => { fadeBlackEl.style.opacity = '0'; }, 120);
+TL.bootMs = performance.now() - BOOT_T0;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
