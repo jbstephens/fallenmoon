@@ -248,3 +248,115 @@ in village, bay fight, and boss. Screenshots: title, village, dry
 bay combat, grotto puzzle, boss, THE PAYOFF (wheel + dimmed sky +
 star), each LOOKED AT against the bar: "beautiful and slightly
 wrong; a real place, not a tech demo."
+
+---
+
+# v2 — PLAYABILITY OVERINDEX (decided 2026-08-09 from the family's
+first playtest; John's directives, locked)
+
+Verdict from play: graphics impressed, playability failed. v2 rule:
+**every minute of work goes to how it FEELS to walk, look, and fight.
+Story depth is explicitly deprioritized.**
+
+## 1. You START with the sword (the #1 failure)
+The Moonglass Sword begins on Wick's back, visibly sheathed; first ✕
+draws it with a flourish. No fetch, no mystery. Finn's beat becomes
+pure flavor + tutorial: he teaches the △ pulse and gives a heart
+container. The kelp door now just hides a chest. Nothing gates combat.
+
+## 2. Full two-stick camera control (Minecraft/modern-Zelda standard)
+- Right stick = camera orbit: rx yaws freely 360°, ry pitches
+  (clamped ~ -25°..+60°), smooth, invertible-none (default off).
+- Movement stays LEFT-stick, camera-relative.
+- NO autonomous camera movement while the right stick has been
+  touched in the last 3s. After that, only a very gentle drift back
+  behind the walk direction while moving — never while standing.
+- Keyboard: mouse-look (pointer lock on first click, Esc exits to
+  pause as usual) + arrow keys as no-mouse fallback.
+- Touch: drag anywhere on the right 60% of the screen = camera
+  (direct-manipulation gesture; coexists with touchpad-v1 left
+  stick). Pinch ignored.
+- Camera collision (sphere-cast pullback) kept from v1.
+- Ghost Patrol is prior art on the console for right-stick use.
+
+## 3. Enemies must READ as creatures (the "fireflies" were Glare
+Wisps rendering as bare glow sprites)
+- Glare Wisps → **SUN IMPS**: small-dog-sized critters with real
+  bodies — round ember torso, stubby horns, two dark eyes, buzzing
+  dragonfly wings, little grabby hands. Clear dive telegraph
+  (rear-up + brighten + chirp), pop into a satisfying sparkle-burst
+  with a squash frame when hit. Still fizzle harmless in shade.
+- Scorch Crabs: 25% bigger, oversized left claw, louder telegraph
+  (claw raise + click-click), shell-flash on hit.
+- MORE encounters: 3-4 imp clusters and 3 crab patrols across the
+  bay; they respawn on area re-entry. Fighting should be the default
+  activity of a play session.
+- Every hit: generous hitbox, arc-trail swoosh (see 4), hitstop,
+  knockback, sparks, rumble. Kill feedback is the product.
+
+## 4. The swoosh
+Layered sword feel: crescent arc-trail mesh (additive, fades in
+~120ms), whoosh = filtered noise sweep + a faint glass chime (it's
+moonglass), impact adds a low thunk + spark burst. Third combo hit
+gets a bigger trail + deeper whoosh. This is the thing John asked
+for by name — make swinging feel great in the FIRST second.
+
+## 5. Fix the missing-wall rendering bug
+Some house walls vanish from certain angles (backface winding).
+Audit every building shell; fix windings so all structures read
+solid from all camera angles (now critical since the camera is
+free). Add a harness gate: orbit the camera 360° around each house
+at two pitches and pixel-sample wall presence (no sky reading
+through a facade).
+
+## 6. Wick v2 (John: "look at Zelda, make him cooler")
+Reference BotW Link proportions (~6.2 heads, slightly broader
+shoulders): layered tunic with belt + buckle, scabbard visible on
+the back (sword rests in it out of combat), sturdier boots, fuller
+sculpted hair with a swept fringe, scarf kept. Idle relaxed; draw
+animation on first attack. He should read HERO in silhouette.
+
+## 7. Playability polish
+- Floating objective marker (small moon-mote beacon) above the
+  current goal, always visible; quest banner stays.
+- Dialogue even shorter (≤2 lines); all NPC beats skippable.
+- Roll cancels attack recovery; attack buffers during roll.
+- Camera FOV nudged for action (~66°).
+- Everything else from v1 (payoff, grotto, boss, save) unchanged
+  except where the above touches it. Boss arena benefits from the
+  same enemy-readability pass (wisp adds in phase 3 become imps).
+
+## v2 verification additions
+Right-stick orbit gates (yaw/pitch move, movement stays camera-
+relative, no auto-drift while stick active); mouse-look gate;
+touch-drag camera gate alongside touchpad movement; sword-from-
+start gate (attack works within 2s of spawn on a fresh save);
+house-orbit wall-integrity gates; imp/crab readability screenshot
+set reviewed against "reads as a creature at gameplay distance";
+swoosh trail visible in a mid-swing screenshot; all existing gates
+stay green (Finn beat updated). Old saves migrate (swordless save
+state grants sword on load).
+
+## v2 addendum — THE OPEN LOOP (John, 8/9 late: locked, overrides
+any conflicting beat structure above)
+
+The core loop, in priority order: **walk around → slash stuff →
+(eventually, at the player's own initiative) talk to somebody.**
+Story progression is a thing the player WALKS UP TO, never a funnel.
+
+- NO quest banner, objective marker, or directive text at spawn.
+  Spawn = sword on back + interesting world + something slashable
+  within 20 seconds (kelp clusters everywhere, a crab scuttling
+  nearby, imps over the first dune).
+- NPCs never stop you, gate you, or call out. They exist; a small
+  "✕" prompt appears only when YOU approach. All story is player-
+  initiated. Talking to Finn is what STARTS the Crescent thread
+  (that's when the quest line + moon-mote beacon appear — a reward
+  for curiosity, not homework).
+- The world itself carries the premise wordlessly: pinned sun,
+  beached boats, shade pools, the empty Moonwheel visible on its
+  hill from spawn. Kids who never talk to anyone still have a great
+  time slashing; kids who get curious find the adventure.
+- Success metric for the slice: a kid who ignores every NPC has fun
+  for 10 minutes. A kid who talks to Finn finds the whole Crescent
+  arc unchanged (grotto, boss, payoff all intact).

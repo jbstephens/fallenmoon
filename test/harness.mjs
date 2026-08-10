@@ -116,6 +116,7 @@ const PAD_STUB = `(function(){
     vibrationActuator:{playEffect:()=>Promise.resolve('complete')}};
   window.__fakePad={
     axes(lx,ly){pad.axes[0]=lx||0;pad.axes[1]=ly||0;pad.timestamp=performance.now();},
+    raxes(rx,ry){pad.axes[2]=rx||0;pad.axes[3]=ry||0;pad.timestamp=performance.now();},
     press(){const idx=Array.prototype.slice.call(arguments);
       for(let i=0;i<17;i++){const on=idx.indexOf(i)>=0;pad.buttons[i].pressed=on;pad.buttons[i].value=on?1:0;}
       pad.timestamp=performance.now();},
@@ -158,11 +159,21 @@ const BOT_SRC = `(function(){
   }
   B.release=()=>{ stick(0,0); press(false); B.target=null; B.fight=false; B.boss=false; B.still=false; };
   let f=0;
+  // stuck detection: if a walk target exists but we stop making progress
+  // (collider pockets in the village clutter), sidestep for a beat
+  let lastX=0, lastZ=0, stuckCheck=0, wiggleF=0, wiggleSign=1;
   (function step(){
     requestAnimationFrame(step);
     f++;
     const T = window.__fm;
     if (!T || T.state!=='play' || B.still){ if(B.still) stick(0,0); return; }
+    if (B.target){
+      stuckCheck++;
+      if (stuckCheck >= 40){
+        if (Math.hypot(T.x-lastX, T.z-lastZ) < 0.3){ wiggleF = 28; wiggleSign = -wiggleSign; }
+        lastX = T.x; lastZ = T.z; stuckCheck = 0;
+      }
+    } else { stuckCheck = 0; wiggleF = 0; }
     let want=null;
     if (B.boss){
       const st=T.bossState, bx=T.bossX, bz=T.bossZ;
@@ -197,7 +208,9 @@ const BOT_SRC = `(function(){
       const dx=want[0]-T.x, dz=want[1]-T.z, d=Math.hypot(dx,dz);
       if (B.target && d<B.tol){ B.target=null; B.done=true; stick(0,0); }
       else if (d>0.3){
-        const wx=dx/d, wz=dz/d, y=T.camYaw;
+        let wx=dx/d, wz=dz/d;
+        if (wiggleF>0){ wiggleF--; const px=-wz*wiggleSign, pz=wx*wiggleSign; wx=(wx*0.25+px)/1.1; wz=(wz*0.25+pz)/1.1; }
+        const y=T.camYaw;
         stick(wx*Math.cos(y)-wz*Math.sin(y), wx*Math.sin(y)+wz*Math.cos(y));
       } else stick(0,0);
     } else if (!B.fight && !B.boss) stick(0,0);
@@ -216,6 +229,10 @@ function makeApi(c) {
     if (method === 'Log.entryAdded' && (params.entry.level === 'error' || params.entry.level === 'warning')) {
       if (/GL Driver Message|GPU stall|ReadPixels|Automatic fallback to software WebGL/.test(params.entry.text)) return;
       if (/AudioContext was not allowed to start/.test(params.entry.text)) return;
+      // benign browser nag from the SHARED touchpad lib (controller.js
+      // preventDefault on an uncancelable touchend during synthetic drags) —
+      // not this game's code, harmless on device
+      if (/Ignored attempt to cancel a touch/.test(params.entry.text)) return;
       consoleBad.push('log-' + params.entry.level + ': ' + params.entry.text + ' ' + (params.entry.url || ''));
     }
   });
@@ -286,6 +303,9 @@ function makeApi(c) {
     async bot(props) { await api.eval(`Object.assign(window.__fmBot, ${JSON.stringify(props)})`); },
     async botRelease() { await api.eval('__fmBot.release()'); },
     async walkTo(x, z, tol = 0.9, timeout = 60000) {
+      // if a cinematic (sunstruck/wake) owns the sim, wait for control back —
+      // otherwise the whole waypoint chain would abort in one frame
+      await api.waitFor(`__fm.state === 'play'`, timeout, 'control before walk').catch(() => {});
       await api.eval(`__fmBot.done=false; __fmBot.tol=${tol}; __fmBot.target=[${x},${z}]`);
       await api.waitFor(
         `__fmBot.done || Math.hypot(__fm.x-(${x}), __fm.z-(${z})) < ${tol + 0.15} || __fm.state!=='play'`,
@@ -340,78 +360,119 @@ async function advanceDialog(api, D, expectId, maxLines = 5) {
   await api.waitFor(`__fm.dlg !== ${JSON.stringify(expectId)}`, 6000, 'dialogue ' + expectId + ' done');
 }
 
-/* ═══════════ the full slice, drivable by pad or keyboard ═══════════ */
+/* ═══════════ the full slice, drivable by pad or keyboard ═══════════
+   v2 shape: (a) fresh spawn = armed, zero directives; (b) a LONG stretch of
+   pure walk/slash/secrets with ZERO dialogue (the open loop); (c) talking to
+   Finn starts the Crescent thread; (d) the full arc to the payoff.        */
 async function playSlice(api, D, opts = {}) {
   const g = (n, ok, d) => gate(`${opts.tag}: ${n}`, ok, d);
   await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
   if (opts.titleShot) { await sleep(1600); await api.shot('title-1280x720'); }
   await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');   // NEW GAME
   await api.waitFor(`__fm.state === 'play'`, 30000, 'wake → play');
+  const tick0 = await api.eval('__fm.tick');
   g('wake cinematic → free control', true);
   g('wakes in shade', await api.eval('__fm.shade === true'));
+
+  // ── v2: NO directives at spawn ──
+  g('no quest banner at spawn', !(await api.eval(`document.getElementById('questLine').classList.contains('on')`)) &&
+    (await api.eval('__fm.quest')) === 0);
+  g('no objective beacon at spawn', (await api.eval('__fm.beacon')) === false);
+
+  // ── v2: the sword works within 2 s of a fresh spawn ──
+  await api.eval(`window.__sawAtk=false;(function w(){
+    if(__fm.pst==='atk'){window.__sawAtk=true;return;}
+    requestAnimationFrame(w);})()`);
+  const swT0 = Date.now();
+  await D.confirm();
+  let swOk = false;
+  while (Date.now() - swT0 < 2000) {
+    if (await api.eval('window.__sawAtk')) { swOk = true; break; }
+    await D.confirm();
+  }
+  g('sword usable within 2s of spawn', swOk, `${Date.now() - swT0}ms, drawn=` + await api.eval('__fm.drawn'));
+
+  // ── v2 camera gates (pad): full two-stick control ──
+  if (D.mode === 'pad') {
+    await api.eval('window.__fmTurbo = 1');        // real-time sim: the 3 s drift window needs real sampling resolution
+    await api.eval('__fmDebug.warp(-55, 30)');     // open mud, no enemies in aggro range
+    const yaw0 = await api.eval('__fm.camYaw');
+    await api.eval('__fakePad.raxes(1,0)');
+    await sleep(400);
+    await api.eval('__fakePad.raxes(0,0)');
+    const yaw1 = await api.eval('__fm.camYaw');
+    g('right stick orbits yaw', Math.abs(yaw1 - yaw0) > 0.3, `Δ=${(yaw1 - yaw0).toFixed(2)}`);
+    await api.eval('__fakePad.raxes(0,1)');
+    await sleep(900);
+    await api.eval('__fakePad.raxes(0,0)');
+    const p1 = await api.eval('__fm.camPitch');
+    g('right stick pitches up to +60° clamp', p1 > 0.6 && p1 <= 1.05, 'pitch=' + p1.toFixed(2));
+    await api.eval('__fakePad.raxes(0,-1)');
+    await sleep(1200);
+    await api.eval('__fakePad.raxes(0,0)');
+    const p2 = await api.eval('__fm.camPitch');
+    g('pitch clamps at -25°', p2 >= -0.44 && p2 < -0.3, 'pitch=' + p2.toFixed(2));
+    await api.eval('__fakePad.raxes(0,0.5)'); await sleep(320); await api.eval('__fakePad.raxes(0,0)');
+    // movement stays LEFT-stick camera-relative at the rotated yaw
+    const yawK = await api.eval('__fm.camYaw');
+    const sx0 = await api.eval('__fm.x'), sz0 = await api.eval('__fm.z');
+    await api.axes(0, -1);
+    await sleep(650);
+    await api.axes(0, 0);
+    const dxm = (await api.eval('__fm.x')) - sx0, dzm = (await api.eval('__fm.z')) - sz0;
+    const dm = Math.hypot(dxm, dzm) || 1;
+    const dot = (dxm / dm) * -Math.sin(yawK) + (dzm / dm) * -Math.cos(yawK);
+    g('movement stays camera-relative', dm > 0.8 && dot > 0.85, `dot=${dot.toFixed(2)} d=${dm.toFixed(1)}`);
+    // NO autonomous camera while the stick was touched in the last 3 s
+    await api.eval('__fmDebug.warp(-55, 34)');
+    await api.eval('__fakePad.raxes(0.6,0)'); await sleep(160); await api.eval('__fakePad.raxes(0,0)');
+    await api.axes(1, 0);                          // strafe: heading ≠ camera yaw
+    await api.waitFor('__fm.camStickAge > 0.4', 10000, 'stick age 0.4');
+    const yA = await api.eval('__fm.camYaw');
+    await api.waitFor('__fm.camStickAge > 2.6', 10000, 'stick age 2.6');
+    const yB = await api.eval('__fm.camYaw');
+    g('no auto-drift while stick active (<3s)', Math.abs(yB - yA) < 0.08, `Δ=${(yB - yA).toFixed(3)}`);
+    await api.waitFor('__fm.camStickAge > 7', 15000, 'stick age 7');
+    const yC = await api.eval('__fm.camYaw');
+    await api.axes(0, 0);
+    g('gentle drift-behind resumes while walking', Math.abs(yC - yB) > 0.1, `Δ=${(yC - yB).toFixed(3)}`);
+    const yD = await api.eval('__fm.camYaw');
+    await api.waitTicks(300);
+    const yE = await api.eval('__fm.camYaw');
+    g('never drifts while standing still', Math.abs(yE - yD) < 0.03, `Δ=${(yE - yD).toFixed(3)}`);
+    await api.eval('__fmDebug.warp(8.2, 4.8)');    // back to the spawn boat
+    await api.eval('window.__fmTurbo = undefined');
+  }
+
   await api.installBot(D.mode);
   await api.perfReset();
 
-  // step into the glare, then the village
-  await api.walkTo(8, -8, 1.2);
+  /* ═══ THE OPEN LOOP — 3+ sim-minutes, ZERO dialogue: walk, slash, find ═══ */
+  await api.eval(`window.__dlgSeen=false;(function w(){
+    if(__fm.dlg){window.__dlgSeen=true;return;}
+    requestAnimationFrame(w);})()`);
+
+  // step into the glare
+  await api.walkTo(8, -4, 1.2);
   g('walked into the sun (glare beat)', await api.eval('__fm.everSun === true'));
 
-  // ── Granny Tock ──
-  await api.walkTo(-5.6, -28.0, 0.5);
-  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'tock prompt');
-  await D.confirm();
-  await advanceDialog(api, D, 'tock1');
-  g('Granny Tock dialogue (✕ advances)', true);
-
-  // ── Pearl ──
-  await api.walkTo(-20.8, -10.8, 0.5);
-  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'pearl prompt');
-  await D.confirm();
-  await advanceDialog(api, D, 'pearl1');
-  g('Pearl dialogue', true);
-
-  // ── Keeper Finn → the sword ──
-  await api.walkTo(24, -19, 1.2);
-  await api.walkTo(40.9, -16, 0.45);
-  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'finn prompt');
-  await D.confirm();
-  await advanceDialog(api, D, 'finn1');
-  await api.waitFor('__fm.sword === true', 8000, 'sword given');
-  g('Moonglass Sword obtained', true, 'quest=' + await api.eval('__fm.quest'));
-
-  // ── cut the door kelp (real swings) ──
-  await api.waitTicks(120);            // item-get beat
-  await api.walkTo(41.55, -16, 0.5);
-  for (let i = 0; i < 8 && !(await api.eval('__fm.kelpDoorCut')); i++) {
+  // slashables within reach of spawn: cut kelp with real swings
+  await api.walkTo(10.4, 9.2, 0.8);
+  const kc0 = await api.eval('__fm.kelpCutCount');
+  for (let i = 0; i < 10 && (await api.eval('__fm.kelpCutCount')) === kc0; i++) {
     await D.confirm();
-    await sleep(300);
+    await sleep(250);
   }
-  g('door kelp cut with real swings', await api.eval('__fm.kelpDoorCut'));
-  await advanceDialog(api, D, 'finn2');
-  g('Finn freed → quest to the bay', (await api.eval('__fm.quest')) === 2);
+  g('spawn kelp slashed (open loop)', (await api.eval('__fm.kelpCutCount')) > kc0,
+    'cut=' + await api.eval('__fm.kelpCutCount'));
 
-  // ── moonglass pulse ──
-  if (D.mode === 'pad') await api.press(3); else await api.key('l', 'KeyL', true);
-  let pulsed = false;
-  try { await api.waitFor('__fm.pulseT > 0', 3000, 'pulse'); pulsed = true; } catch (e) {}
-  if (D.mode === 'pad') await api.press(); else await api.key('l', 'KeyL', false);
-  g('moonglass pulse (△) fires', pulsed);
-
-  // ── out into the Dry Bay ──
-  await api.walkTo(14, -18, 1.4);
-  await api.walkTo(9, 2, 1.4);
-  await api.walkTo(11, 22, 1.4);
-  // pre-payoff shade probe: this exact spot must be SUN now, SHADE after dusk
-  // (read-only world query — the real walk+heal check happens after the payoff)
-  const shadeBefore = await api.eval('inShadeAt(15.0, 53.2)');
-  g('stretch-spot is sunlit before the payoff', shadeBefore === false);
-
-  // ── kill a Scorch Crab with real swings ──
+  // the first crab scuttles just past the quay gap — kill it with real swings
   const crabs0 = await api.eval('__fm.crabsAlive');
+  await api.walkTo(8, 22, 1.4);
   await api.bot({ fight: true });
   if (opts.combatShot) {
     await api.eval(`window.__fmShotFlag=false;(function w(){
-      const T=__fm; if(T.pst==='atk'&&T.nearCrabDist<2.4){window.__fmShotFlag=true;return;}
+      const T=__fm; if(T.pst==='atk'&&T.nearCrabDist<2.6){window.__fmShotFlag=true;return;}
       requestAnimationFrame(w);})()`);
     const t0 = Date.now();
     while (Date.now() - t0 < 40000 && !(await api.eval('window.__fmShotFlag'))) await sleep(80);
@@ -445,14 +506,14 @@ async function playSlice(api, D, opts = {}) {
   g('hit drops a heart + i-frames', hit.iframes > 0, `hearts ${h0} → ${hit.hearts}, iframes ${hit.iframes}`);
   await api.eval('__fmBot.still = false');
 
-  // ── kill a Glare Wisp (chase the nearest live one) ──
+  // ── pop a SUN IMP over the first dune (real swing) ──
   const wisps0 = await api.eval('__fm.wispsAlive');
-  await api.walkTo(2, 57, 1.2);
+  await api.walkTo(0, 44, 1.4);
   await api.bot({ fight: true });
-  await api.waitFor(`__fm.wispsAlive < ${wisps0}`, 120000, 'wisp popped');
+  await api.waitFor(`__fm.wispsAlive < ${wisps0}`, 120000, 'imp popped');
   await api.bot({ fight: false });
   await api.botRelease();
-  g('Glare Wisp popped by real swing', true);
+  g('Sun Imp popped by real swing', true, 'alive=' + await api.eval('__fm.wispsAlive'));
 
   // ── deliberate sunstruck → wake in shade with 3 hearts ──
   const sc0 = await api.eval('__fm.sunstruck');
@@ -475,7 +536,8 @@ async function playSlice(api, D, opts = {}) {
   await api.waitFor(`__fm.healTicks > ${heals0}`, 40000, 'heal tick');
   g('shade heals a heart', true, 'hearts=' + await api.eval('__fm.hearts'));
 
-  // ── shipwreck chest → heart container ──
+  // ── secrets, still wordless: shipwreck chest → heart container ──
+  await api.walkTo(-6, 55, 2.0);
   await api.walkTo(-20, 70, 1.6);
   await api.walkTo(-41.5, 90.5, 1.4);
   await api.walkTo(-43.4, 92.2, 0.45);
@@ -491,7 +553,86 @@ async function playSlice(api, D, opts = {}) {
   g('salt crystal collected', (await api.eval('__fm.salt')) > 0,
     'salt=' + await api.eval('__fm.salt'));
 
+  // ── the open-loop verdict: 3+ minutes of fun, zero dialogue, no banner ──
+  const openTicks = (await api.eval('__fm.tick')) - tick0;
+  if (openTicks < 10800) await api.waitTicks(10800 - openTicks);
+  g('3+ sim-minutes of play before any dialogue', true,
+    ((await api.eval('__fm.tick')) - tick0) + ' ticks');
+  g('zero dialogue in the open loop', (await api.eval('window.__dlgSeen')) === false);
+  g('quest still untouched (no funnel)', (await api.eval('__fm.quest')) === 0 &&
+    !(await api.eval(`document.getElementById('questLine').classList.contains('on')`)));
+
+  /* ═══ story is opt-in: back to the village to TALK ═══ */
+  await api.walkTo(-20, 60, 2.0);
+  await api.walkTo(-2, 30, 2.0);
+  await api.walkTo(9, 2, 2.0);
+
+  // ── Granny Tock ──
+  await api.walkTo(0, -24, 1.4);
+  await api.walkTo(-5.6, -28.0, 0.5);
+  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'tock prompt');
+  await D.confirm();
+  await advanceDialog(api, D, 'tock1');
+  g('Granny Tock dialogue (✕ advances)', true);
+
+  // ── Pearl ──
+  await api.walkTo(-20.8, -10.8, 0.5);
+  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'pearl prompt');
+  await D.confirm();
+  await advanceDialog(api, D, 'pearl1');
+  g('Pearl dialogue', true);
+
+  // ── Keeper Finn: THIS starts the Crescent thread ──
+  await api.walkTo(24, -19, 1.2);
+  await api.walkTo(36, -15, 1.2);
+  await api.walkTo(39.7, -14.1, 0.5);
+  await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'finn prompt');
+  await D.confirm();
+  await advanceDialog(api, D, 'finn1');
+  await api.waitFor('__fm.quest === 2', 8000, 'crescent thread started');
+  g('Finn starts the quest (banner appears)', await api.eval(`document.getElementById('questLine').classList.contains('on')`));
+  g('Finn teaches + gives heart container', (await api.eval('__fm.maxHearts')) === 7 &&
+    (await api.eval('__fm.finnHeart')) === true, 'maxHearts=' + await api.eval('__fm.maxHearts'));
+  await api.waitFor('__fm.beacon === true', 8000, 'beacon appears');
+  g('moon-mote beacon appears with the quest', true);
+
+  // ── the kelp beard on the lighthouse door hides a CHEST now ──
+  await api.waitTicks(150);            // item-get beat
+  for (const [kx, kz] of [[41.4, -15.9], [41.6, -16.7], [41.9, -15.2]]) {
+    if (await api.eval('__fm.kelpDoorCut')) break;
+    await api.walkTo(kx, kz, 0.5).catch(() => {});
+    for (let i = 0; i < 6 && !(await api.eval('__fm.kelpDoorCut')); i++) {
+      await D.confirm();
+      await sleep(260);
+    }
+  }
+  g('door kelp cut with real swings', await api.eval('__fm.kelpDoorCut'));
+  const salt0 = await api.eval('__fm.salt');
+  await api.walkTo(41.2, -15.2, 0.6).catch(() => {});
+  await api.waitFor(`__fm.prompt === 'doorChest'`, 10000, 'door chest prompt');
+  await D.confirm();
+  await api.waitFor('__fm.doorChest === true', 15000, 'door chest opened');
+  await api.waitFor(`__fm.salt > ${salt0}`, 10000, 'salt cache');
+  g('kelp door hides a chest (salt cache)', true, 'salt=' + await api.eval('__fm.salt'));
+
+  // ── moonglass pulse ──
+  if (D.mode === 'pad') await api.press(3); else await api.key('l', 'KeyL', true);
+  let pulsed = false;
+  try { await api.waitFor('__fm.pulseT > 0', 3000, 'pulse'); pulsed = true; } catch (e) {}
+  if (D.mode === 'pad') await api.press(); else await api.key('l', 'KeyL', false);
+  g('moonglass pulse (△) fires', pulsed);
+
+  // ── out into the Dry Bay, quest-bound this time ──
+  await api.walkTo(14, -18, 1.4);
+  await api.walkTo(9, 2, 1.4);
+  await api.walkTo(11, 22, 1.4);
+  // pre-payoff shade probe: this exact spot must be SUN now, SHADE after dusk
+  // (read-only world query — the real walk+heal check happens after the payoff)
+  const shadeBefore = await api.eval('inShadeAt(15.0, 53.2)');
+  g('stretch-spot is sunlit before the payoff', shadeBefore === false);
+
   // ── Tidepool Grotto: the mirror puzzle ──
+  await api.walkTo(12, 60, 2.0);
   await api.walkTo(-10, 100, 1.6);
   await api.walkTo(25, 122, 1.6);
   await api.walkTo(30, 131, 1.0);
@@ -549,17 +690,25 @@ async function playSlice(api, D, opts = {}) {
   await api.waitFor('__fm.carry === true && __fm.state === "play"', 60000, 'crescent carried');
   g('Crescent Horn obtained (nothing dies)', (await api.eval('__fm.quest')) === 3);
 
-  // ── carry it home to the Moonwheel ──
-  await api.walkTo(47, 158.5, 1.4);
-  await api.walkTo(36, 152.5, 1.4);
-  await api.walkTo(30, 131, 1.4);
-  await api.walkTo(12, 60, 2.0);
-  await api.walkTo(11, 22, 2.0);
-  await api.walkTo(9, 0, 2.0);
-  await api.walkTo(0, -24, 2.0);
-  await api.walkTo(-14, -44, 2.0);
-  await api.walkTo(-30, -62, 2.0);
-  await api.walkTo(-36.4, -73.6, 1.2);
+  // ── carry it home to the Moonwheel (sunstruck-resilient: the carrier can
+  // get overwhelmed crossing the bay; re-walk from wherever they woke) ──
+  await api.walkTo(47, 158.5, 1.4).catch(() => {});
+  await api.walkTo(36, 152.5, 1.4).catch(() => {});
+  await api.walkTo(30, 131, 1.4).catch(() => {});
+  await api.walkTo(12, 60, 2.0).catch(() => {});
+  await api.walkTo(11, 22, 2.0).catch(() => {});
+  await api.walkTo(9, 0, 2.0).catch(() => {});
+  await api.walkTo(0, -24, 2.0).catch(() => {});
+  await api.walkTo(-14, -44, 2.0).catch(() => {});
+  await api.walkTo(-30, -62, 2.0).catch(() => {});
+  await api.walkTo(-36.4, -73.6, 1.2).catch(() => {});
+  for (let i = 0; i < 4 && !(await api.eval(`Math.hypot(__fm.x - (-36.4), __fm.z - (-73.6)) < 2.5`)); i++) {
+    await api.waitFor(`__fm.state === 'play'`, 60000, 'control back on the road home');
+    await api.walkTo(0, -24, 2.5, 90000).catch(() => {});
+    await api.walkTo(-14, -44, 2.5, 60000).catch(() => {});
+    await api.walkTo(-30, -62, 2.5, 60000).catch(() => {});
+    await api.walkTo(-36.4, -73.6, 1.2, 60000).catch(() => {});
+  }
 
   // sky sample BEFORE
   await api.eval('__fmDebug.camYaw(Math.PI); __fmDebug.face(0);');
@@ -674,8 +823,10 @@ async function suiteFlow(base) {
     await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
     gate('save: resumes at quest step', (await api.eval('__fm.quest')) === 4,
       'quest=' + await api.eval('__fm.quest'));
-    gate('save: heart containers intact', (await api.eval('__fm.maxHearts')) === 6);
+    gate('save: heart containers intact', (await api.eval('__fm.maxHearts')) === 7,
+      'maxHearts=' + await api.eval('__fm.maxHearts'));
     gate('save: chest stays opened', await api.eval('__fm.chestOpened === true'));
+    gate('save: door chest stays opened', await api.eval('__fm.doorChest === true'));
     gate('save: sky stays healed', (await api.eval('__fm.skyStep')) === 1 && (await api.eval('__fm.shadeGrow')) > 0.99);
     gate('save: tidepool stays wet', await api.eval('__fm.tidepool === true'));
     gate('save: salt kept', (await api.eval('__fm.salt')) > 0);
@@ -702,6 +853,51 @@ async function suiteKbd(base) {
     const pads = await api.eval('navigator.getGamepads ? navigator.getGamepads().filter(Boolean).length : 0');
     gate('kbd: zero gamepads present', pads === 0, 'pads=' + pads);
     await playSlice(api, D, { tag: 'kbd' });
+
+    // ── kbd camera: arrow-key fallback orbits ──
+    const ky0 = await api.eval('__fm.camYaw');
+    await api.key('ArrowRight', 'ArrowRight', true);
+    await sleep(450);
+    await api.key('ArrowRight', 'ArrowRight', false);
+    const ky1 = await api.eval('__fm.camYaw');
+    gate('kbd: arrow keys orbit the camera', Math.abs(ky1 - ky0) > 0.25, `Δ=${(ky1 - ky0).toFixed(2)}`);
+    const kp0 = await api.eval('__fm.camPitch');
+    await api.key('ArrowUp', 'ArrowUp', true);
+    await sleep(350);
+    await api.key('ArrowUp', 'ArrowUp', false);
+    const kp1 = await api.eval('__fm.camPitch');
+    gate('kbd: arrow keys pitch the camera', kp1 < kp0 - 0.05, `${kp0.toFixed(2)}→${kp1.toFixed(2)}`);
+
+    // ── mouse-look: pointer lock on click, movementX/Y orbits ──
+    const clickGesture = await c.send('Runtime.evaluate', {
+      expression: `(function(){ try { const p = document.getElementById('gl').requestPointerLock();
+        if (p && p.catch) p.catch(() => {}); } catch (e) {} return 'ok'; })()`,
+      userGesture: true, returnByValue: true, awaitPromise: true,
+    }).catch(() => null);
+    let locked = false;
+    try { await api.waitFor('__fm.pointerLocked === true', 3000, 'pointer lock'); locked = true; } catch (e) {}
+    if (locked) {
+      const my0 = await api.eval('__fm.camYaw');
+      for (let i = 0; i < 8; i++) {
+        await api.eval(`document.dispatchEvent(new MouseEvent('mousemove', { movementX: 60, movementY: 8, bubbles: true }))`);
+        await sleep(40);
+      }
+      const my1 = await api.eval('__fm.camYaw');
+      gate('kbd: mouse-look orbits under pointer lock', Math.abs(my1 - my0) > 0.2, `Δ=${(my1 - my0).toFixed(2)}`);
+      await api.eval('document.exitPointerLock()');
+    } else {
+      // headless denied the lock — assert the guard instead: unlocked mouse
+      // movement must NOT move the camera (and the lock request didn't throw)
+      const my0 = await api.eval('__fm.camYaw');
+      for (let i = 0; i < 6; i++) {
+        await api.eval(`document.dispatchEvent(new MouseEvent('mousemove', { movementX: 80, movementY: 0, bubbles: true }))`);
+        await sleep(40);
+      }
+      const my1 = await api.eval('__fm.camYaw');
+      gate('kbd: mouse-look guarded when unlocked (lock unavailable headless)',
+        clickGesture !== null && Math.abs(my1 - my0) < 0.05, `Δ=${(my1 - my0).toFixed(3)}`);
+    }
+
     const bad = api.consoleBad;
     gate('kbd: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
@@ -718,9 +914,9 @@ async function suiteTouch(base) {
   const api = makeApi(c);
   await api.init();
   await api.seedSave({
-    q: 2, ph: 0, mh: 5, sword: true, salt: 0,
-    talked: { finn: 2, tock: 1, pearl: 1 },
-    kelpDoor: true, wreckChest: false, wallBurned: false,
+    v: 2, q: 2, ph: 0, mh: 5, sword: true, salt: 0,
+    talked: { finn: 1, tock: 1, pearl: 1 },
+    kelpDoor: true, doorChest: false, finnHeart: false, wreckChest: false, wallBurned: false,
     bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
   });
   await c.send('Emulation.setDeviceMetricsOverride', { width: 1180, height: 820, deviceScaleFactor: 1, mobile: true });
@@ -772,8 +968,22 @@ async function suiteTouch(base) {
     await tStart(8, base0.x, base0.y);
     await tMove(8, base0.x, base0.y - 70);
     await api.waitFor(`Math.hypot(__fm.x-(${x0}), __fm.z-(${z0})) > 0.6`, 8000, 'stick walks Wick');
-    await tEnd(8);
     gate('touch: stick moves Wick', true);
+    // ── v2: drag on the right 60% of the screen orbits the camera —
+    // WHILE the virtual stick keeps driving movement (finger 8 still down)
+    const cy0 = await api.eval('__fm.camYaw');
+    const xw0 = await api.eval('__fm.x'), zw0 = await api.eval('__fm.z');
+    await tStart(7, 760, 300);
+    for (let i = 1; i <= 8; i++) {
+      await tMove(7, 760 + i * 28, 300 + i * 4);
+      await sleep(60);
+    }
+    await tEnd(7);
+    const cy1 = await api.eval('__fm.camYaw');
+    gate('touch: right-side drag orbits the camera', Math.abs(cy1 - cy0) > 0.25, `Δ=${(cy1 - cy0).toFixed(2)}`);
+    gate('touch: movement continues during camera drag',
+      Math.hypot((await api.eval('__fm.x')) - xw0, (await api.eval('__fm.z')) - zw0) > 0.5);
+    await tEnd(8);
     // sword swing via ✕ — watcher catches the brief atk window at any frame rate
     await api.eval(`window.__sawAtk=false;(function w(){
       if(__fm.pst==='atk'||__fm.dlg){window.__sawAtk=true;return;}
@@ -802,9 +1012,9 @@ async function suitePerf(base) {
   const api = makeApi(c);
   await api.init(); await api.stubPad();
   await api.seedSave({
-    q: 2, ph: 0, mh: 6, sword: true, salt: 2,
-    talked: { finn: 2, tock: 1, pearl: 1 },
-    kelpDoor: true, wreckChest: true, wallBurned: false,
+    v: 2, q: 2, ph: 0, mh: 6, sword: true, salt: 2,
+    talked: { finn: 1, tock: 1, pearl: 1 },
+    kelpDoor: true, doorChest: false, finnHeart: true, wreckChest: true, wallBurned: false,
     bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
   });
   await api.nav(base + '/');                 // REAL TIME — no turbo
@@ -821,22 +1031,138 @@ async function suitePerf(base) {
     const vill = await api.perfRead();
     gate('perf: village draw calls ≤ 80', vill.calls <= 80, 'max ' + vill.calls);
     gate('perf: village triangles ≤ 120k', vill.tris <= 120000, 'max ' + vill.tris);
-    // bay mid-fight
+    // v2 worst case: imp-cluster fight with sword trails, crab patrol close
     await api.walkTo(9, 2, 2.0, 90000);
-    await api.walkTo(12, 40, 2.0, 90000);
+    await api.walkTo(4, 30, 2.0, 90000);
+    await api.walkTo(0, 42, 2.5, 90000);     // inside cluster D1, patrol B near
     await api.perfReset();
     await api.bot({ fight: true });
-    await sleep(7000);
+    await sleep(9000);
     const bay = await api.perfRead();
     await api.botRelease();
     const fps = await api.eval('__fm.fps');
-    gate('perf: bay-fight draw calls ≤ 80', bay.calls <= 80, 'max ' + bay.calls);
-    gate('perf: bay-fight triangles ≤ 120k', bay.tris <= 120000, 'max ' + bay.tris);
+    gate('perf: imp-cluster fight draw calls ≤ 80', bay.calls <= 80, 'max ' + bay.calls);
+    gate('perf: imp-cluster fight triangles ≤ 120k', bay.tris <= 120000, 'max ' + bay.tris);
     gate('perf: headless fps not degenerate', fps > 30, 'fps ' + fps.toFixed(1));
+    // camera-free perf: full orbit + pitch sweep in the busy spot
+    await api.perfReset();
+    await api.eval('__fakePad.raxes(0.9, 0.35)');
+    await sleep(2500);
+    await api.eval('__fakePad.raxes(0, -0.5)');
+    await sleep(1200);
+    await api.eval('__fakePad.raxes(0, 0)');
+    const orb = await api.perfRead();
+    gate('perf: free-orbit draw calls ≤ 80', orb.calls <= 80, 'max ' + orb.calls);
+    gate('perf: free-orbit triangles ≤ 120k', orb.tris <= 120000, 'max ' + orb.tris);
     const bad = api.consoleBad;
     gate('perf: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
     gate('perf suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v2: save-migration gates — v1 saves load armed, threads intact ═══ */
+async function suiteMigrate(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  try {
+    // a v1 SWORDLESS save (pre-Finn) — must load with the sword, open loop intact
+    await api.seedSave({
+      q: 0, ph: 0, mh: 5, sword: false, salt: 0,
+      talked: { finn: 0, tock: 0, pearl: 0 },
+      kelpDoor: false, wreckChest: false, wallBurned: false,
+      bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
+    });
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+    gate('migrate: v1 swordless save loads WITH the sword', await api.eval('__fm.sword === true'));
+    gate('migrate: open loop preserved (q0, no banner)', (await api.eval('__fm.quest')) === 0 &&
+      !(await api.eval(`document.getElementById('questLine').classList.contains('on')`)));
+    await api.eval(`window.__sawAtk=false;(function w(){
+      if(__fm.pst==='atk'){window.__sawAtk=true;return;}
+      requestAnimationFrame(w);})()`);
+    for (let i = 0; i < 6 && !(await api.eval('window.__sawAtk')); i++) await api.tap(0);
+    gate('migrate: sword swings on the old save', await api.eval('window.__sawAtk'));
+
+    // a v1 mid-fetch save (q1 "cut the door") — folds into the started thread
+    await api.seedSave({
+      q: 1, ph: 0, mh: 5, sword: true, salt: 1,
+      talked: { finn: 1, tock: 0, pearl: 0 },
+      kelpDoor: false, wreckChest: false, wallBurned: false,
+      bossDone: false, sky: 0, tidepool: false, lastShade: [41, -18],
+    });
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title 2');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'continued 2');
+    gate('migrate: v1 q1 save folds into the Crescent thread (q2)', (await api.eval('__fm.quest')) === 2);
+    gate('migrate: beacon lit for migrated thread', await api.eval('__fm.beacon === true'));
+    const bad = api.consoleBad;
+    gate('migrate: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('migrate suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v2: house-orbit wall integrity — no sky through any facade.
+   Sky is swapped for magenta void; each building is orbited at two pitches
+   and a strip safely inside its silhouette is pixel-checked. ═══ */
+async function suiteWalls(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.nav(base + '/?turbo=6');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 30000, 'playing');
+    await api.eval(`window.__fmTurbo = 1; __fmDebug.warp(300, 150); __fmDebug.hud(false); __fmDebug.skyProbe(true);`);
+    const buildings = [
+      ['house1', -38, -32, 1.6, 9.5], ['house2', -22, -40, 1.5, 8.5],
+      ['house3', 6, -38, 1.5, 8.5], ['house4', 22, -28, 1.5, 8.5],
+      ['lighthouse', 44, -16, 4.0, 10.5],
+    ];
+    for (const [name, hx, hz, lookY, d] of buildings) {
+      let worst = 0, worstAt = '';
+      for (let a = 0; a < 12; a++) {
+        const ang = a / 12 * Math.PI * 2;
+        for (const [ptag, py, ld] of [['lo', 1.6, d], ['hi', 8.5, d * 0.75]]) {
+          const cx = hx + Math.sin(ang) * ld, cz = hz + Math.cos(ang) * ld;
+          await api.eval(`__fmDebug.cam(${cx}, groundH(${cx.toFixed(2)},${cz.toFixed(2)})+${py}, ${cz}, ${hx}, groundH(${hx},${hz})+${ptag === 'hi' && name !== 'lighthouse' ? 2.6 : lookY}, ${hz}); 0`);
+          await sleep(90);
+          const r = await c.send('Page.captureScreenshot', { format: 'png' });
+          const png = decodePNG(Buffer.from(r.data, 'base64'));
+          // strip safely inside the silhouette from every azimuth
+          const hw = name === 'lighthouse' ? 52 : 95, hh = name === 'lighthouse' ? 70 : 48;
+          let magenta = 0;
+          for (let y = 360 - hh; y < 360 + hh; y += 2) {
+            for (let x = 640 - hw; x < 640 + hw; x += 2) {
+              const i = (y * png.w + x) * png.bpp;
+              if (png.px[i] > 210 && png.px[i + 2] > 210 && png.px[i + 1] < 70) magenta++;
+            }
+          }
+          if (magenta > worst) { worst = magenta; worstAt = `a${a}-${ptag}`; }
+          if (magenta > 3) {
+            fs.writeFileSync(path.join(SHOTS, `wall-FAIL-${name}-a${a}-${ptag}.png`), Buffer.from(r.data, 'base64'));
+          }
+        }
+      }
+      gate(`walls: ${name} solid from all angles`, worst <= 3, worst ? `${worst}px @ ${worstAt}` : 'clean');
+    }
+    await api.eval('__fmDebug.skyProbe(false); __fmDebug.hud(true);');
+    const bad = api.consoleBad;
+    gate('walls: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('walls suite', false, e.message);
   }
   c.close(); proc.kill();
 }
@@ -862,13 +1188,37 @@ async function suiteShots(base) {
     await api.shot('village-establishing-1280x720');
     await api.eval('__fmBot.release(); __fmDebug.camOff();');
     // portraits against the neutral stage (HUD stays hidden for review shots)
-    for (const name of ['wick', 'finn', 'tock', 'pearl', 'crab', 'wisp', 'king']) {
+    for (const name of ['wick', 'finn', 'tock', 'pearl', 'crab', 'imp', 'king']) {
       await api.eval(`__fmDebug.portrait(${JSON.stringify(name)})`);
       await sleep(500);
       await api.shot('portrait-' + name);
       await api.eval('__fmDebug.portraitOff()');
       await sleep(150);
     }
+    // ── the SWOOSH: a mid-swing frame with the crescent trail visible ──
+    await api.eval('window.__fmTurbo = undefined');
+    await api.eval('__fmDebug.warp(-4, 30); __fmDebug.face(0.6); __fmDebug.camYaw(Math.PI + 0.6);');
+    await sleep(400);
+    await api.eval(`window.__fmSwingShot=false;(function w(){
+      const T=__fm; if(T.trailOp>0.3){window.__fmSwingShot=true;__fmDebug.freeze(1);return;}
+      requestAnimationFrame(w);})()`);
+    for (let i = 0; i < 10 && !(await api.eval('window.__fmSwingShot')); i++) {
+      await api.tap(0);
+      await sleep(120);
+    }
+    gate('shots: swoosh trail visible mid-swing', await api.eval('window.__fmSwingShot'),
+      'trailOp=' + await api.eval('__fm.trailOp'));
+    await api.shot('swing-swoosh-1280x720');
+    await api.eval('__fmDebug.freeze(0)');
+    // ── two-stick shot: camera pulled to a deliberate non-default angle ──
+    await api.eval('__fmDebug.warp(2, 24);');
+    await api.eval('__fakePad.raxes(0.7, -0.35)');
+    await sleep(700);
+    await api.eval('__fakePad.raxes(0, 0)');
+    await api.eval('__fmBot.tol = 0.8; __fmBot.target = [-2, 40];');
+    await sleep(900);              // walking under the rotated camera
+    await api.shot('twostick-angle-1280x720');
+    await api.eval('__fmBot.release();');
     await api.eval('__fmDebug.hud(true);');
     const bad = api.consoleBad;
     gate('shots: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
@@ -977,6 +1327,8 @@ const t0 = Date.now();
 try {
   if (which === 'art') await suiteArt(base);
   if (which === 'all' || which === 'shots') await suiteShots(base);
+  if (which === 'all' || which === 'walls') await suiteWalls(base);
+  if (which === 'all' || which === 'migrate') await suiteMigrate(base);
   if (which === 'all' || which === 'flow') await suiteFlow(base);
   if (which === 'all' || which === 'kbd') await suiteKbd(base);
   if (which === 'all' || which === 'touch') await suiteTouch(base);

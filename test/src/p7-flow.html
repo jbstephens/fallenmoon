@@ -18,7 +18,7 @@ function refreshTitleMenu() {
   if (!hasSave) titleFocus = 0;
   el('ti0').classList.toggle('sel', titleFocus === 0);
   el('ti1').classList.toggle('sel', titleFocus === 1);
-  el('tHint').textContent = 'MOVE · ✕ CONFIRM · ○ ROLL · △ MOONGLASS PULSE · START PAUSE      (WASD · J · K · L · P)';
+  el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ ROLL · △ PULSE · START PAUSE      (WASD · MOUSE/ARROWS · J · K · L · P)';
 }
 function tickTitle() {
   titleT += DT;
@@ -52,16 +52,17 @@ function titleCam(now) {
 function applySave() {
   P.maxHearts = SAVE.mh; P.hearts = SAVE.mh;
   P.salt = SAVE.salt;
-  P.sword = SAVE.sword;
-  if (P.sword) wick.sword.group.visible = true;
+  P.sword = SAVE.sword;   // always true post-migration (v2: armed from the start)
+  wick.sword.group.visible = true;
   QUEST.phases = SAVE.ph;
   if (SAVE.kelpDoor) {
     for (const s of doorKelp.stalks) s.cut = true;
     rebuildKelpPatch(doorKelp);
     kelpDoorCut = true;
-    finn.x = 40.4; finn.z = -15.0;
-    finn.char.root.position.set(finn.x, groundH(finn.x, finn.z), finn.z);
-    finn.char.root.rotation.y = -Math.PI / 2 + 0.9;
+  }
+  if (SAVE.doorChest) {
+    doorChest.opened = true;
+    doorChest.lid.rotation.x = -1.9;
   }
   if (SAVE.wallBurned) {
     for (const s of wallKelp.stalks) s.cut = true;
@@ -108,7 +109,8 @@ function refreshPause() {
   el('pi1').classList.toggle('sel', pauseFocus === 1);
   el('pControls').innerHTML =
     '<b>✕</b> SWORD / TALK &nbsp;·&nbsp; <b>○</b> DODGE ROLL &nbsp;·&nbsp; <b>△</b> MOONGLASS PULSE<br>' +
-    '<b>KEYBOARD</b> — WASD MOVE · J SWORD · K ROLL · L PULSE<br>' +
+    '<b>RIGHT STICK</b> CAMERA &nbsp;·&nbsp; TOUCH: DRAG THE RIGHT OF THE SCREEN<br>' +
+    '<b>KEYBOARD</b> — WASD MOVE · MOUSE OR ARROWS CAMERA · J SWORD · K ROLL · L PULSE<br>' +
     'SHADE HEALS. THE SUN DOES NOT.';
 }
 function tickPause() {
@@ -195,8 +197,9 @@ function fmPortrait(name) {
     finn: { who: 'finn', h: 1.28, d: 2.9, look: 1.1 },
     tock: { who: 'tock', h: 1.05, d: 2.6, look: 0.95 },
     pearl: { who: 'pearl', h: 0.72, d: 2.0, look: 0.62 },
-    crab: { who: 'crab', h: 0.6, d: 2.6, look: 0.35 },
-    wisp: { who: 'wisp', h: 1.8, d: 2.4, look: 1.8 },
+    crab: { who: 'crab', h: 0.7, d: 3.2, look: 0.42 },
+    imp: { who: 'wisp', h: 1.85, d: 2.1, look: 1.75 },
+    wisp: { who: 'wisp', h: 1.85, d: 2.1, look: 1.75 },
     king: { who: 'king', h: 2.4, d: 10.5, look: 1.9 },
   };
   const def = defs[name];
@@ -221,10 +224,12 @@ function fmPortrait(name) {
   PORTRAIT.on = true; PORTRAIT.name = name; PORTRAIT.prev = store; PORTRAIT.def = def;
   pstageMesh.visible = true;
   CAM.mode = 'cine';
+  camera.fov = 50; camera.updateProjectionMatrix();   // portrait lens
   return 'ok';
 }
 function fmPortraitOff() {
   if (!PORTRAIT.on) return;
+  camera.fov = 66; camera.updateProjectionMatrix();
   const s = PORTRAIT.prev;
   if (s.px !== undefined) { P.x = s.px; P.z = s.pz; P.heading = s.ph; }
   if (s.npc) { s.npc.x = s.nx; s.npc.z = s.nz; s.npc.baseY = s.nbase; s.npc.char.root.position.set(s.nx, s.ny, s.nz); s.npc.char.root.rotation.y = s.nry; }
@@ -251,7 +256,9 @@ const TL = {
   prompt: null, titleFocus: 0, pauseFocus: 0,
   tidepool: false, shadeGrow: 0, everSun: false, carry: false,
   saveExists: false, bootMs: 0, lowfx: LOWFX,
-  camYaw: 0, cinId: null, cinT: 0,
+  camYaw: 0, camPitch: 0, camStickAge: 99, cinId: null, cinT: 0,
+  trailOp: 0, drawn: false, doorChest: false, finnHeart: false,
+  beacon: false, pointerLocked: false, kelpCutCount: 0,
   bossClawX: 0, bossClawZ: 0, bossX: 0, bossZ: 0,
   nearCrabDist: 999, nearCrabHp: 0, nearWispDist: 999,
   nearCrabX: 0, nearCrabZ: 0, pst: 'idle', iframes: 0, pulseT: 0,
@@ -282,7 +289,16 @@ function syncTelemetry() {
   TL.shadeGrow = shadeGrow;
   TL.everSun = P.everSun; TL.carry = P.carryCrescent;
   TL.saveExists = !!SAVE;
-  TL.camYaw = CAM.yaw;
+  TL.camYaw = CAM.yaw; TL.camPitch = CAM.pitch; TL.camStickAge = CAM.stickAge;
+  TL.trailOp = wick.trail.mesh.visible ? TRAIL_MAT.opacity : 0;
+  TL.drawn = P.drawn;
+  TL.doorChest = doorChest.opened;
+  TL.finnHeart = SAVE ? !!SAVE.finnHeart : false;
+  TL.beacon = beacon.visible;
+  TL.pointerLocked = document.pointerLockElement === glCanvas;
+  let kc = 0;
+  for (const patch of kelpPatches) for (const s of patch.stalks) if (s.cut) kc++;
+  TL.kelpCutCount = kc;
   TL.cinId = CINE.id; TL.cinT = CINE.t;
   const cp = bossClawPos();
   TL.bossClawX = BOSS.st === 'dizzy' ? BOSS.x : (BOSS.slamPos[0] || cp[0]);
@@ -305,7 +321,9 @@ function syncTelemetry() {
   TL.nearCrabDist = ncd; TL.nearCrabHp = nch; TL.nearWispDist = nwd;
 }
 const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
+let SIM_FREEZE = false;   // screenshot staging: halt sim ticks, keep rendering
 window.__fmDebug = {
+  freeze(on) { SIM_FREEZE = !!on; },
   portrait: fmPortrait,
   portraitOff: fmPortraitOff,
   cam(px, py, pz, lx, ly, lz) { FREECAM.on = true; FREECAM.p = [px, py, pz]; FREECAM.l = [lx, ly, lz]; },
@@ -314,6 +332,20 @@ window.__fmDebug = {
   hud(on) { el('hud').style.display = on ? '' : 'none'; },
   face(h) { P.heading = h; },
   camYaw(y) { CAM.yaw = y; },
+  camPitch(p) { CAM.pitch = clamp(p, PITCH_MIN, PITCH_MAX); },
+  // wall-integrity probe: sky off, magenta void — any magenta through a
+  // facade is a winding hole (harness orbit gate)
+  skyProbe(on) {
+    skyDome.visible = !on; sunDisc.visible = !on;
+    if (starMesh) starMesh.visible = !on;
+    if (on) {
+      renderer.setClearColor(0xff00ff, 1);
+      scene.fog.near = 1e7; scene.fog.far = 1e7 + 1;
+    } else {
+      renderer.setClearColor(0x000000, 0);
+      scene.fog.near = FOG0.near; scene.fog.far = FOG0.far;
+    }
+  },
 };
 
 /* ── sim dispatch ── */
@@ -331,11 +363,12 @@ function tickSim() {
       tickBoss();
       tickMirror();
       tickChest();
+      tickDoorChest();
       tickSalt();
       if (IN.pause) { setState('pause'); pauseFocus = 0; refreshPause(); SFX.menu(); }
       break;
     }
-    case 'dialog': tickDialog(); tickChest(); break;
+    case 'dialog': tickDialog(); tickChest(); tickDoorChest(); break;
     case 'pause': tickPause(); break;
     case 'cine':
       tickCine();
@@ -390,12 +423,13 @@ function updateVisuals(dtv, now) {
     beamDown.visible = inGv;
     beamOut.visible = inGv;
     chest.group.visible = near2(chest.x, chest.z, 75);
+    doorChest.group.visible = near2(doorChest.x, doorChest.z, 60);
     wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
     tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);
-    for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = near2(patch.cx, patch.cz, 70);
-    finn.char.root.visible = near2(finn.x, finn.z, 52);
-    tock.char.root.visible = near2(tock.x, tock.z, 52);
-    pearl.char.root.visible = near2(pearl.x, pearl.z, 52);
+    for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = near2(patch.cx, patch.cz, 55);
+    finn.char.root.visible = near2(finn.x, finn.z, 44);
+    tock.char.root.visible = near2(tock.x, tock.z, 44);
+    pearl.char.root.visible = near2(pearl.x, pearl.z, 44);
   }
   // glare overlay
   if (glareA > 0 && state !== 'cine') {
@@ -426,6 +460,8 @@ function updateVisuals(dtv, now) {
     starFlareMat.opacity = tw * 0.28;
     starCoreMesh.scale.setScalar(1 + 0.07 * Math.sin(now / 240));
   }
+  // objective beacon (only once the Crescent thread has started)
+  updateBeacon(now);
   // beams flicker gently
   beamDown.material.opacity = 0.13 + Math.sin(now / 300) * 0.03;
   // crescent carried on Wick's back
@@ -461,12 +497,13 @@ function frame(now) {
       if (n > 5) { n = 5; accMs = 0; } else accMs -= n * 16.6667;
     }
   }
-  if (PORTRAIT.on) n = 0;
+  if (PORTRAIT.on || SIM_FREEZE) n = 0;
   for (let k = 0; k < n; k++) {
     tickSim();
     if (k === 0) clearEdges();       // edges land on exactly one tick
   }
-  if (n === 0) clearEdges();
+  // v2 fix: on 0-tick frames edges LATCH until a tick consumes them — v1
+  // dropped single presses whenever a rAF ran no sim step (high-Hz displays)
   const dtVis = Math.max(dtReal, n * DT);
   updateVisuals(dtVis, now);
   renderer.render(scene, camera);

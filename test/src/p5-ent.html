@@ -52,6 +52,7 @@ function makePS(n, size, hex, additive, gravity) {
         if (gravity) vel[i * 3 + 1] -= 7 * dt;
       }
       geo.attributes.position.needsUpdate = true;
+      pts.visible = live > 0;         // an empty system costs no draw call
       return live;
     },
   };
@@ -64,6 +65,50 @@ function burst(ps, x, y, z, n, spd, up, l) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * TAU, r = Math.random() * spd;
     ps.spawn(x, y, z, Math.cos(a) * r, up + Math.random() * up, Math.sin(a) * r, l * (0.6 + Math.random() * 0.7));
+  }
+}
+
+/* ── objective beacon: a floating moon-mote above the current goal.
+   Appears only after the Crescent thread is started by TALKING to Finn —
+   the open loop spawns with no markers at all (v2 addendum). ── */
+const beacon = (() => {
+  // one mesh, two quads: bright core + dim halo via vertex color (additive
+  // blending makes color intensity read as opacity)
+  const geo = new THREE.BufferGeometry();
+  const quads = [[0.3, 1.0], [0.85, 0.27]];   // [half-size, brightness]
+  const posA = [], uvA = [], colA = [], idxA = [];
+  quads.forEach(([h, b], qi) => {
+    const o = qi * 4;
+    posA.push(-h, -h, 0, h, -h, 0, h, h, 0, -h, h, 0);
+    uvA.push(0, 0, 1, 0, 1, 1, 0, 1);
+    for (let i = 0; i < 4; i++) colA.push(0.85 * b, 0.93 * b, 1.0 * b);
+    idxA.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  });
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posA), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvA), 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colA), 3));
+  geo.setIndex(idxA);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, fog: false,
+  }));
+  m.frustumCulled = false;
+  m.renderOrder = 8;
+  m.visible = false;
+  scene.add(m);
+  return m;
+})();
+function updateBeacon(now) {
+  const inWorld = state === 'play' || state === 'dialog' || state === 'pause';
+  const o = (inWorld && QUEST.q >= 2) ? objectivePoint() : null;
+  if (!o) { beacon.visible = false; return; }
+  beacon.visible = true;
+  const bob = Math.sin(now / 520) * 0.28;
+  beacon.position.set(o.x, groundH(o.x, o.z) + 3.6 + bob, o.z);
+  beacon.quaternion.copy(camera.quaternion);
+  beacon.scale.setScalar(1 + Math.sin(now / 300) * 0.09);
+  if (!LOWFX && Math.random() < 0.05) {
+    psSparkle.spawn(o.x + (Math.random() - 0.5) * 0.4, beacon.position.y - 0.25, o.z + (Math.random() - 0.5) * 0.4, 0, -0.9, 0, 0.9);
   }
 }
 
@@ -81,7 +126,9 @@ function placeNPC(builder, x, z, heading, yOff) {
   scene.add(c.root);
   return { char: c, x, z, home: heading, headT: 0, baseY };
 }
-const finn = placeNPC(buildFinn, 42.6, -16, -Math.PI / 2 - 0.2, 0);
+// v2: Finn is outside from the start, far enough from the kelp door that ✕
+// near the kelp always CUTS (his talk radius must not reach the door)
+const finn = placeNPC(buildFinn, 39.2, -13.6, -Math.PI / 2 + 0.9, 0);
 const tock = placeNPC(buildTock, TOCK_POS.x, TOCK_POS.z, 2.3, 0);
 const pearl = placeNPC(buildPearl, -21.9, -9.0, 0.4, 1.42);
 
@@ -90,13 +137,13 @@ const P = {
   x: 8.2, z: 4.8, y: 0, heading: Math.PI,
   vx: 0, vz: 0, speed: 4.3,
   st: 'idle',                 // idle walk atk roll hit locked
-  atkN: 0, atkT: 0, queued: false, hitDone: false,
-  rollT: 0, rollDx: 0, rollDz: 1,
+  atkN: 0, atkT: 0, atkTotal: 0.3, queued: false, hitDone: false,
+  rollT: 0, rollDx: 0, rollDz: 1, rollBuf: false,
   iframes: 0, hitstop: 0, hitT: 0,
   hearts: 5, maxHearts: 5,
   healT: 0, healTicks: 0,
   shade: true, prevShade: true, everSun: false,
-  sword: false, salt: 0,
+  sword: true, drawn: false, salt: 0,   // v2: armed from the first frame
   pulseT: 0,
   area: 'village',
   sunstruckCount: 0,
@@ -104,35 +151,69 @@ const P = {
 };
 function playerPos() { P.y = groundH(P.x, P.z); return P; }
 
-/* camera */
-const CAM = { yaw: Math.PI, dist: 3.3, shake: 0, x: 0, y: 0, z: 0, ready: false, mode: 'follow' };
+/* ── camera: full two-stick control (v2 — Minecraft/modern-Zelda standard) ──
+   Right stick orbits: yaw free 360°, pitch clamped -25°..+60°. Mouse-look
+   under pointer lock and touch-drag on the right of the screen feed the same
+   orbit. NO autonomous movement while the player has touched the camera in
+   the last 3 s; after that, only a gentle drift behind the walk direction —
+   and never while standing still. */
+const CAM = {
+  yaw: Math.PI, pitch: 0.44, dist: 3.3, shake: 0,
+  x: 0, y: 0, z: 0, ready: false, mode: 'follow',
+  stickAge: 99,
+};
+const PITCH_MIN = -0.436, PITCH_MAX = 1.047;   // -25°..+60°
 const _cv = new THREE.Vector3();
 function updateCamera(dtv) {
   if (CAM.mode !== 'follow') return;
   const inG = inGrottoAt(P.x, P.z);
   const wantDist = inG ? 2.55 : 3.3;
   CAM.dist += (wantDist - CAM.dist) * Math.min(1, dtv * 3);
-  // yaw eases behind movement, with look-ahead
-  const moving = Math.hypot(P.vx, P.vz) > 0.4;
-  if (moving) CAM.yaw = angLerp(CAM.yaw, Math.atan2(P.vx, P.vz) + Math.PI, Math.min(1, dtv * 1.6));
+  // manual orbit inputs (stick/arrows are rates; mouse/touch are deltas)
+  let manual = false;
+  if (state === 'play') {
+    const sx = clamp(IN.cx, -1, 1), sy = clamp(IN.cy, -1, 1);
+    if (sx || sy) {
+      CAM.yaw -= sx * 3.1 * dtv;
+      CAM.pitch += sy * 2.0 * dtv;
+      manual = true;
+    }
+    if (CAMIN.mdx || CAMIN.mdy) {
+      CAM.yaw -= CAMIN.mdx * 0.0034;
+      CAM.pitch += CAMIN.mdy * 0.0026;
+      manual = true;
+    }
+    if (CAMIN.tdx || CAMIN.tdy) {
+      CAM.yaw -= CAMIN.tdx * 0.0085;
+      CAM.pitch += CAMIN.tdy * 0.0065;
+      manual = true;
+    }
+  }
+  CAMIN.mdx = CAMIN.mdy = CAMIN.tdx = CAMIN.tdy = 0;
+  if (manual || CAMIN.touching) CAM.stickAge = 0; else CAM.stickAge += dtv;
+  CAM.pitch = clamp(CAM.pitch, PITCH_MIN, PITCH_MAX);
+  // gentle drift behind the walk — hands-off for 3 s AND walking, never idle
+  const moving = Math.hypot(P.vx, P.vz) > 0.4 && state === 'play' && P.st === 'walk';
+  if (CAM.stickAge > 3 && moving) {
+    CAM.yaw = angLerp(CAM.yaw, Math.atan2(P.vx, P.vz) + Math.PI, Math.min(1, dtv * 0.8));
+  }
   const py = groundH(P.x, P.z);
   const tx = P.x + Math.sin(P.heading) * 0.35, tz = P.z + Math.cos(P.heading) * 0.35;
   const ty = py + (inG ? 1.15 : 1.25);
-  let dx = Math.sin(CAM.yaw), dz = Math.cos(CAM.yaw);
+  const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
+  const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp, dyv = spv;
   let dist = CAM.dist;
-  const upH = inG ? 1.35 : 1.9;
-  // sphere-cast pullback: terrain + grotto ceiling
-  for (let s = 0.25; s <= 1.0; s += 0.15) {
-    const sx = tx + dx * dist * s, sz = tz + dz * dist * s;
-    const gh = groundH(sx, sz);
-    const cy = ty + (upH - 0.1) * s;
-    if (gh + 0.42 > cy) { dist = Math.max(1.1, dist * (s - 0.12)); break; }
+  // sphere-cast pullback: terrain (grotto ceiling clamped after)
+  for (let s = 0.2; s <= 1.0; s += 0.1) {
+    const sx2 = tx + dx * dist * s, sz2 = tz + dz * dist * s;
+    const sy2 = ty + dyv * dist * s;
+    if (groundH(sx2, sz2) + 0.42 > sy2) { dist = Math.max(0.9, dist * (s - 0.1)); break; }
   }
   const cx = tx + dx * dist, cz = tz + dz * dist;
-  let cy = ty + upH * (dist / CAM.dist);
-  cy = Math.max(cy, groundH(cx, cz) + 0.45);
+  let cy = ty + dyv * dist;
+  cy = Math.max(cy, groundH(cx, cz) + 0.4);
   if (inG) cy = Math.min(cy, py + 3.4);
-  const k = CAM.ready ? Math.min(1, dtv * 6.5) : 1;
+  const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 6.5)) : 1;
   CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
   CAM.ready = true;
   camera.position.set(
@@ -176,7 +257,9 @@ function trySwingKelp() {
       if (patch.tag === 'door' && patch.stalks.every(s => s.cut) && !kelpDoorCut) {
         kelpDoorCut = true;
         SAVE.kelpDoor = true; storeSave();
-        onDoorFreed();          // p6 quest hook
+        // the kelp beard falls away — there was a chest under it all along
+        SFX.chime(0.8);
+        burst(psSparkle, doorChest.x, groundH(doorChest.x, doorChest.z) + 0.8, doorChest.z, 12, 1.0, 1.2, 0.9);
       }
     }
   }
@@ -201,9 +284,13 @@ function hurtPlayer(n, fromX, fromZ) {
 
 /* ── the moonglass pulse (△): the sword is a compass ── */
 function objectivePoint() {
-  if (!P.sword) return { x: 42.2, z: -16 };                       // find Finn
-  if (QUEST.q === 1) return { x: 42.2, z: -16 };
-  if (QUEST.q === 2) return BOSS.crescentGiven ? null : { x: GROTTO_B.x, z: GROTTO_B.z };
+  // v2: no objective exists until Finn starts the thread (q0 = open loop)
+  if (QUEST.q === 2) {
+    if (BOSS.crescentGiven) return null;
+    if (!inGrottoAt(P.x, P.z)) return { x: GROTTO_ENT.x, z: GROTTO_ENT.z };
+    if (!wallBurned()) return { x: MIRROR_POS.x, z: MIRROR_POS.z };
+    return { x: GROTTO_B.x, z: GROTTO_B.z };
+  }
   if (QUEST.q === 3) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
   return null;
 }
@@ -261,7 +348,12 @@ function tickPlayer() {
     const sp = 7.2 * smoothstep(clamp(P.rollT / 0.38, 0, 1) + 0.25);
     P.x += P.rollDx * sp * DT; P.z += P.rollDz * sp * DT;
     const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
-    if (P.rollT <= 0) P.st = 'idle';
+    if (IN.atk) P.rollBuf = true;          // v2: attack buffers during the roll
+    if (P.rollT <= 0) {
+      P.st = 'idle';
+      if (P.rollBuf && P.sword) { P.rollBuf = false; startAttack(1); }
+      P.rollBuf = false;
+    }
     return;
   }
   if (P.st === 'atk') {
@@ -271,64 +363,83 @@ function tickPlayer() {
       P.x += Math.sin(P.heading) * 2.4 * DT; P.z += Math.cos(P.heading) * 2.4 * DT;
       const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
     }
-    const total = P.atkN === 3 ? 0.36 : 0.3;
-    const ph = 1 - P.atkT / total;
+    const ph = 1 - P.atkT / P.atkTotal;
     if (!P.hitDone && ph > 0.38) {
       P.hitDone = true;
       swingHits();               // p6 — enemies, boss, kelp
     }
+    // v2: roll CANCELS attack recovery once the hit has landed
+    if (IN.roll && P.hitDone) { startRoll(); return; }
     if (IN.atk && ph > 0.5 && P.atkN < 3) P.queued = true;
     if (P.atkT <= 0) {
       if (P.queued && P.sword) {
-        P.queued = false; P.hitDone = false;
-        P.atkN++; P.atkT = P.atkN === 3 ? 0.36 : 0.3;
-        SFX[P.atkN === 3 ? 'swing3' : 'sword']();
+        P.queued = false;
+        startAttack(P.atkN + 1);
       } else { P.st = 'idle'; P.atkN = 0; }
     }
     return;
   }
 
   // ── free movement ──
-  // camera-relative input
-  let mx = 0, mz = 0;
-  if (IN.mx || IN.my) {
-    const cy2 = CAM.yaw;
-    // camera forward on ground = -(sin,cos) of yaw
-    mx = -IN.my * -Math.sin(cy2) + IN.mx * Math.cos(cy2);
-    mz = -IN.my * -Math.cos(cy2) + IN.mx * -Math.sin(cy2);
-  }
-  const mag = Math.hypot(mx, mz);
+  const mag = moveVec();
   const ctx2 = currentInteract();   // p6: {id, ...} or null
-  if (IN.roll && P.sword) {
-    P.st = 'roll'; P.rollT = 0.38;
-    if (mag > 0.05) { P.rollDx = mx / mag; P.rollDz = mz / mag; }
-    else { P.rollDx = Math.sin(P.heading); P.rollDz = Math.cos(P.heading); }
-    P.heading = Math.atan2(P.rollDx, P.rollDz);
-    SFX.roll();
-    burst(psDust, P.x, groundH(P.x, P.z) + 0.2, P.z, 6, 1.4, 0.9, 0.45);
-    return;
-  }
+  if (IN.roll && P.sword) { startRoll(); return; }
   if (IN.atk) {
     if (ctx2) { doInteract(ctx2); return; }        // context beats swing
     if (P.sword) {
-      P.st = 'atk'; P.atkN = 1; P.atkT = 0.3; P.queued = false; P.hitDone = false;
-      if (mag > 0.05) P.heading = Math.atan2(mx, mz);
-      SFX.sword();
+      if (mag > 0.05) P.heading = Math.atan2(_mv[0], _mv[1]);
+      startAttack(1);
       return;
     }
   }
   if (IN.pulse && P.sword) doPulse();
   if (mag > 0.05) {
     const sp = P.speed * Math.min(1, mag * 1.15);
-    P.vx = mx / mag * sp; P.vz = mz / mag * sp;
+    P.vx = _mv[0] / mag * sp; P.vz = _mv[1] / mag * sp;
     P.x += P.vx * DT; P.z += P.vz * DT;
     const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
-    P.heading = angLerp(P.heading, Math.atan2(mx, mz), 0.28);
+    P.heading = angLerp(P.heading, Math.atan2(_mv[0], _mv[1]), 0.28);
     P.st = 'walk';
   } else {
     P.vx *= 0.7; P.vz *= 0.7;
     P.st = 'idle';
   }
+}
+/* camera-relative move vector for this tick → _mv, returns magnitude */
+const _mv = [0, 0];
+function moveVec() {
+  _mv[0] = 0; _mv[1] = 0;
+  if (IN.mx || IN.my) {
+    const cy2 = CAM.yaw;
+    // camera forward on ground = -(sin,cos) of yaw
+    _mv[0] = -IN.my * -Math.sin(cy2) + IN.mx * Math.cos(cy2);
+    _mv[1] = -IN.my * -Math.cos(cy2) + IN.mx * -Math.sin(cy2);
+  }
+  return Math.hypot(_mv[0], _mv[1]);
+}
+function startAttack(n) {
+  P.st = 'atk'; P.atkN = n; P.queued = false; P.hitDone = false;
+  if (!P.drawn) {
+    // the first ✕ of the session DRAWS the sword — a flourish off the back
+    P.drawn = true;
+    P.atkTotal = 0.46;
+    SFX.draw();
+    burst(psSparkle, P.x, groundH(P.x, P.z) + 1.5, P.z, 14, 1.3, 1.1, 0.7);
+    rumble({ duration: 120, strong: 0.2, weak: 0.4 });
+  } else {
+    P.atkTotal = n === 3 ? 0.36 : 0.3;
+    SFX[n === 3 ? 'swing3' : 'sword']();
+  }
+  P.atkT = P.atkTotal;
+}
+function startRoll() {
+  const mag = moveVec();
+  P.st = 'roll'; P.rollT = 0.38; P.rollBuf = false;
+  if (mag > 0.05) { P.rollDx = _mv[0] / mag; P.rollDz = _mv[1] / mag; }
+  else { P.rollDx = Math.sin(P.heading); P.rollDz = Math.cos(P.heading); }
+  P.heading = Math.atan2(P.rollDx, P.rollDz);
+  SFX.roll();
+  burst(psDust, P.x, groundH(P.x, P.z) + 0.2, P.z, 6, 1.4, 0.9, 0.45);
 }
 
 /* ── procedural character animation ── */
@@ -448,8 +559,7 @@ function animateWick(dtv, now) {
     return;
   }
   if (P.st === 'atk') {
-    const total = P.atkN === 3 ? 0.36 : 0.3;
-    const ph = 1 - P.atkT / total;
+    const ph = 1 - P.atkT / P.atkTotal;
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: 0.4 });
     poseAttack(c, P.atkN, ph);
     swordToHand(true);
@@ -458,13 +568,13 @@ function animateWick(dtv, now) {
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
     poseRoll(c, 1 - P.rollT / 0.38);
     swordToHand(false);
-    c.trail.mesh.visible = false;
+    fadeTrail(dtv);
   } else if (P.st === 'hit') {
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
     c.torso.rotation.x = -0.25;
     c.shL.rotation.x = -0.7; c.shR.rotation.x = -0.7;
     swordToHand(false);
-    c.trail.mesh.visible = false;
+    fadeTrail(dtv);
   } else if (state === 'cine' && CINE.id === 'sunstruck') {
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
     poseCrumple(c, CINE.t * 1.4);
@@ -483,14 +593,16 @@ function animateWick(dtv, now) {
     else idleSettle = 0;
     const k = smoothstep(idleSettle);
     if (k > 0.01) {
+      // relaxed hero stance: weight shift + right hand resting NEAR the hip
+      // (v2: arm stays clear of the torso so the silhouette stays readable)
       c.pelvis.rotation.z = 0.05 * k;
       c.torso.rotation.z = -0.035 * k;
       c.hipR.rotation.x += -0.1 * k;
       c.kneeR.rotation.x += 0.22 * k;
       c.hipL.rotation.x += 0.02 * k;
-      c.shR.rotation.x += -0.5 * k;
-      c.shR.rotation.z += -0.12 * k;
-      c.elR.rotation.x += -0.85 * k;
+      c.shR.rotation.x += -0.22 * k;
+      c.shR.rotation.z += -0.16 * k;
+      c.elR.rotation.x += -0.42 * k;
       c.shL.rotation.z += 0.1 * k;
       c.head.rotation.z = 0.03 * k;
     } else {
@@ -499,7 +611,7 @@ function animateWick(dtv, now) {
       c.head.rotation.z *= 0.8;
     }
     swordToHand(false);
-    c.trail.mesh.visible = false;
+    fadeTrail(dtv);
   }
   // moonglass glow: △-pulse, plus passive proximity to the Crescent itself
   let near = 0;
@@ -523,29 +635,46 @@ function swordToHand(inHand) {
     c.sword.group.rotation.set(0, 0, 0);
   }
 }
-/* glass-blade arc trail */
+/* glass-blade crescent arc trail — the SWOOSH. Additive, and it lingers:
+   when the swing ends the last crescent fades out over ~120 ms. */
+let trailFadeT = 0;
 function updateTrail(ph) {
   const tr = wick.trail;
-  const on = ph > 0.3 && ph < 0.78;
-  tr.mesh.visible = on;
-  if (!on) return;
+  const on = ph > 0.26 && ph < 0.84;
+  if (!on) { fadeTrail(1 / 60); return; }
+  tr.mesh.visible = true;
   if (!tr.mesh.parent) scene.add(tr.mesh);
-  const k = (ph - 0.3) / 0.48;
+  const k = (ph - 0.26) / 0.58;
   const n = P.atkN;
+  const big = n === 3;                        // combo finisher: bigger everything
   const arcC = n === 2 ? -1 : 1;
-  const a0 = P.heading + arcC * (1.35 - k * 2.5) - 0.5 * arcC;
-  const y0 = groundH(P.x, P.z) + (n === 3 ? 1.5 - k * 0.9 : 1.05);
+  const a0 = P.heading + arcC * (1.45 - k * 2.7) - 0.5 * arcC;
+  const y0 = groundH(P.x, P.z) + (big ? 1.5 - k * 0.9 : 1.05);
+  const r0 = 0.32, r1 = big ? 2.0 : 1.6;
   for (let i = 0; i < tr.segs; i++) {
     const t = i / (tr.segs - 1);
-    const a = a0 + arcC * t * 1.5;
-    const r0 = 0.35, r1 = 1.55;
+    const a = a0 + arcC * t * (big ? 1.7 : 1.5);
     const sx = Math.sin(a), cz2 = Math.cos(a);
-    const yy = n === 3 ? y0 + t * 0.5 : y0 + Math.sin(t * 3.14) * 0.06;
-    tr.pos[i * 6] = P.x + sx * r0; tr.pos[i * 6 + 1] = yy; tr.pos[i * 6 + 2] = P.z + cz2 * r0;
-    tr.pos[i * 6 + 3] = P.x + sx * r1; tr.pos[i * 6 + 4] = yy + 0.06; tr.pos[i * 6 + 5] = P.z + cz2 * r1;
+    // crescent: the band widens mid-arc and tapers at the tips
+    const cres = Math.sin(t * Math.PI);
+    const rIn = r1 - (r1 - r0) * (0.28 + cres * 0.5);   // thin crescent band, fat mid-arc
+    const yy = big ? y0 + t * 0.55 : y0 + Math.sin(t * 3.14) * 0.07;
+    tr.pos[i * 6] = P.x + sx * rIn; tr.pos[i * 6 + 1] = yy; tr.pos[i * 6 + 2] = P.z + cz2 * rIn;
+    tr.pos[i * 6 + 3] = P.x + sx * r1; tr.pos[i * 6 + 4] = yy + (big ? 0.09 : 0.06); tr.pos[i * 6 + 5] = P.z + cz2 * r1;
   }
   tr.mesh.geometry.attributes.position.needsUpdate = true;
-  TRAIL_MAT.opacity = 0.5 * (1 - Math.abs(k - 0.5) * 1.6);
+  TRAIL_MAT.opacity = (big ? 0.62 : 0.48) * (1 - Math.abs(k - 0.5) * 1.2);
+  trailFadeT = 0.12;
+}
+function fadeTrail(dtv) {
+  const tr = wick.trail;
+  if (!tr.mesh.visible) return;
+  trailFadeT -= dtv;
+  TRAIL_MAT.opacity = Math.max(0, TRAIL_MAT.opacity - dtv * 4.5);
+  if (trailFadeT <= 0 || TRAIL_MAT.opacity <= 0.02) {
+    tr.mesh.visible = false;
+    TRAIL_MAT.opacity = 0;
+  }
 }
 
 /* NPC idle animation */

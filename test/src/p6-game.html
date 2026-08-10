@@ -1,11 +1,13 @@
 <script>
 /* ═══════════════════ p6 — enemies, boss, dialogue, quests, cinematics ═══════════════════ */
 
-/* ── quest state ── */
+/* ── quest state ──
+   v2 OPEN LOOP: q0 is free play — NO banner, NO beacon, no directive text.
+   The Crescent thread (q2) starts only when the player chooses to talk to
+   Finn. q1 (v1's door-cut fetch) no longer exists; old saves migrate. */
 const QUEST = { q: 0, phases: 0 };
 const QUEST_TEXT = {
   0: '',
-  1: 'CUT KEEPER FINN’S DOOR FREE',
   2: 'RECOVER THE CRESCENT HORN — 0/8 PHASES RESTORED',
   3: 'CARRY THE CRESCENT TO THE MOONWHEEL',
   4: '1/8 PHASES RESTORED',
@@ -23,36 +25,27 @@ function setQuest(q) {
 let glareA = 0, glareDecay = 1;
 function flashGlare(op, dur) { glareA = Math.max(glareA, op); glareDecay = op / Math.max(0.15, dur); }
 
-/* ── dialogue ── */
+/* ── dialogue — v2: every beat ≤2 short lines, all skippable, all optional ── */
 const DLG = {
   finn1: { name: 'KEEPER FINN', lines: [
-    'A lighthouse in endless day is just... stairs.',
-    'The door’s grown a beard of kelp, and my knees are past arguing with it.',
-    'Catch — mind the glass. Cut me loose.',
-  ], onDone: () => giveSword() },
-  finnCut: { name: 'KEEPER FINN', lines: ['The kelp, lad. Swing that ancient thing.'] },
-  finn2: { name: 'KEEPER FINN', lines: [
-    'Hah. Air. Still hot as a kettle, mind.',
-    'Eight sockets on that hill. Eight fallen phases. The Crescent came down in the bay.',
-    'And the bay’s gone dry, so — walk out and get it. Keep to the shade.',
-  ], onDone: () => setQuest(2) },
+    'A lighthouse in endless day is just... stairs. But that glass on your back still listens.',
+    'The CRESCENT fell in the dry bay — press △ and the sword points. Here. I kept this for you.',
+  ], onDone: () => { grantFinnHeart(); setQuest(2); } },
   finnWait: { name: 'KEEPER FINN', lines: [
     'Shade heals. Sun doesn’t. That’s the whole trick to the bay.',
-  ] },
+  ], onDone: () => grantFinnHeart() },
   finnCarry: { name: 'KEEPER FINN', lines: [
     'That’s IT. That’s a piece of the moon. Up the hill — the wheel’s waited a year.',
-  ] },
+  ], onDone: () => grantFinnHeart() },
   finn3: { name: 'KEEPER FINN', lines: [
     'One notch. Listen — the whole hill is humming.',
-    'The Half Shield fell past the Parched Forest. They say the tide follows it home.',
-    'Rest first. Or don’t — it’s not like it gets dark.',
+    'The Half Shield fell past the Parched Forest. Rest first. Or don’t — it’s not like it gets dark.',
   ], onDone: () => showTBC() },
   finnPost: { name: 'KEEPER FINN', lines: [
     'Seven to go. The tide follows them home, they say.',
-  ] },
+  ], onDone: () => grantFinnHeart() },
   tock1: { name: 'GRANNY TOCK', lines: [
-    '...four thousand and one. Four thousand and two.',
-    'Counting seconds, dear. Somebody has to remember what time was.',
+    '...four thousand and two. Counting seconds, dear — somebody has to remember what time was.',
     'Sleep? When it’s dark. So — never.',
   ] },
   tock2: { name: 'GRANNY TOCK', lines: ['...four thousand and nine. Don’t tangle my wool, dear.'] },
@@ -62,10 +55,9 @@ const DLG = {
   ] },
   pearl1: { name: 'PEARL', lines: [
     'Grown-ups say lights used to live in the night sky. Stars.',
-    'I think they made it up.',
-    '...they made it up, right?',
+    'They made that up. ...right?',
   ] },
-  pearl2: { name: 'PEARL', lines: ['The sea was RIGHT here. Dad says I paddled in it. I don’t remember it.'] },
+  pearl2: { name: 'PEARL', lines: ['The sea was RIGHT here. Dad says I paddled in it.'] },
   pearlStar: { name: 'PEARL', lines: [
     'It’s real. It’s REAL, and it’s looking at me.',
     'Get the others, Wick. Get ALL of them.',
@@ -104,7 +96,6 @@ function tickDialog() {
 }
 function markTalked(id) {
   if (id === 'finn1') { SAVE.talked.finn = Math.max(SAVE.talked.finn, 1); }
-  if (id === 'finn2') { SAVE.talked.finn = Math.max(SAVE.talked.finn, 2); }
   if (id === 'tock1') SAVE.talked.tock = 1;
   if (id === 'pearl1') SAVE.talked.pearl = 1;
   storeSave();
@@ -120,36 +111,35 @@ function itemToast(big, small) {
   t.classList.add('show');
 }
 
-/* ── sword bestowal ── */
-function giveSword() {
-  P.sword = true;
-  SAVE.sword = true; storeSave();
-  wick.sword.group.visible = true;
+/* ── Finn's heart container (v2: his beat is flavor + tutorial + this gift;
+   granted from whichever chat happens first — migration-safe) ── */
+function grantFinnHeart() {
+  if (SAVE.finnHeart) return;
+  SAVE.finnHeart = true;
+  P.maxHearts = Math.min(8, P.maxHearts + 1);
+  P.hearts = P.maxHearts;
+  SAVE.mh = P.maxHearts; storeSave();
   itemGetT = 0;
-  itemToast('THE MOONGLASS SWORD', 'It glows when a piece of the moon is near. △ to pulse.');
-  SFX.itemGet();
-  rumble({ duration: 300, strong: 0.4, weak: 0.6 });
-  setQuest(1);
-}
-function onDoorFreed() {
-  // Finn steps out, then delivers the quest
-  startCine('finnOut');
+  itemToast('HEART CONTAINER', 'Finn kept it safe through the long noon.');
+  SFX.heart();
+  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
 }
 
-/* ── interactions ── */
+/* ── interactions — v2: nothing is quest-gated; prompts appear only when
+   the player walks up (story is a thing you WALK UP TO) ── */
 function currentInteract() {
   if (!P) return null;
   const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
   if (QUEST.q === 3 && P.carryCrescent && near(WHEEL_POS.x, WHEEL_POS.z, 5.2))
     return { id: 'wheel', label: '✕ PLACE THE CRESCENT' };
-  if (!chest.opened && QUEST.q >= 2 && near(chest.x, chest.z, 1.7))
+  if (!chest.opened && near(chest.x, chest.z, 1.7))
     return { id: 'chest', label: '✕ OPEN' };
+  if (!doorChest.opened && kelpDoorCut && near(doorChest.x, doorChest.z, 1.8))
+    return { id: 'doorChest', label: '✕ OPEN' };
   for (const [npc, tag, rad] of [[finn, 'finn', 2.4], [tock, 'tock', 2.4], [pearl, 'pearl', 2.9]]) {
-    // while Finn is still kelped in and you hold the sword, ✕ must CUT, not chat
-    if (tag === 'finn' && QUEST.q === 1 && !kelpDoorCut) continue;
     if (near(npc.x, npc.z, rad)) return { id: 'talk', npc, tag, label: '✕ TALK' };
   }
-  if (!wallBurned() && QUEST.q >= 2 && near(MIRROR_POS.x, MIRROR_POS.z, 2.4))
+  if (!wallBurned() && near(MIRROR_POS.x, MIRROR_POS.z, 2.4))
     return { id: 'mirror', label: 'HOLD ✕ — TURN THE SHELL' };
   return null;
 }
@@ -159,11 +149,10 @@ function doInteract(ctx) {
     const t = ctx.tag;
     let id;
     if (t === 'finn') {
-      if (!P.sword && QUEST.q === 0) id = 'finn1';
-      else if (QUEST.q === 1) id = 'finnCut';
-      else if (QUEST.q === 2) id = 'finnWait';
+      if (QUEST.q >= 4) id = 'finnPost';
       else if (QUEST.q === 3) id = 'finnCarry';
-      else id = 'finnPost';
+      else if (!SAVE.talked.finn) id = 'finn1';    // THIS starts the Crescent thread
+      else id = 'finnWait';
     } else if (t === 'tock') {
       if (QUEST.q >= 4) id = 'tockDusk';
       else id = SAVE.talked.tock ? 'tock2' : 'tock1';
@@ -174,10 +163,34 @@ function doInteract(ctx) {
     startDialog(id, ctx.npc);
   } else if (ctx.id === 'chest') {
     openChest();
+  } else if (ctx.id === 'doorChest') {
+    openDoorChest();
   } else if (ctx.id === 'wheel') {
     startCine('wheel');
   }
   // mirror: nothing on press — it's a hold
+}
+
+/* lighthouse-door chest — a salt cache for the curious slasher */
+let doorChestAnimT = -1;
+function openDoorChest() {
+  doorChest.opened = true;
+  SAVE.doorChest = true; storeSave();
+  doorChestAnimT = 0;
+  SFX.chestOpen();
+}
+function tickDoorChest() {
+  if (doorChestAnimT < 0) return;
+  doorChestAnimT += DT;
+  doorChest.lid.rotation.x = -smoothstep(clamp(doorChestAnimT / 0.5, 0, 1)) * 1.9;
+  if (doorChestAnimT > 0.65) {
+    doorChestAnimT = -1;
+    P.salt += 4;
+    SAVE.salt = P.salt; storeSave();
+    itemToast('SALT CACHE', 'Four crystals, dry as bone. Finn hoards the strangest things.');
+    SFX.pickup();
+    burst(psSparkle, doorChest.x, groundH(doorChest.x, doorChest.z) + 0.8, doorChest.z, 14, 1.2, 1.3, 0.9);
+  }
 }
 
 /* chest + heart container */
@@ -285,10 +298,16 @@ function tickMirror() {
   }
 }
 
-/* ═══════════ ENEMIES ═══════════ */
+/* ═══════════ ENEMIES — v2: fighting is the default activity.
+   3 crab patrols + a first crab scuttling ~20 s from spawn, and 4 sun-imp
+   clusters across the bay. Everything respawns on area re-entry. ═══════════ */
 const crabs = [
-  { x: -8, z: 44 }, { x: 18, z: 56 }, { x: -26, z: 66 }, { x: 40, z: 74 },
-  { x: 24, z: 116 }, { x: 38, z: 120 },
+  // patrol A — the quay gap, the open loop's first crab
+  { x: 10, z: 27 }, { x: 20, z: 39 },
+  // patrol B — mid-bay kelp forests
+  { x: -8, z: 44 }, { x: 0, z: 54 }, { x: -20, z: 52 },
+  // patrol C — outer bay & the grotto approach
+  { x: 32, z: 66 }, { x: 42, z: 76 }, { x: 24, z: 116 }, { x: 38, z: 120 },
 ].map(s => ({
   c: buildScorchCrab(), sx: s.x, sz: s.z, x: s.x, z: s.z, hp: 3,
   st: 'patrol', t: Math.random() * 3, ang: 0, dir: [1, 0], dead: false, area: 'bay',
@@ -296,13 +315,26 @@ const crabs = [
 }));
 for (const cr of crabs) { cr.c.root.position.set(cr.x, groundH(cr.x, cr.z), cr.z); scene.add(cr.c.root); }
 
+function mkImp(x, z) {
+  return {
+    m: buildSunImp(), sx: x, sz: z, x, z, y: 0, face: 0,
+    st: 'drift', t: Math.random() * 2, dir: [0, 0, 0], dead: false, area: 'bay',
+  };
+}
 const wisps = [
-  { x: 0, z: 60 }, { x: -36, z: 84 }, { x: 30, z: 90 },
-].map(s => ({
-  m: buildWisp(), sx: s.x, sz: s.z, x: s.x, z: s.z, y: 0,
-  st: 'drift', t: Math.random() * 2, dir: [0, 0, 0], dead: false, area: 'bay',
-}));
+  // cluster D1 — over the first dune from spawn (deep enough that they are
+  // never co-visible with the village NPCs: draw-call budget)
+  [0, 48], [-5, 52], [4, 53],
+  // D2 — mid-bay east
+  [26, 56], [31, 61], [22, 62],
+  // D3 — the wreck approach
+  [-34, 78], [-29, 83], [-38, 84],
+  // D4 — deep bay, before the grotto
+  [16, 92], [21, 97], [12, 98],
+].map(p => mkImp(p[0], p[1]));
 for (const w of wisps) { w.y = groundH(w.x, w.z) + 1.8; w.m.root.position.set(w.x, w.y, w.z); scene.add(w.m.root); }
+/* squash-pop corpses mid-animation (render-frame driven) */
+const impPops = [];
 
 function areaAt(x, z) {
   if (inGrottoAt(x, z)) return 'grotto';
@@ -321,6 +353,7 @@ function respawnLeftBehind() {
       w.dead = false; w.st = 'drift'; w.x = w.sx; w.z = w.sz;
       w.y = groundH(w.x, w.z) + 1.8;
       w.m.root.visible = true;
+      w.m.root.scale.setScalar(1);
     }
   }
 }
@@ -356,14 +389,14 @@ function tickCrab(cr) {
     }
   } else if (cr.st === 'lunge') {
     cr.x += cr.dir[0] * 7.5 * DT; cr.z += cr.dir[1] * 7.5 * DT;
-    const c = collide(cr.x, cr.z, 0.5); cr.x = c[0]; cr.z = c[1];
-    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.05) hurtPlayer(1, cr.x, cr.z);
+    const c = collide(cr.x, cr.z, 0.6); cr.x = c[0]; cr.z = c[1];
+    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3) hurtPlayer(1, cr.x, cr.z);
     if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
   } else if (cr.st === 'recover') {
     if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
   }
   // soft push so it never overlaps the player standing still
-  if (d2p < 1.1 && cr.st !== 'lunge') {
+  if (d2p < 1.35 && cr.st !== 'lunge') {
     const d = d2p || 1;
     cr.x -= (P.x - cr.x) / d * 1.2 * DT; cr.z -= (P.z - cr.z) / d * 1.2 * DT;
   }
@@ -401,27 +434,32 @@ function hitCrab(cr) {
   }
 }
 
-function tickWisp(w) {
+function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
   if (w.dead) return;
   w.t += DT;
   const gy = groundH(w.x, w.z);
-  if (inShadeAt(w.x, w.z) && w.st !== 'pop') {
-    // shade pops wisps into harmless sparkles — the theme as a mechanic
+  // shade fizzles imps into harmless sparkles — the theme as a mechanic.
+  // Boss-arena imps are exempt (the whole grotto counts as shade; the King's
+  // sun-madness sustains them — otherwise phase-3 adds die at spawn).
+  if (w.area !== 'boss' && inShadeAt(w.x, w.z) && w.st !== 'pop') {
     popWisp(w);
     return;
   }
   const d2p = Math.hypot(P.x - w.x, P.z - w.z);
+  const faceP = () => { w.face = Math.atan2(P.x - w.x, P.z - w.z); };
   if (w.st === 'drift') {
     w.y = gy + 1.8 + Math.sin(w.t * 2.2) * 0.25;
     if (d2p > 1.5 && d2p < 16) {
       const d = d2p || 1;
       w.x += (P.x - w.x) / d * 1.25 * DT;
       w.z += (P.z - w.z) / d * 1.25 * DT;
+      faceP();
     }
-    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; }
+    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; SFX.chirp(); }   // rear-up + chirp
   } else if (w.st === 'tele') {
-    w.y = gy + 2.1 + Math.sin(w.t * 18) * 0.06;
-    if (w.t > 0.5) {
+    faceP();
+    w.y = gy + 2.15 + Math.sin(w.t * 18) * 0.06;
+    if (w.t > 0.55) {
       w.st = 'dive'; w.t = 0;
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - w.x, dy = ty - w.y, dz = P.z - w.z;
@@ -431,20 +469,21 @@ function tickWisp(w) {
     }
   } else if (w.st === 'dive') {
     w.x += w.dir[0] * DT; w.y += w.dir[1] * DT; w.z += w.dir[2] * DT;
-    if (Math.hypot(P.x - w.x, P.z - w.z) < 0.8 && Math.abs(w.y - (groundH(P.x, P.z) + 1.0)) < 1.0) {
+    if (Math.hypot(P.x - w.x, P.z - w.z) < 0.85 && Math.abs(w.y - (groundH(P.x, P.z) + 1.0)) < 1.0) {
       hurtPlayer(1, w.x, w.z);
       w.st = 'drift'; w.t = 0;
     }
     if (w.y < gy + 0.25 || w.t > 1.1) { w.st = 'drift'; w.t = 0; }
   }
-  // sword pops them
-  if (P.st === 'atk' && P.hitDone === false) { /* handled in swingHits */ }
 }
 function popWisp(w) {
+  // squash-pop: two frames of squash, then a sparkle burst — kill feedback
   w.dead = true;
-  w.m.root.visible = false;
-  burst(psSpark, w.x, w.y, w.z, 14, 1.6, 0.8, 0.7);
+  impPops.push({ m: w.m, t: 0 });
+  burst(psSpark, w.x, w.y, w.z, 16, 1.9, 1.0, 0.7);
+  burst(psSparkle, w.x, w.y, w.z, 10, 1.3, 0.7, 0.8);
   SFX.pop();
+  rumble({ duration: 60, strong: 0.25, weak: 0.35 });
 }
 
 /* ═══════════ THE SUNSTRUCK KING-CRAB ═══════════ */
@@ -597,12 +636,14 @@ function tickBoss() {
       const wx = GROTTO_B.x + Math.sin(a) * 8, wz = GROTTO_B.z + Math.cos(a) * 8;
       let w = wisps.find(q => q.area === 'boss' && q.dead);
       if (!w) {
-        w = { m: buildWisp(), sx: wx, sz: wz, x: wx, z: wz, y: 0, st: 'drift', t: 0, dir: [0, 0, 0], dead: false, area: 'boss' };
+        w = mkImp(wx, wz);
+        w.area = 'boss';
         scene.add(w.m.root);
         wisps.push(w);
       }
       w.dead = false; w.st = 'drift'; w.x = wx; w.z = wz; w.y = groundH(wx, wz) + 2;
       w.m.root.visible = true;
+      w.m.root.scale.setScalar(1);
       SFX.pop();
     }
   }
@@ -636,7 +677,7 @@ function swingHits() {
   let any = trySwingKelp();
   for (const cr of crabs) {
     if (cr.dead) continue;
-    if (inSwingArc(cr.x, cr.z, 1.9)) { hitCrab(cr); any = true; }
+    if (inSwingArc(cr.x, cr.z, 2.25)) { hitCrab(cr); any = true; }   // generous v2 hitbox
   }
   for (const w of wisps) {
     if (w.dead) continue;
@@ -665,8 +706,6 @@ function startCine(id) {
   } else if (id === 'sunstruck') {
     P.sunstruckCount++;
   } else if (id === 'wake') {
-    CAM.mode = 'cine';
-  } else if (id === 'finnOut') {
     CAM.mode = 'cine';
   }
 }
@@ -720,19 +759,6 @@ function tickCine() {
       glareEl.style.opacity = String(Math.max(0, 1 - (t - 0.9) * 1.1));
       if (t > 2.0) { glareEl.style.opacity = '0'; endCine(); }
     }
-    return;
-  }
-  if (CINE.id === 'finnOut') {
-    // Finn walks out of the freed doorway
-    const t0 = clamp(t / 1.6, 0, 1);
-    finn.x = lerp(42.6, 40.4, smoothstep(t0));
-    finn.z = lerp(-16, -15.0, smoothstep(t0));
-    finn.char.root.position.set(finn.x, groundH(finn.x, finn.z), finn.z);
-    finn.char.root.rotation.y = -Math.PI / 2 + smoothstep(t0) * 0.9;
-    poseHumanoid(finn.char, 'walk', DT, 1.4, { stoop: 0.1 });
-    cineCam(finn.x - 4.5, groundH(finn.x, finn.z) + 2.2, finn.z + 3.5,
-      finn.x, groundH(finn.x, finn.z) + 1.4, finn.z);
-    if (t >= 1.8) { endCine(); startDialog('finn2', finn); }
     return;
   }
   if (CINE.id === 'bossDefeat') { tickBossDefeat(t); return; }
@@ -1029,45 +1055,88 @@ function animateBoss(dtv, now) {
   B.c.crescent.material.opacity = B.flash > 0 ? 0.55 + Math.sin(now / 30) * 0.4 : 0.95;
   B.c.crescentHalo.material.opacity = B.flash > 0 ? 0.5 : 0.09 + 0.06 * Math.sin(now / 480);
 }
-/* crab + wisp render-frame animation */
+/* crab + sun-imp render-frame animation */
 function animateEnemies(dtv, now) {
   const w = now / 1000;
   const ccx = camera.position.x, ccz = camera.position.z;
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
   for (const cr of crabs) {
     if (cr.dead) continue;
-    const vis = near2(cr.x, cr.z, 45);
+    const cdx = cr.x - ccx, cdz = cr.z - ccz;
+    const cd2 = cdx * cdx + cdz * cdz;
+    const vis = cd2 < 38 * 38;
     cr.c.root.visible = vis;
     if (!vis) continue;
+    // LOD: beyond 22 m only the shell + shadow draw (limbs are subpixel soup)
+    const lodFar = cd2 > 22 * 22;
+    cr.c.clawL.armN.visible = !lodFar;
+    cr.c.clawR.armN.visible = !lodFar;
+    cr.c.legs.visible = !lodFar;
     const y = groundH(cr.x, cr.z);
     cr.c.root.position.set(cr.x, y, cr.z);
     cr.c.root.rotation.y = cr.ang;
     const moving = cr.st === 'patrol' || cr.st === 'aggro' || cr.st === 'lunge';
     const la = moving ? Math.sin(w * (cr.st === 'lunge' ? 26 : 14) + cr.sx) * 0.16 : 0;
-    cr.c.legL.rotation.x = la; cr.c.legR.rotation.x = -la;
+    cr.c.legs.rotation.x = la;
     if (cr.st === 'tele') {
-      cr.c.clawL.armN.rotation.x = -1.1 + Math.sin(w * 34) * 0.08;
-      cr.c.clawR.armN.rotation.x = -1.1 - Math.sin(w * 34) * 0.08;
-      cr.c.body.position.y = 0.22 + 0.06;
+      // the READ: the oversized claw hoists high and rattles
+      cr.c.clawL.armN.rotation.x = -1.35 + Math.sin(w * 34) * 0.1;
+      cr.c.clawR.armN.rotation.x = -0.9 - Math.sin(w * 34) * 0.08;
+      cr.c.body.position.y = 0.22 + 0.07;
+      cr.c.body.rotation.x = -0.12;
     } else {
       cr.c.clawL.armN.rotation.x = Math.sin(w * 2.2 + cr.sx) * 0.1;
       cr.c.clawR.armN.rotation.x = Math.sin(w * 2.2 + cr.sx + 1) * 0.1;
       cr.c.body.position.y = 0.22 + (moving ? Math.abs(Math.sin(w * 14)) * 0.03 : 0);
+      cr.c.body.rotation.x *= 0.85;
     }
-    cr.c.body.scale.setScalar(cr.flash > 0 ? 1.12 : 1);
+    cr.c.body.scale.setScalar(cr.flash > 0 ? 1.1 : 1);
+    // shell-flash on hit
+    cr.c.flashM.visible = cr.flash > 0;
+    if (cr.flash > 0) cr.c.flashM.material.opacity = 0.4 + Math.sin(now / 24) * 0.3;
     cr.c.shadow.scale.setScalar(1 + shadeGrow * 0.25);
   }
   for (const ws of wisps) {
     if (ws.dead) continue;
-    const vis = near2(ws.x, ws.z, 45);
+    const wdx = ws.x - ccx, wdz = ws.z - ccz;
+    const wd2 = wdx * wdx + wdz * wdz;
+    const vis = wd2 < 38 * 38;
     ws.m.root.visible = vis;
     if (!vis) continue;
+    ws.m.wings.visible = wd2 < 22 * 22;   // LOD: wings fade past 22 m
     ws.m.root.position.set(ws.x, ws.y, ws.z);
-    const pulse = 1 + Math.sin(w * (ws.st === 'tele' ? 22 : 5) + ws.sx) * (ws.st === 'tele' ? 0.3 : 0.12);
-    ws.m.root.scale.setScalar(pulse);
-    ws.m.halo.rotation.z = w * 2;
-    if (!LOWFX && Math.random() < 0.12) {
-      psSpark.spawn(ws.x, ws.y - 0.1, ws.z, (Math.random() - 0.5) * 0.4, -0.6, (Math.random() - 0.5) * 0.4, 0.5);
+    ws.m.root.rotation.y = ws.face || 0;
+    // blob shadow stays on the ground below the hovering imp
+    ws.m.shadow.position.y = groundH(ws.x, ws.z) - ws.y + 0.04;
+    // dragonfly wing buzz — fast flutter, faster when agitated
+    const buzz = ws.st === 'drift' ? 55 : 80;
+    ws.m.wings.rotation.x = -0.1 + Math.sin(now / 1000 * buzz + ws.sx) * 0.42;
+    // posture per state: rear-up telegraph, head-first dive, gentle lean
+    if (ws.st === 'tele') {
+      ws.m.body.rotation.x = -0.55 - Math.sin(w * 20) * 0.06;       // rear up
+      ws.m.torso.material.color.setRGB(1.45, 1.3, 1.15);           // brighten
+    } else if (ws.st === 'dive') {
+      ws.m.body.rotation.x = 0.75;                                  // grabby hands first
+      ws.m.torso.material.color.setRGB(1.25, 1.12, 1.0);
+    } else {
+      ws.m.body.rotation.x = 0.12 + Math.sin(w * 2.4 + ws.sx) * 0.07;
+      ws.m.torso.material.color.setRGB(1, 1, 1);
+    }
+    if (!LOWFX && Math.random() < 0.1) {
+      psSpark.spawn(ws.x, ws.y - 0.15, ws.z, (Math.random() - 0.5) * 0.4, -0.6, (Math.random() - 0.5) * 0.4, 0.45);
+    }
+  }
+  // squash-pop deaths: a beat of squash, then gone
+  for (let i = impPops.length - 1; i >= 0; i--) {
+    const p = impPops[i];
+    p.t += dtv;
+    const k = p.t / 0.13;
+    if (k >= 1) {
+      p.m.root.visible = false;
+      p.m.root.scale.setScalar(1);
+      impPops.splice(i, 1);
+    } else {
+      p.m.root.scale.set(1 + k * 1.6, Math.max(0.08, 1 - k * 1.5), 1 + k * 1.6);
     }
   }
 }

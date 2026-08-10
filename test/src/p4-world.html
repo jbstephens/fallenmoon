@@ -17,7 +17,7 @@ const FOG_GROTTO = { col: col(0x2c3038), near: 10, far: 46 };
 scene.fog = new THREE.Fog(0xf3e6cf, FOG0.near, FOG0.far);
 scene.background = null;   // sky dome covers
 
-const camera = new THREE.PerspectiveCamera(55, VW / VH, 0.2, 700);
+const camera = new THREE.PerspectiveCamera(66, VW / VH, 0.2, 700);   // v2: wider action FOV
 
 /* only characters are lit; the world is baked (Powder Peak lesson) */
 const sunLight = new THREE.DirectionalLight(0xfff0d8, 0.92);
@@ -63,12 +63,14 @@ function boxW(md, o) {   // baked-light version of box()
     pushTriW(md, a[0], a[1], a[2], b[0], b[1], b[2], c2[0], c2[1], c2[2], cc);
     pushTriW(md, a[0], a[1], a[2], c2[0], c2[1], c2[2], dd[0], dd[1], dd[2], cc);
   };
-  qd(cs[4], cs[5], cs[6], cs[7], o.col);
-  if (!o.noBottom) qd(cs[3], cs[2], cs[1], cs[0], o.colB || o.col);
-  qd(cs[0], cs[1], cs[5], cs[4], o.col);
-  qd(cs[2], cs[3], cs[7], cs[6], o.col);
-  qd(cs[1], cs[2], cs[6], cs[5], o.col);
-  qd(cs[3], cs[0], cs[4], cs[7], o.col);
+  // wound OUTWARD on every face (v2 backface audit: v1 wound these inward,
+  // so building walls vanished at glancing angles and tops read upside-down)
+  qd(cs[7], cs[6], cs[5], cs[4], o.col);                              // top
+  if (!o.noBottom) qd(cs[0], cs[1], cs[2], cs[3], o.colB || o.col);   // bottom
+  qd(cs[4], cs[5], cs[1], cs[0], o.col);                              // -z
+  qd(cs[6], cs[7], cs[3], cs[2], o.col);                              // +z
+  qd(cs[5], cs[6], cs[2], cs[1], o.col);                              // +x
+  qd(cs[7], cs[4], cs[0], cs[3], o.col);                              // -x
 }
 function latheW(md, prof, o) {
   const seg = o.seg || 8, ex = o.ex || 1;
@@ -124,7 +126,7 @@ const MIRROR_POS = { x: 26, z: 146 };
 const KELPWALL = { x: 46.5, z: 158 };
 const WRECK = { x: -45, z: 95 };
 const REFILL_POOL = { x: 16, z: 26, r: 4.2 };
-const FINN_POS = { x: 41.4, z: -16 };
+const FINN_POS = { x: 39.2, z: -13.6 };   // v2: clear of the kelp door (✕ there must CUT)
 const TOCK_POS = { x: -6.6, z: -29 };
 const PEARL_BOAT = { x: -24, z: -10 };
 const WAKE_BOAT = { x: 8, z: 5 };
@@ -370,7 +372,8 @@ function propLighthouse(x, z) {
   const y = groundH(x, z) - 0.3;
   latheW(md, [[2.0, 0], [1.5, 4.5], [1.35, 7.5]], { seg: 10, x, y, z, col: C_WHITE, cols: [C_WHITE, C_WHITE] });
   latheW(md, [[1.55, 3.0], [1.45, 4.0]], { seg: 10, x, y, z, col: C_ROOF });   // faded band
-  latheW(md, [[1.7, 7.5], [1.7, 8.3], [1.2, 8.3]], { seg: 10, x, y, z, col: C_STONE2 });  // gallery
+  // gallery — the leading annulus seals the underside (v1 left a sky-gap ring)
+  latheW(md, [[1.35, 7.5], [1.7, 7.5], [1.7, 8.3], [1.2, 8.3]], { seg: 10, x, y, z, col: C_STONE2 });
   latheW(md, [[1.05, 8.3], [0.95, 9.6]], { seg: 8, x, y, z, col: col(0x3d434a) });        // lamp room (dark, cold)
   latheW(md, [[1.25, 9.6], [0.0, 10.6]], { seg: 8, x, y, z, col: C_ROOF2 });
   // door (west face) — kelp grows over it (separate cuttable patch)
@@ -735,10 +738,16 @@ function rebuildKelpPatch(patch) {
     scene.add(patch.mesh);
   }
 }
-/* Finn's door kelp */
+/* the lighthouse-door kelp (v2: it hides a CHEST, nothing story-gated) */
 const doorKelp = makeKelpPatch([
   [42.2, -14.9, 2.1], [42.4, -16.1, 2.3], [42.1, -17.0, 1.9], [42.7, -15.5, 1.7],
 ], 'door');
+/* v2 OPEN LOOP: slashables within 20 seconds of spawn — kelp right around
+   the wake boat and the quay gap, before the bay proper */
+makeKelpPatch([[11.5, 8], [12.4, 9.2], [10.6, 10], [13, 7.4], [11.8, 6.2]], 'spawn1');
+makeKelpPatch([[3.5, 14], [4.6, 15.4], [2.6, 16], [5.4, 13.2], [3, 12.4], [4.2, 17]], 'spawn2');
+makeKelpPatch([[14, 18], [15.2, 19.6], [13, 20.4], [16, 17.2], [14.6, 21.6]], 'spawn3');
+makeKelpPatch([[-2, 24], [-0.8, 25.6], [-3.2, 26.2], [0.2, 23.4]], 'spawn4');
 /* bay kelp forests */
 makeKelpPatch([[-8, 40], [-5, 44], [-9, 47], [-2, 42], [2, 46], [5, 41], [1, 38], [-4, 36]], 'bay1');
 makeKelpPatch([[28, 60], [31, 64], [34, 59], [30, 68], [36, 65], [27, 55], [38, 61]], 'bay2');
@@ -825,6 +834,7 @@ let starCoreMat = null, starFlareMat = null, starCoreMesh = null, starOp = 0;
 function setStarOp(v) {
   starOp = v;
   if (starCoreMat) { starCoreMat.opacity = v; starFlareMat.opacity = v * 0.3; }
+  if (starMesh) starMesh.visible = v > 0.01;   // invisible star = no draw calls
 }
 function buildSky() {
   skyGrp = new THREE.Group();
@@ -1092,7 +1102,7 @@ function cullChunks(cx, cz) {
     const c = chunks[i];
     if (!c.mesh) continue;
     const dx = c.cx - cx, dz = c.cz - cz;
-    c.mesh.visible = (dx * dx + dz * dz) < 36100;    // 190 m
+    c.mesh.visible = (dx * dx + dz * dz) < 27225;    // 165 m (fog owns the rest)
   }
 }
 buildSky();
@@ -1154,9 +1164,8 @@ let beamDown = null, beamOut = null;
 })();
 
 /* ── interactable world items ── */
-/* shipwreck chest */
-const chest = { x: WRECK.x + 1.2, z: WRECK.z - 2.6, opened: false, lid: null, group: null, heart: null };
-(function buildChest() {
+/* chests (shared builder) */
+function buildChestMesh(x, z, ry) {
   const g = new THREE.Group();
   const mdB = MD();
   const wood = col(0x7c5a3a), band = col(0x54432e);
@@ -1173,16 +1182,28 @@ const chest = { x: WRECK.x + 1.2, z: WRECK.z - 2.6, opened: false, lid: null, gr
   const lid = mdMesh(mdL, TOON); lid.frustumCulled = false;
   lidN.add(lid);
   g.add(lidN);
-  g.position.set(chest.x, groundH(chest.x, chest.z) + 0.05, chest.z);
-  g.rotation.y = 0.7;
+  g.position.set(x, groundH(x, z) + 0.05, z);
+  g.rotation.y = ry;
   scene.add(g);
-  chest.group = g; chest.lid = lidN;
+  addColl(x, z, 0.55);
+  return { group: g, lid: lidN };
+}
+/* shipwreck chest — heart container */
+const chest = { x: WRECK.x + 1.2, z: WRECK.z - 2.6, opened: false, lid: null, group: null, heart: null };
+{
+  const m = buildChestMesh(chest.x, chest.z, 0.7);
+  chest.group = m.group; chest.lid = m.lid;
   const heart = buildHeartItem();
   heart.visible = false;
   scene.add(heart);
   chest.heart = heart;
-  addColl(chest.x, chest.z, 0.55);
-})();
+}
+/* lighthouse-door chest — what the kelp beard was hiding (salt cache) */
+const doorChest = { x: 42.15, z: -15.55, opened: false, lid: null, group: null };
+{
+  const m = buildChestMesh(doorChest.x, doorChest.z, -1.35);
+  doorChest.group = m.group; doorChest.lid = m.lid;
+}
 /* salt crystal pickups — ONE mesh, rebuilt on pickup */
 const saltPickups = [
   { x: 5, z: 30 }, { x: -18, z: 44 }, { x: 30, z: 48 }, { x: -34, z: 64 },
