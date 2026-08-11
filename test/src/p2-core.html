@@ -78,6 +78,14 @@ const promptEl = el('prompt'), questEl = el('questLine');
 const heartsCv = el('hearts'), heartsCx = heartsCv.getContext('2d');
 const glareEl = el('glare'), fadeBlackEl = el('fadeBlack');
 const floatEl = el('floatLine');
+/* one-line floating caption (v3: the moon compass first-use hint) */
+let captionTimer = 0;
+function showCaption(text, ms) {
+  floatEl.textContent = text;
+  floatEl.classList.add('on');
+  clearTimeout(captionTimer);
+  captionTimer = setTimeout(() => floatEl.classList.remove('on'), ms || 3000);
+}
 
 /* letterbox scaler */
 function fitStage() {
@@ -107,15 +115,17 @@ const IN = {
   mx: 0, my: 0,             // raw move vector (pre camera rotation), unit-ish
   cx: 0, cy: 0,             // camera orbit axes (right stick / arrows), per-frame
   atk: false, atkHeld: false,
-  roll: false, pulse: false, pause: false,
-  up: false, down: false, confirm: false, back: false,
+  sprintHeld: false,        // v3: ○ / Shift held = SPRINT (dodge-roll removed)
+  jump: false,              // v3: □ / Space edge = JUMP
+  pulse: false, pause: false,
+  up: false, down: false, confirm: false,
   any: false,
 };
 let prevLy = 0;
 function gatherInput() {
   IN.mx = 0; IN.my = 0;
   IN.cx = 0; IN.cy = 0;
-  IN.atkHeld = false;
+  IN.atkHeld = false; IN.sprintHeld = false;
   let lx = 0, ly = 0;
   // keyboard movement (WASD; arrows are the no-mouse CAMERA fallback)
   if (kDown('KeyA')) lx -= 1;
@@ -126,10 +136,12 @@ function gatherInput() {
   if (kDown('ArrowRight')) IN.cx += 1;
   if (kDown('ArrowUp')) IN.cy -= 1;
   if (kDown('ArrowDown')) IN.cy += 1;
-  if (kDown('KeyJ') || kDown('Space')) IN.atkHeld = true;
+  if (kDown('KeyJ')) IN.atkHeld = true;
+  // v3: Shift (or K) held = sprint; Space = jump
+  if (kDown('ShiftLeft') || kDown('ShiftRight') || kDown('KeyK')) IN.sprintHeld = true;
   // keyboard edges
-  if (kEdge('KeyJ') || kEdge('Space')) { IN.atk = true; IN.confirm = true; IN.any = true; }
-  if (kEdge('KeyK') || kEdge('ShiftLeft') || kEdge('ShiftRight')) { IN.roll = true; IN.any = true; }
+  if (kEdge('KeyJ')) { IN.atk = true; IN.confirm = true; IN.any = true; }
+  if (kEdge('Space')) { IN.jump = true; IN.any = true; }
   if (kEdge('KeyL')) { IN.pulse = true; IN.any = true; }
   if (kEdge('Escape') || kEdge('KeyP')) { IN.pause = true; IN.any = true; }
   if (kEdge('KeyW') || kEdge('ArrowUp')) { IN.up = true; IN.any = true; }
@@ -150,8 +162,9 @@ function gatherInput() {
       if (p.button('up')) ly -= 1;
       if (p.button('down')) ly += 1;
       if (p.button('south')) IN.atkHeld = true;
+      if (p.button('east')) IN.sprintHeld = true;            // v3: ○ hold = SPRINT
       if (p.justPressed('south')) { IN.atk = true; IN.confirm = true; IN.any = true; }
-      if (p.justPressed('east')) { IN.roll = true; IN.back = true; IN.any = true; }
+      if (p.justPressed('west')) { IN.jump = true; IN.any = true; }   // v3: □ = JUMP
       if (p.justPressed('north')) { IN.pulse = true; IN.any = true; }
       if (p.justPressed('start')) { IN.pause = true; IN.any = true; }
       if (p.justPressed('up') || (prevLy > -0.5 && ay <= -0.5)) { IN.up = true; IN.any = true; }
@@ -167,8 +180,8 @@ function gatherInput() {
   }
 }
 function clearEdges() {
-  IN.atk = IN.roll = IN.pulse = IN.pause = false;
-  IN.up = IN.down = IN.confirm = IN.back = IN.any = false;
+  IN.atk = IN.jump = IN.pulse = IN.pause = false;
+  IN.up = IN.down = IN.confirm = IN.any = false;
 }
 // tap-to-advance-dialogue (direct manipulation — coexists with touchpad)
 stage.addEventListener('pointerdown', () => {
@@ -319,15 +332,23 @@ const SFX = {
     tone(660, t, 0.8, v, 'sine'); tone(1320, t + 0.05, 0.7, v * 0.5, 'sine');
     tone(1980, t + 0.1, 0.6, v * 0.25, 'sine'); },
   hit() { if (!AC) return; const t = AC.currentTime;
-    // impact: spark crack + a low THUNK under it
+    // impact: spark crack + a CRUNCH layer (v3 — shell contact must be
+    // unmistakable) + a low THUNK under it
     noiseBurst(t, 0.08, 0.22, 2400, 900, 1);
+    noiseBurst(t + 0.008, 0.07, 0.2, 3400, 1100, 2.4);
+    noiseBurst(t + 0.03, 0.05, 0.12, 900, 500, 1.6);
     tone(220, t, 0.1, 0.12, 'triangle');
     tone(88, t, 0.14, 0.16, 'sine', null, 55); },
   clawHit() { if (!AC) return; const t = AC.currentTime;
     noiseBurst(t, 0.12, 0.25, 1800, 500, 1); tone(150, t, 0.16, 0.16, 'triangle'); },
   hurt() { if (!AC) return; const t = AC.currentTime;
     tone(180, t, 0.25, 0.2, 'triangle', null, 90); noiseBurst(t, 0.12, 0.12, 500, 200, 1); },
-  roll() { if (!AC) return; noiseBurst(AC.currentTime, 0.18, 0.07, 350, 700, 0.8); },
+  jump() { if (!AC) return; const t = AC.currentTime;
+    noiseBurst(t, 0.14, 0.06, 420, 980, 0.9);
+    tone(300, t, 0.14, 0.035, 'sine', null, 470); },
+  land(hard) { if (!AC) return; const t = AC.currentTime;
+    noiseBurst(t, 0.09, hard ? 0.09 : 0.05, 420, 240, 0.8, 'lowpass');
+    tone(120, t, 0.09, hard ? 0.07 : 0.04, 'sine', null, 80); },
   step(sand) { if (!AC) return;
     noiseBurst(AC.currentTime, 0.045, sand ? 0.028 : 0.02, sand ? 500 : 900, sand ? 350 : 600, 0.7); },
   click() { if (!AC) return; const t = AC.currentTime;
@@ -403,7 +424,8 @@ function defaultSave() {
     kelpDoor: false, doorChest: false, finnHeart: false,
     wreckChest: false, wallBurned: false,
     bossDone: false, sky: 0, tidepool: false,
-    lastShade: [8, 6],
+    compassSeen: false,
+    lastShade: [8.2, 7.0],
   };
 }
 let SAVE = null;   // null = no save on disk (fresh page)
@@ -424,6 +446,15 @@ function loadSave() {
       out.finnHeart = false;
       out.doorChest = false;
     }
+    /* v3 defensive re-derivation (the Ben soft-lock): if the world flags
+       imply a LATER stage than q claims, reconcile FORWARD — flags and
+       quest must never disagree in a way that dead-ends the arc. */
+    let qMin = 0;
+    if (out.talked && out.talked.finn >= 1) qMin = 2;
+    if (out.wallBurned) qMin = Math.max(qMin, 2);
+    if (out.bossDone) qMin = Math.max(qMin, 3);
+    if (out.sky >= 1 || out.ph >= 1) qMin = Math.max(qMin, 4);
+    if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }
 }

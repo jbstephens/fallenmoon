@@ -134,11 +134,13 @@ const pearl = placeNPC(buildPearl, -21.9, -9.0, 0.4, 1.42);
 
 /* ── the player ── */
 const P = {
-  x: 8.2, z: 4.8, y: 0, heading: Math.PI,
+  x: SPAWN_POS.x, z: SPAWN_POS.z, y: 0, heading: Math.PI,
   vx: 0, vz: 0, speed: 4.3,
-  st: 'idle',                 // idle walk atk roll hit locked
+  st: 'idle',                 // idle walk atk hit locked
   atkN: 0, atkT: 0, atkTotal: 0.3, queued: false, hitDone: false,
-  rollT: 0, rollDx: 0, rollDz: 1, rollBuf: false,
+  // v3 movement: sprint (○ held) + real jump (□)
+  sprint: false, sprintT: 0, lunge: false,
+  fy: 0, jvy: 0, air: false, landT: 0, jumps: 0,
   iframes: 0, hitstop: 0, hitT: 0,
   hearts: 5, maxHearts: 5,
   healT: 0, healTicks: 0,
@@ -149,7 +151,8 @@ const P = {
   sunstruckCount: 0,
   carryCrescent: false,
 };
-function playerPos() { P.y = groundH(P.x, P.z); return P; }
+P.fy = groundH(P.x, P.z);
+function playerPos() { P.y = P.fy; return P; }
 
 /* ── camera: full two-stick control (v2 — Minecraft/modern-Zelda standard) ──
    Right stick orbits: yaw free 360°, pitch clamped -25°..+60°. Mouse-look
@@ -197,17 +200,19 @@ function updateCamera(dtv) {
   if (CAM.stickAge > 3 && moving) {
     CAM.yaw = angLerp(CAM.yaw, Math.atan2(P.vx, P.vz) + Math.PI, Math.min(1, dtv * 0.8));
   }
-  const py = groundH(P.x, P.z);
+  const py = P.fy;
   const tx = P.x + Math.sin(P.heading) * 0.35, tz = P.z + Math.cos(P.heading) * 0.35;
   const ty = py + (inG ? 1.15 : 1.25);
   const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
   const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp, dyv = spv;
   let dist = CAM.dist;
-  // sphere-cast pullback: terrain (grotto ceiling clamped after)
+  // sphere-cast pullback: terrain + solid grotto rock (grotto ceiling clamped after)
   for (let s = 0.2; s <= 1.0; s += 0.1) {
     const sx2 = tx + dx * dist * s, sz2 = tz + dz * dist * s;
     const sy2 = ty + dyv * dist * s;
-    if (groundH(sx2, sz2) + 0.42 > sy2) { dist = Math.max(0.9, dist * (s - 0.1)); break; }
+    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2)) {
+      dist = Math.max(0.9, dist * (s - 0.1)); break;
+    }
   }
   const cx = tx + dx * dist, cz = tz + dz * dist;
   let cy = ty + dyv * dist;
@@ -225,14 +230,14 @@ function updateCamera(dtv) {
   camera.lookAt(_cv);
 }
 
-/* ── swing hit arc helper ── */
-function inSwingArc(tx, tz, range) {
+/* ── swing hit arc helper (v3: optional wider arc for low scuttlers) ── */
+function inSwingArc(tx, tz, range, halfArc) {
   const dx = tx - P.x, dz = tz - P.z;
   const d = Math.hypot(dx, dz);
   if (d > range) return false;
   let da = Math.atan2(dx, dz) - P.heading;
   da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  return Math.abs(da) < 1.15;
+  return Math.abs(da) < (halfArc || 1.15);
 }
 
 /* ── kelp interaction ── */
@@ -269,7 +274,6 @@ function trySwingKelp() {
 /* ── damage to the player ── */
 function hurtPlayer(n, fromX, fromZ) {
   if (P.iframes > 0 || state !== 'play') return;
-  if (P.st === 'roll') return;                    // roll i-frames
   P.hearts = Math.max(0, P.hearts - n);
   P.iframes = 85;
   P.hitT = 0.34; P.st = 'hit';
@@ -294,26 +298,47 @@ function objectivePoint() {
   if (QUEST.q === 3) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
   return null;
 }
+/* v3 rename: this is the MOON COMPASS everywhere the player can read.
+   Same mechanic as ever — the clarity layer is a longer SILVER MOTE STREAM
+   arcing toward the objective, a Moonwheel-drift when no quest is live
+   (it tugs toward moon-stuff), and a one-time caption on first use. */
+let compassMotes = 0;
 function doPulse() {
   P.pulseT = 1.0;
   const o = objectivePoint();
   let str = 0.25;
-  if (o) {
-    const d = Math.hypot(o.x - P.x, o.z - P.z);
-    str = clamp(1 - d / 160, 0.15, 1);
-    const dx = (o.x - P.x) / (d || 1), dz = (o.z - P.z) / (d || 1);
-    const y = groundH(P.x, P.z) + 1.2;
-    for (let i = 0; i < 7; i++) {
-      psSparkle.spawn(P.x + dx * (0.6 + i * 0.28), y + 0.15 * i, P.z + dz * (0.6 + i * 0.28),
-        dx * 3.2, 0.5, dz * 3.2, 0.8 + i * 0.12);
-    }
-  } else {
-    burst(psSparkle, P.x, groundH(P.x, P.z) + 1.3, P.z, 10, 1.2, 0.8, 0.9);
+  const y = P.fy + 1.2;
+  // no objective yet? the moonglass still tugs toward the Moonwheel itself
+  const tgt = o || { x: WHEEL_POS.x, z: WHEEL_POS.z };
+  const d = Math.hypot(tgt.x - P.x, tgt.z - P.z);
+  if (o) str = clamp(1 - d / 160, 0.15, 1);
+  const dx = (tgt.x - P.x) / (d || 1), dz = (tgt.z - P.z) / (d || 1);
+  const n = o ? 13 : 10, spd = o ? 3.4 : 2.2;
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    const swirl = o ? 0 : Math.sin(i * 2.4) * 0.5;         // pre-quest: looser drift
+    psSparkle.spawn(
+      P.x + dx * (0.5 + t * 2.6) - dz * swirl * 0.4,
+      y + Math.sin(t * Math.PI) * (0.55 + t * 0.4) + t * 0.3,   // the arc
+      P.z + dz * (0.5 + t * 2.6) + dx * swirl * 0.4,
+      dx * spd, 0.45 - t * 0.5, dz * spd, 0.75 + t * 0.55);
+  }
+  compassMotes += n;
+  if (SAVE && !SAVE.compassSeen) {
+    SAVE.compassSeen = true; storeSave();
+    showCaption('The moonglass tugs toward moon-stuff.', 3400);
   }
   SFX.glassPulse(str);
   rumble({ duration: 90, strong: 0.1 + str * 0.3, weak: 0.2 });
 }
 
+/* ── shared horizontal move step: circle colliders + grotto solid rock ── */
+function moveWithCollision(nx, nz) {
+  const ox = P.x, oz = P.z;
+  const c = collide(nx, nz, 0.42, P.fy);
+  const r = resolveSolid(ox, oz, c[0], c[1]);
+  P.x = r[0]; P.z = r[1];
+}
 /* ── player sim tick (runs in state 'play') ── */
 function tickPlayer() {
   const inShade = inShadeAt(P.x, P.z);
@@ -330,76 +355,91 @@ function tickPlayer() {
     if (P.healT >= 240) {
       P.healT = 0; P.hearts++; P.healTicks++;
       SFX.heal();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.0, P.z, 12, 0.9, 1.3, 0.9);
+      burst(psSparkle, P.x, P.fy + 1.0, P.z, 12, 0.9, 1.3, 0.9);
     }
   } else if (!inShade) P.healT = 0;
   if (P.pulseT > 0) P.pulseT -= DT;
+  if (P.landT > 0) P.landT -= DT;
+
+  /* ── vertical: real jump physics (v3). Runs every tick, whatever the
+     state — attacks and knockback fall/land naturally. ── */
+  const support = supportYAt(P.x, P.z, P.fy);
+  if (P.air) {
+    P.jvy -= 22 * DT;
+    P.fy += P.jvy * DT;
+    if (P.jvy <= 0 && P.fy <= support) {
+      P.fy = support; P.air = false; P.jvy = 0;
+      P.landT = 0.2;                       // landing squash window
+      SFX.land(false);
+      burst(psDust, P.x, P.fy + 0.08, P.z, 7, 1.5, 0.9, 0.4);
+    }
+  } else if (P.fy > support + 0.28) {
+    P.air = true; P.jvy = 0;               // walked off an edge
+  } else {
+    P.fy = support;
+  }
 
   if (P.st === 'hit') {
     P.hitT -= DT;
-    P.x += P.vx * DT; P.z += P.vz * DT;
+    moveWithCollision(P.x + P.vx * DT, P.z + P.vz * DT);
     P.vx *= 0.86; P.vz *= 0.86;
-    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
     if (P.hitT <= 0) P.st = 'idle';
-    return;
-  }
-  if (P.st === 'roll') {
-    P.rollT -= DT;
-    const sp = 7.2 * smoothstep(clamp(P.rollT / 0.38, 0, 1) + 0.25);
-    P.x += P.rollDx * sp * DT; P.z += P.rollDz * sp * DT;
-    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
-    if (IN.atk) P.rollBuf = true;          // v2: attack buffers during the roll
-    if (P.rollT <= 0) {
-      P.st = 'idle';
-      if (P.rollBuf && P.sword) { P.rollBuf = false; startAttack(1); }
-      P.rollBuf = false;
-    }
     return;
   }
   if (P.st === 'atk') {
     P.atkT -= DT;
-    // slight forward drift on the 3rd hit
-    if (P.atkN === 3 && P.atkT > 0.12) {
-      P.x += Math.sin(P.heading) * 2.4 * DT; P.z += Math.cos(P.heading) * 2.4 * DT;
-      const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
+    // forward drift: sprint-attack LUNGE, and the usual 3rd-hit press
+    const drift = P.lunge ? 5.2 : (P.atkN === 3 ? 2.4 : 0);
+    if (drift && P.atkT > 0.12) {
+      moveWithCollision(P.x + Math.sin(P.heading) * drift * DT, P.z + Math.cos(P.heading) * drift * DT);
     }
     const ph = 1 - P.atkT / P.atkTotal;
     if (!P.hitDone && ph > 0.38) {
       P.hitDone = true;
       swingHits();               // p6 — enemies, boss, kelp
     }
-    // v2: roll CANCELS attack recovery once the hit has landed
-    if (IN.roll && P.hitDone) { startRoll(); return; }
     if (IN.atk && ph > 0.5 && P.atkN < 3) P.queued = true;
     if (P.atkT <= 0) {
       if (P.queued && P.sword) {
         P.queued = false;
         startAttack(P.atkN + 1);
-      } else { P.st = 'idle'; P.atkN = 0; }
+      } else { P.st = 'idle'; P.atkN = 0; P.lunge = false; }
     }
     return;
   }
 
-  // ── free movement ──
+  // ── free movement (ground and air share it — full air control) ──
   const mag = moveVec();
   const ctx2 = currentInteract();   // p6: {id, ...} or null
-  if (IN.roll && P.sword) { startRoll(); return; }
+  if (IN.jump && !P.air) {
+    P.air = true; P.jvy = 6.6; P.jumps++;
+    SFX.jump();
+    burst(psDust, P.x, P.fy + 0.1, P.z, 5, 1.2, 0.7, 0.35);
+  }
   if (IN.atk) {
-    if (ctx2) { doInteract(ctx2); return; }        // context beats swing
+    if (ctx2 && !P.air) { doInteract(ctx2); return; }   // context beats swing
     if (P.sword) {
       if (mag > 0.05) P.heading = Math.atan2(_mv[0], _mv[1]);
-      startAttack(1);
+      startAttack(1);            // air attack allowed — same swing
       return;
     }
   }
   if (IN.pulse && P.sword) doPulse();
+  // v3: hold ○ to SPRINT (~1.6x) — dodge-roll is gone, speed is the escape
+  P.sprint = IN.sprintHeld && mag > 0.05;
+  if (P.sprint) P.sprintT += DT; else P.sprintT = 0;
   if (mag > 0.05) {
-    const sp = P.speed * Math.min(1, mag * 1.15);
+    const sp = P.speed * (P.sprint ? 1.6 : 1) * Math.min(1, mag * 1.15);
     P.vx = _mv[0] / mag * sp; P.vz = _mv[1] / mag * sp;
-    P.x += P.vx * DT; P.z += P.vz * DT;
-    const c = collide(P.x, P.z, 0.42); P.x = c[0]; P.z = c[1];
-    P.heading = angLerp(P.heading, Math.atan2(_mv[0], _mv[1]), 0.28);
+    moveWithCollision(P.x + P.vx * DT, P.z + P.vz * DT);
+    P.heading = angLerp(P.heading, Math.atan2(_mv[0], _mv[1]), P.air ? 0.2 : 0.28);
     P.st = 'walk';
+    // heel dust while sprinting on the ground
+    if (P.sprint && !P.air && (simTick % 5) === 0) {
+      psDust.spawn(P.x - Math.sin(P.heading) * 0.3 + (Math.random() - 0.5) * 0.2, P.fy + 0.12,
+        P.z - Math.cos(P.heading) * 0.3 + (Math.random() - 0.5) * 0.2,
+        -Math.sin(P.heading) * 1.2, 0.9 + Math.random() * 0.6, -Math.cos(P.heading) * 1.2, 0.42);
+    }
   } else {
     P.vx *= 0.7; P.vz *= 0.7;
     P.st = 'idle';
@@ -419,27 +459,19 @@ function moveVec() {
 }
 function startAttack(n) {
   P.st = 'atk'; P.atkN = n; P.queued = false; P.hitDone = false;
+  P.lunge = n === 1 && P.sprint && !P.air;   // sprint-attack = small lunge
   if (!P.drawn) {
     // the first ✕ of the session DRAWS the sword — a flourish off the back
     P.drawn = true;
     P.atkTotal = 0.46;
     SFX.draw();
-    burst(psSparkle, P.x, groundH(P.x, P.z) + 1.5, P.z, 14, 1.3, 1.1, 0.7);
+    burst(psSparkle, P.x, P.fy + 1.5, P.z, 14, 1.3, 1.1, 0.7);
     rumble({ duration: 120, strong: 0.2, weak: 0.4 });
   } else {
     P.atkTotal = n === 3 ? 0.36 : 0.3;
     SFX[n === 3 ? 'swing3' : 'sword']();
   }
   P.atkT = P.atkTotal;
-}
-function startRoll() {
-  const mag = moveVec();
-  P.st = 'roll'; P.rollT = 0.38; P.rollBuf = false;
-  if (mag > 0.05) { P.rollDx = _mv[0] / mag; P.rollDz = _mv[1] / mag; }
-  else { P.rollDx = Math.sin(P.heading); P.rollDz = Math.cos(P.heading); }
-  P.heading = Math.atan2(P.rollDx, P.rollDz);
-  SFX.roll();
-  burst(psDust, P.x, groundH(P.x, P.z) + 0.2, P.z, 6, 1.4, 0.9, 0.45);
 }
 
 /* ── procedural character animation ── */
@@ -450,38 +482,59 @@ function poseHumanoid(c, st, t, speed, opts) {
   const w = a.t;
   const brth = Math.sin(w * 2.1) * 0.012;
   c.torso.scale.y = 1 + brth;
-  let legA = 0, armA = 0, bob = 0, lean = 0;
+  let legA = 0, armA = 0, bob = 0, lean = 0, sway = 0, twist = 0, headBob = 0;
+  const spr = opts.sprint ? 1 : 0;
   if (st === 'walk') {
-    const f = w * (7.2 + speed * 1.1);
-    legA = Math.sin(f) * 0.62;
-    armA = -Math.sin(f) * 0.42;
-    bob = Math.abs(Math.cos(f)) * 0.045;
-    lean = 0.1;
+    /* v3 walk rev: heel-toe weight, counter-rotating shoulders over swaying
+       hips, a subtle head bob. Sprint deepens everything and leans in. */
+    const f = w * (7.2 + speed * 1.1 + spr * 2.4);
+    legA = Math.sin(f) * (0.62 + spr * 0.22);
+    armA = -Math.sin(f) * (0.42 + spr * 0.3);
+    bob = Math.abs(Math.cos(f)) * (0.05 + spr * 0.02);
+    lean = 0.1 + spr * 0.42;                       // sprint: crouched lean-in
+    sway = Math.sin(f) * (0.05 + spr * 0.015);     // hip sway
+    twist = Math.sin(f) * (0.09 + spr * 0.05);     // shoulder counter-rotation
+    headBob = Math.sin(f * 2) * 0.025;
   }
   c.hipL.rotation.x = legA; c.hipR.rotation.x = -legA;
-  c.kneeL.rotation.x = Math.max(0, -legA) * 1.3 + 0.06;
-  c.kneeR.rotation.x = Math.max(0, legA) * 1.3 + 0.06;
+  // heel-toe: the knee stays straight into heel-strike, folds through
+  // push-off — a quarter-phase lag against the hip, plus a toe-off kick
+  const f2 = w * (7.2 + speed * 1.1 + spr * 2.4) - 0.55;
+  const kickL = Math.max(0, -Math.sin(f2)), kickR = Math.max(0, Math.sin(f2));
+  c.kneeL.rotation.x = kickL * (1.25 + spr * 0.4) + 0.06 + spr * 0.12;
+  c.kneeR.rotation.x = kickR * (1.25 + spr * 0.4) + 0.06 + spr * 0.12;
   if (!opts.armsOverride) {
-    c.shL.rotation.x = armA + 0.06; c.shL.rotation.z = 0.1;
-    c.shR.rotation.x = -armA + 0.06; c.shR.rotation.z = -0.1;
-    c.elL.rotation.x = -0.25 - Math.max(0, armA) * 0.5;
-    c.elR.rotation.x = -0.25 - Math.max(0, -armA) * 0.5;
+    if (spr) {
+      // pumping bent arms
+      c.shL.rotation.x = armA * 0.9 - 0.15; c.shL.rotation.z = 0.16;
+      c.shR.rotation.x = -armA * 0.9 - 0.15; c.shR.rotation.z = -0.16;
+      c.elL.rotation.x = -1.15 - Math.max(0, armA) * 0.4;
+      c.elR.rotation.x = -1.15 - Math.max(0, -armA) * 0.4;
+    } else {
+      c.shL.rotation.x = armA + 0.06; c.shL.rotation.z = 0.1;
+      c.shR.rotation.x = -armA + 0.06; c.shR.rotation.z = -0.1;
+      c.elL.rotation.x = -0.25 - Math.max(0, armA) * 0.55;
+      c.elR.rotation.x = -0.25 - Math.max(0, -armA) * 0.55;
+    }
   }
   c.pelvis.position.y = c.pelvis.userData.y0 !== undefined ? c.pelvis.userData.y0 + bob : (c.pelvis.userData.y0 = c.pelvis.position.y);
+  c.pelvis.rotation.z = sway;
+  c.pelvis.rotation.y = -twist * 0.6;
   c.torso.rotation.x = (opts.stoop || 0) + lean * 0.6;
+  if (st === 'walk') c.torso.rotation.y = twist;
   // head look
   if (opts.lookAt !== undefined) {
     c.head.rotation.y = angLerp(c.head.rotation.y, clamp(opts.lookAt, -0.9, 0.9), 0.12);
   } else {
     c.head.rotation.y = angLerp(c.head.rotation.y, Math.sin(w * 0.4) * 0.15, 0.05);
   }
-  c.head.rotation.x = Math.sin(w * 0.9) * 0.02 + (opts.headTilt || 0);
+  c.head.rotation.x = Math.sin(w * 0.9) * 0.02 + headBob + (opts.headTilt || 0);
   // scarf / hem sway
-  const sway = Math.sin(w * 3.1) * 0.06 + speed * 0.16;
+  const scfSway = Math.sin(w * 3.1) * 0.06 + speed * 0.16;
   for (let i = 0; i < c.scarf.length; i++) {
     const s2 = c.scarf[i];
     const base = i === 0 ? 0.72 : 0.1;     // tail trails BEHIND the shoulder
-    s2.rotation.x = clamp(base + sway * (0.7 + i * 0.5) + (opts.wind || 0) * (0.4 + i * 0.3), -0.2, 1.9);
+    s2.rotation.x = clamp(base + scfSway * (0.7 + i * 0.5) + (opts.wind || 0) * (0.4 + i * 0.3), -0.2, 1.9);
     s2.rotation.z = Math.sin(w * 2.3 + i) * 0.09;
   }
   if (c.hem) c.hem.rotation.x = Math.sin(w * 2.0) * 0.03 + speed * 0.06;
@@ -512,12 +565,15 @@ function poseAttack(c, n, ph) {
   c.shL.rotation.x = 0.3 - back * 0.3 - swing * 0.2;
   c.shL.rotation.z = 0.35;
 }
-function poseRoll(c, ph) {
-  c.pelvis.rotation.x = ph * TAU;
-  c.kneeL.rotation.x = 1.9; c.kneeR.rotation.x = 1.9;
-  c.hipL.rotation.x = -1.2; c.hipR.rotation.x = -1.2;
-  c.shL.rotation.x = -1.4; c.shR.rotation.x = -1.4;
-  c.elL.rotation.x = -1.6; c.elR.rotation.x = -1.6;
+function poseAir(c, jvy) {
+  // v3 jump: knees tuck on the rise, legs reach on the fall, arms out
+  const up = clamp(jvy / 6.6, -1, 1);
+  c.kneeL.rotation.x = 0.9 + up * 0.6; c.kneeR.rotation.x = 0.7 + up * 0.5;
+  c.hipL.rotation.x = -0.5 - up * 0.3; c.hipR.rotation.x = -0.25 - up * 0.2;
+  c.shL.rotation.x = -0.4; c.shR.rotation.x = -0.4;
+  c.shL.rotation.z = 0.55; c.shR.rotation.z = -0.55;
+  c.elL.rotation.x = -0.4; c.elR.rotation.x = -0.4;
+  c.torso.rotation.x = 0.12 - up * 0.1;
 }
 function poseItemGet(c, ph) {
   const up = smoothstep(clamp(ph * 2.4, 0, 1));
@@ -539,19 +595,26 @@ function poseCrumple(c, ph) {
 /* wick render-frame animation driver */
 let itemGetT = -1;   // >= 0 while playing the hold-up-the-item beat
 let idleSettle = 0;  // eases Wick into his relaxed stance
+let wickLean = 0;   // telemetry: the sprint lean actually applied this frame
 function animateWick(dtv, now) {
   const c = wick;
   playerPos();
   c.root.position.set(P.x, P.y, P.z);
   c.root.rotation.y = P.heading;
-  wickShadow.position.set(P.x + shadeGrow * 0.22, P.y + 0.05, P.z + shadeGrow * 0.1);
-  wickShadow.scale.set(1 + shadeGrow * 0.35, 1, 1);
+  // v3: landing squash — compress on touchdown, ease back
+  const squash = P.landT > 0 ? Math.sin(clamp(P.landT / 0.2, 0, 1) * Math.PI) * 0.16 : 0;
+  c.root.scale.set(1 + squash * 0.55, 1 - squash, 1 + squash * 0.55);
+  const gy = groundH(P.x, P.z);
+  wickShadow.position.set(P.x + shadeGrow * 0.22, gy + 0.05, P.z + shadeGrow * 0.1);
+  const shrink = clamp(1 - (P.fy - gy) * 0.25, 0.6, 1);   // shadow eases while airborne
+  wickShadow.scale.set((1 + shadeGrow * 0.35) * shrink, 1, shrink);
   wickShadow.rotation.y = -Math.atan2(SHADOW_DIR[1], SHADOW_DIR[0]) * shadeGrow;
   // i-frame flicker
   const vis = P.iframes > 0 ? (Math.floor(now / 60) % 2 === 0) : true;
   for (const m of c.parts) m.visible = vis;
   c.sword.group.visible = P.sword && vis;
   const spd = Math.hypot(P.vx, P.vz) / P.speed;
+  wickLean = 0;
   if (itemGetT >= 0) {
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
     poseItemGet(c, itemGetT);
@@ -560,13 +623,13 @@ function animateWick(dtv, now) {
   }
   if (P.st === 'atk') {
     const ph = 1 - P.atkT / P.atkTotal;
-    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: 0.4 });
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: P.lunge ? 1.1 : 0.4 });
     poseAttack(c, P.atkN, ph);
     swordToHand(true);
     updateTrail(ph);
-  } else if (P.st === 'roll') {
-    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
-    poseRoll(c, 1 - P.rollT / 0.38);
+  } else if (P.air && P.st !== 'hit' && state === 'play') {
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: 0.5 });
+    poseAir(c, P.jvy);
     swordToHand(false);
     fadeTrail(dtv);
   } else if (P.st === 'hit') {
@@ -586,7 +649,10 @@ function animateWick(dtv, now) {
   } else {
     c.pelvis.rotation.x = 0;
     c.torso.rotation.y *= 0.7;
-    poseHumanoid(c, P.st === 'walk' ? 'walk' : 'idle', dtv, spd * P.speed, { wind: spd * 0.5 });
+    // sprint: lean in, scarf streaming (v3)
+    poseHumanoid(c, P.st === 'walk' ? 'walk' : 'idle', dtv, spd * P.speed,
+      { wind: spd * 0.5 + (P.sprint ? 0.5 : 0), sprint: P.sprint && P.st === 'walk' });
+    if (P.sprint && P.st === 'walk') wickLean = 0.35;
     // relaxed idle: weight on the left leg, right hand resting at the belt —
     // settles in over half a second of standing still
     if (P.st === 'idle') idleSettle = Math.min(1, idleSettle + dtv * 2.2);
@@ -649,7 +715,7 @@ function updateTrail(ph) {
   const big = n === 3;                        // combo finisher: bigger everything
   const arcC = n === 2 ? -1 : 1;
   const a0 = P.heading + arcC * (1.45 - k * 2.7) - 0.5 * arcC;
-  const y0 = groundH(P.x, P.z) + (big ? 1.5 - k * 0.9 : 1.05);
+  const y0 = P.fy + (big ? 1.5 - k * 0.9 : 1.05);
   const r0 = 0.32, r1 = big ? 2.0 : 1.6;
   for (let i = 0; i < tr.segs; i++) {
     const t = i / (tr.segs - 1);

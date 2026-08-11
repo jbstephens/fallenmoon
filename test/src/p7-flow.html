@@ -18,7 +18,7 @@ function refreshTitleMenu() {
   if (!hasSave) titleFocus = 0;
   el('ti0').classList.toggle('sel', titleFocus === 0);
   el('ti1').classList.toggle('sel', titleFocus === 1);
-  el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ ROLL · △ PULSE · START PAUSE      (WASD · MOUSE/ARROWS · J · K · L · P)';
+  el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)';
 }
 function tickTitle() {
   titleT += DT;
@@ -94,6 +94,7 @@ function applySave() {
     tidewater.position.y = groundH(REFILL_POOL.x, REFILL_POOL.z) + 0.55;
   }
   P.x = SAVE.lastShade[0]; P.z = SAVE.lastShade[1];
+  P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI;
   P.area = areaAt(P.x, P.z);
   setQuest(SAVE.q);
@@ -108,9 +109,9 @@ function refreshPause() {
   el('pi0').classList.toggle('sel', pauseFocus === 0);
   el('pi1').classList.toggle('sel', pauseFocus === 1);
   el('pControls').innerHTML =
-    '<b>✕</b> SWORD / TALK &nbsp;·&nbsp; <b>○</b> DODGE ROLL &nbsp;·&nbsp; <b>△</b> MOONGLASS PULSE<br>' +
+    '<b>✕</b> SWORD / TALK &nbsp;·&nbsp; <b>○</b> HOLD TO SPRINT &nbsp;·&nbsp; <b>□</b> JUMP &nbsp;·&nbsp; <b>△</b> MOON COMPASS<br>' +
     '<b>RIGHT STICK</b> CAMERA &nbsp;·&nbsp; TOUCH: DRAG THE RIGHT OF THE SCREEN<br>' +
-    '<b>KEYBOARD</b> — WASD MOVE · MOUSE OR ARROWS CAMERA · J SWORD · K ROLL · L PULSE<br>' +
+    '<b>KEYBOARD</b> — WASD MOVE · MOUSE OR ARROWS CAMERA · J SWORD · SHIFT SPRINT · SPACE JUMP · L COMPASS<br>' +
     'SHADE HEALS. THE SUN DOES NOT.';
 }
 function tickPause() {
@@ -262,6 +263,11 @@ const TL = {
   bossClawX: 0, bossClawZ: 0, bossX: 0, bossZ: 0,
   nearCrabDist: 999, nearCrabHp: 0, nearWispDist: 999,
   nearCrabX: 0, nearCrabZ: 0, pst: 'idle', iframes: 0, pulseT: 0,
+  // v3
+  sprint: false, sprintLean: 0, air: false, airY: 0, fy: 0, gy: 0,
+  landT: 0, jumps: 0, crabHits: 0, compassMotes: 0,
+  objBearing: null, objDist: null, compassSeen: false,
+  wakeMinRel: 0, spawnClear: 0, solidHere: false,
 };
 window.__fm = TL;
 function syncTelemetry() {
@@ -319,6 +325,20 @@ function syncTelemetry() {
   TL.nearWispX = nwx; TL.nearWispZ = nwz;
   TL.pst = P.st; TL.iframes = P.iframes; TL.pulseT = P.pulseT;
   TL.nearCrabDist = ncd; TL.nearCrabHp = nch; TL.nearWispDist = nwd;
+  // v3
+  TL.sprint = P.sprint; TL.sprintLean = wickLean;
+  TL.air = P.air; TL.fy = P.fy;
+  TL.gy = groundH(P.x, P.z);
+  TL.airY = P.air ? P.fy - supportYAt(P.x, P.z, P.fy) : 0;
+  TL.landT = P.landT; TL.jumps = P.jumps;
+  TL.crabHits = crabHitsTotal;
+  TL.compassMotes = compassMotes;
+  const ob = objectivePoint();
+  TL.objBearing = ob ? Math.atan2(ob.x - P.x, ob.z - P.z) : null;
+  TL.objDist = ob ? Math.hypot(ob.x - P.x, ob.z - P.z) : null;
+  TL.compassSeen = SAVE ? !!SAVE.compassSeen : false;
+  TL.wakeMinRel = WAKE_STATS.minRel; TL.spawnClear = WAKE_STATS.spawnClear;
+  TL.solidHere = grottoSolidAt(P.x, P.z);
 }
 const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
 let SIM_FREEZE = false;   // screenshot staging: halt sim ticks, keep rendering
@@ -328,7 +348,7 @@ window.__fmDebug = {
   portraitOff: fmPortraitOff,
   cam(px, py, pz, lx, ly, lz) { FREECAM.on = true; FREECAM.p = [px, py, pz]; FREECAM.l = [lx, ly, lz]; },
   camOff() { FREECAM.on = false; CAM.ready = false; },
-  warp(x, z) { P.x = x; P.z = z; P.area = areaAt(x, z); CAM.ready = false; respawnLeftBehind(); },
+  warp(x, z) { P.x = x; P.z = z; P.fy = groundH(x, z); P.air = false; P.jvy = 0; P.area = areaAt(x, z); CAM.ready = false; respawnLeftBehind(); },
   hud(on) { el('hud').style.display = on ? '' : 'none'; },
   face(h) { P.heading = h; },
   camYaw(y) { CAM.yaw = y; },
@@ -425,11 +445,26 @@ function updateVisuals(dtv, now) {
     chest.group.visible = near2(chest.x, chest.z, 75);
     doorChest.group.visible = near2(doorChest.x, doorChest.z, 60);
     wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
+    if (grottoCapMesh) grottoCapMesh.visible = near2(46, 155, 165);
     tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);
     for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = near2(patch.cx, patch.cz, 55);
-    finn.char.root.visible = near2(finn.x, finn.z, 44);
-    tock.char.root.visible = near2(tock.x, tock.z, 44);
-    pearl.char.root.visible = near2(pearl.x, pearl.z, 44);
+    // v3: collectible salt crystals — bob, spin, sparkle (distance-culled)
+    for (const s of saltPickups) {
+      if (s.got) { s.mesh.visible = false; continue; }
+      const sv = near2(s.x, s.z, 36);
+      s.mesh.visible = sv;
+      if (sv) {
+        s.mesh.position.y = s.baseY + 0.15 + Math.sin(now / 420 + s.ph * 4) * 0.09;
+        s.mesh.rotation.y += dtv * 1.7;
+        if (!LOWFX && Math.random() < 0.05) {
+          psSparkle.spawn(s.x + (Math.random() - 0.5) * 0.5, s.mesh.position.y + 0.25 + Math.random() * 0.35,
+            s.z + (Math.random() - 0.5) * 0.5, 0, 0.45, 0, 0.7);
+        }
+      }
+    }
+    finn.char.root.visible = near2(finn.x, finn.z, 36);
+    tock.char.root.visible = near2(tock.x, tock.z, 36);
+    pearl.char.root.visible = near2(pearl.x, pearl.z, 36);
   }
   // glare overlay
   if (glareA > 0 && state !== 'cine') {
@@ -442,8 +477,10 @@ function updateVisuals(dtv, now) {
     const sx = P.x + Math.cos(a) * d, sz = P.z + Math.sin(a) * d;
     psShimmer.spawn(sx, groundH(sx, sz) + 0.4 + Math.random(), sz, 0, 0.55 + Math.random() * 0.4, 0, 1.6);
   }
-  psSpark.update(dtv); psDust.update(dtv); psSparkle.update(dtv);
-  if (psShimmer) psShimmer.update(dtv);
+  if (!SIM_FREEZE) {          // frozen frames keep their sparks (shot staging)
+    psSpark.update(dtv); psDust.update(dtv); psSparkle.update(dtv);
+    if (psShimmer) psShimmer.update(dtv);
+  }
   // shade sparkles while healing
   if (state === 'play' && P.shade && P.hearts < P.maxHearts && Math.random() < 0.12) {
     psSparkle.spawn(P.x + (Math.random() - 0.5) * 0.8, groundH(P.x, P.z) + 0.3, P.z + (Math.random() - 0.5) * 0.8,

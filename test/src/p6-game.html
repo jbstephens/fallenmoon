@@ -152,6 +152,8 @@ function doInteract(ctx) {
       if (QUEST.q >= 4) id = 'finnPost';
       else if (QUEST.q === 3) id = 'finnCarry';
       else if (!SAVE.talked.finn) id = 'finn1';    // THIS starts the Crescent thread
+      else if (QUEST.q === 0) id = 'finn1';        // v3 self-heal: a damaged save
+      // (talked but quest lost) gets the offer AGAIN — the arc can never dead-end
       else id = 'finnWait';
     } else if (t === 'tock') {
       if (QUEST.q >= 4) id = 'tockDusk';
@@ -233,17 +235,21 @@ function tickChest() {
   }
 }
 
-/* salt pickups */
+/* salt pickups — v3: a soft chime when you come near (2 m), pop-and-count
+   on collect. The chime re-arms once you leave. */
 function tickSalt() {
   for (const s of saltPickups) {
     if (s.got) continue;
-    if (Math.hypot(P.x - s.x, P.z - s.z) < 1.0) {
+    const d = Math.hypot(P.x - s.x, P.z - s.z);
+    if (d < 2.0 && !s.chimed) { s.chimed = true; SFX.chime(1.6); }
+    else if (d > 4.5) s.chimed = false;
+    if (d < 1.1) {
       s.got = true;
       P.salt++;
       SAVE.salt = P.salt; storeSave();
       rebuildSalt();
       SFX.pickup();
-      burst(psSparkle, s.x, groundH(s.x, s.z) + 0.5, s.z, 10, 1.0, 1.4, 0.7);
+      burst(psSparkle, s.x, groundH(s.x, s.z) + 0.5, s.z, 14, 1.2, 1.6, 0.8);
     }
   }
 }
@@ -374,7 +380,8 @@ function tickCrab(cr) {
     if (d2p < 8) { cr.st = 'aggro'; cr.t = 0; }
   } else if (cr.st === 'aggro') {
     moveCrab(cr, P.x, P.z, 1.9);
-    if (d2p > 13) { cr.st = 'patrol'; cr.t = 0; }
+    // v3: leashed to the patrol ground — no kiting crab trains to the village
+    if (d2p > 13 || Math.hypot(cr.x - cr.sx, cr.z - cr.sz) > 28) { cr.st = 'patrol'; cr.t = 0; }
     else if (d2p < 3.6 && cr.lungeCD <= 0) {
       cr.st = 'tele'; cr.t = 0;
       SFX.click();
@@ -390,7 +397,8 @@ function tickCrab(cr) {
   } else if (cr.st === 'lunge') {
     cr.x += cr.dir[0] * 7.5 * DT; cr.z += cr.dir[1] * 7.5 * DT;
     const c = collide(cr.x, cr.z, 0.6); cr.x = c[0]; cr.z = c[1];
-    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3) hurtPlayer(1, cr.x, cr.z);
+    // v3: a well-timed jump sails over the pinch
+    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z);
     if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
   } else if (cr.st === 'recover') {
     if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
@@ -409,14 +417,16 @@ function moveCrab(cr, tx, tz, sp) {
     cr.ang = Math.atan2(dx, dz);
   }
 }
+let crabHitsTotal = 0;   // v3 telemetry: every registered sword→crab contact
 function hitCrab(cr) {
   cr.hp--;
-  cr.flash = 0.18;
+  crabHitsTotal++;
+  cr.flash = 0.22;
   SFX.hit();
-  P.hitstop = 3;
-  rumble({ duration: 70, strong: 0.4, weak: 0.3 });
+  P.hitstop = 4;                      // v3: a touch more hit-pause on contact
+  rumble({ duration: 90, strong: 0.55, weak: 0.35 });
   const y = groundH(cr.x, cr.z);
-  burst(psSpark, cr.x, y + 0.5, cr.z, 8, 1.8, 1.6, 0.4);
+  burst(psSpark, cr.x, y + 0.55, cr.z, 15, 2.3, 1.8, 0.45);   // big spark burst
   const d = Math.hypot(cr.x - P.x, cr.z - P.z) || 1;
   cr.dir = [(cr.x - P.x) / d, (cr.z - P.z) / d];
   if (cr.hp <= 0) {
@@ -449,6 +459,14 @@ function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
   const faceP = () => { w.face = Math.atan2(P.x - w.x, P.z - w.z); };
   if (w.st === 'drift') {
     w.y = gy + 1.8 + Math.sin(w.t * 2.2) * 0.25;
+    // v3: imps are leashed to their dune — no kiting a glowing mob across
+    // the map (and no village frames paying for a chase entourage)
+    const dHome = Math.hypot(w.x - w.sx, w.z - w.sz);
+    if (w.area !== 'boss' && dHome > 26) {
+      w.x += (w.sx - w.x) / dHome * 2.4 * DT;
+      w.z += (w.sz - w.z) / dHome * 2.4 * DT;
+      return;
+    }
     if (d2p > 1.5 && d2p < 16) {
       const d = d2p || 1;
       w.x += (P.x - w.x) / d * 1.25 * DT;
@@ -672,16 +690,23 @@ function hitBossClaw() {
   }
 }
 
-/* ── sword swing resolution ── */
+/* ── sword swing resolution ──
+   v3: the sword's hit volume is a VERTICAL BAND, ground to overhead — Wick
+   can never swing "over" a low crab again. Crab hurtbox +40%, arc widened. */
 function swingHits() {
   let any = trySwingKelp();
   for (const cr of crabs) {
     if (cr.dead) continue;
-    if (inSwingArc(cr.x, cr.z, 2.25)) { hitCrab(cr); any = true; }   // generous v2 hitbox
+    // 2.6 range / 1.35 half-arc, and no height test downward: the blade owns
+    // everything from the sand to overhead. Airborne swings still connect
+    // unless Wick is well above the shell.
+    if (inSwingArc(cr.x, cr.z, 2.6, 1.35) && P.fy - groundH(cr.x, cr.z) < 1.6) {
+      hitCrab(cr); any = true;
+    }
   }
   for (const w of wisps) {
     if (w.dead) continue;
-    if (inSwingArc(w.x, w.z, 2.0) && w.y < groundH(P.x, P.z) + 2.2) { popWisp(w); any = true; }
+    if (inSwingArc(w.x, w.z, 2.0) && w.y < P.fy + 2.2) { popWisp(w); any = true; }
   }
   const B = BOSS;
   if (B.active && !B.defeated && (B.st === 'stuck' || B.st === 'dizzy')) {
@@ -743,6 +768,7 @@ function tickCine() {
       CINE.step = 1;
       const spot = inGrottoAt(P.x, P.z) ? { x: 30, z: 137 } : nearestShadeSpot(P.x, P.z);
       P.x = spot.x; P.z = spot.z;
+      P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
       P.hearts = 3;
       P.st = 'idle'; P.vx = 0; P.vz = 0;
       P.healT = 0;
@@ -1064,11 +1090,11 @@ function animateEnemies(dtv, now) {
     if (cr.dead) continue;
     const cdx = cr.x - ccx, cdz = cr.z - ccz;
     const cd2 = cdx * cdx + cdz * cdz;
-    const vis = cd2 < 38 * 38;
+    const vis = cd2 < 33 * 33;   // v3: fog haze owns everything past ~33 m
     cr.c.root.visible = vis;
     if (!vis) continue;
     // LOD: beyond 22 m only the shell + shadow draw (limbs are subpixel soup)
-    const lodFar = cd2 > 22 * 22;
+    const lodFar = cd2 > 17 * 17;   // v3: limbs are subpixel past ~17 m
     cr.c.clawL.armN.visible = !lodFar;
     cr.c.clawR.armN.visible = !lodFar;
     cr.c.legs.visible = !lodFar;
@@ -1084,7 +1110,18 @@ function animateEnemies(dtv, now) {
       cr.c.clawR.armN.rotation.x = -0.9 - Math.sin(w * 34) * 0.08;
       cr.c.body.position.y = 0.22 + 0.07;
       cr.c.body.rotation.x = -0.12;
+    } else if (cr.st === 'stagger') {
+      // v3: knockback HOP — the whole crab pops off the sand, claws flung
+      const k = clamp(cr.t / 0.4, 0, 1);
+      const hop = Math.sin(k * Math.PI) * 0.26;
+      cr.c.root.position.y = y + hop;
+      cr.c.shadow.position.y = -hop + 0.02;      // shadow stays on the sand
+      cr.c.body.position.y = 0.22;
+      cr.c.body.rotation.x = -0.18 * (1 - k);
+      cr.c.clawL.armN.rotation.x = -0.6 * (1 - k);
+      cr.c.clawR.armN.rotation.x = -0.5 * (1 - k);
     } else {
+      cr.c.shadow.position.y = 0;
       cr.c.clawL.armN.rotation.x = Math.sin(w * 2.2 + cr.sx) * 0.1;
       cr.c.clawR.armN.rotation.x = Math.sin(w * 2.2 + cr.sx + 1) * 0.1;
       cr.c.body.position.y = 0.22 + (moving ? Math.abs(Math.sin(w * 14)) * 0.03 : 0);
@@ -1100,10 +1137,10 @@ function animateEnemies(dtv, now) {
     if (ws.dead) continue;
     const wdx = ws.x - ccx, wdz = ws.z - ccz;
     const wd2 = wdx * wdx + wdz * wdz;
-    const vis = wd2 < 38 * 38;
+    const vis = wd2 < 33 * 33;
     ws.m.root.visible = vis;
     if (!vis) continue;
-    ws.m.wings.visible = wd2 < 22 * 22;   // LOD: wings fade past 22 m
+    ws.m.wings.visible = wd2 < 17 * 17;   // LOD: wings fade past ~17 m
     ws.m.root.position.set(ws.x, ws.y, ws.z);
     ws.m.root.rotation.y = ws.face || 0;
     // blob shadow stays on the ground below the hovering imp

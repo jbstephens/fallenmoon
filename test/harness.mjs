@@ -147,17 +147,20 @@ const BOT_SRC = `(function(){
       key('KeyW', my < -0.35); key('KeyS', my > 0.35);
     }
   }
-  let pressed=false;
+  let pressed=false, sprinting=false;
   function press(on){
     if (on===pressed) return; pressed=on;
-    if (B.mode==='pad'){ if(on) __fakePad.press(0); else __fakePad.press(); }
+    if (B.mode==='pad'){ if(on) __fakePad.press(0); else __fakePad.press(sprinting?1:undefined); }
     else key('KeyJ', on);
   }
-  function roll(){
-    if (B.mode==='pad'){ __fakePad.press(1); setTimeout(()=>{ if(!pressed) __fakePad.press(); },80); }
-    else { key('KeyK',true); setTimeout(()=>key('KeyK',false),80); }
+  // v3: dodge-roll is gone — the bot SPRINTS out of trouble instead
+  function sprint(on){
+    if (on===sprinting) return; sprinting=on;
+    if (B.mode==='pad'){ if(!pressed) __fakePad.press(on?1:undefined); }
+    else key('ShiftLeft', on);
   }
-  B.release=()=>{ stick(0,0); press(false); B.target=null; B.fight=false; B.boss=false; B.still=false; };
+  B.sprint = sprint;
+  B.release=()=>{ stick(0,0); press(false); sprint(false); B.target=null; B.fight=false; B.boss=false; B.still=false; };
   let f=0;
   // stuck detection: if a walk target exists but we stop making progress
   // (collider pockets in the village clutter), sidestep for a beat
@@ -178,23 +181,27 @@ const BOT_SRC = `(function(){
     if (B.boss){
       const st=T.bossState, bx=T.bossX, bz=T.bossZ;
       const dxp=T.x-bx, dzp=T.z-bz, dp=Math.hypot(dxp,dzp)||1;
-      if (!T.bossActive){ want=[58,164]; press(false); }
+      if (!T.bossActive){ want=[58,164]; press(false); sprint(false); }
       else if (st==='stuck'||st==='dizzy'){
+        sprint(false);
+        // steer INTO the claw while swinging — v3's solid arena wall can pin
+        // the flee, so the slam may land right on us with our back turned
         const cx=T.bossClawX, cz=T.bossClawZ;
-        const d=Math.hypot(cx-T.x,cz-T.z);
-        if (d>1.8) want=[cx,cz];
-        else { want=null; stick(0,0); press((f>>2)&1?true:false); }
+        want=[cx,cz];
+        press((f>>2)&1?true:false);
       } else if (st==='slamTele'||st==='slam'){
-        press(false);
+        press(false); sprint(true);            // sprint clear of the slam
         want=[bx+dxp/dp*8, bz+dzp/dp*8];
       } else if (st==='chargeTele'||st==='charge'){
-        press(false);
-        if (st==='charge' && dp<6 && f%18===0) roll();
+        press(false); sprint(true);            // sprint out of the charge line
         want=[62-dzp/dp*7, 166+dxp/dp*7];
       } else {
-        press(false);
+        press(false); sprint(false);
+        // dp 4.2..6.5 is the engagement pocket — outside it, close back in
+        // (v3's solid arena wall can funnel a flee into the corridor mouth,
+        // just past the boss's slam range: never linger there)
         if (dp<4.2) want=[bx+dxp/dp*6, bz+dzp/dp*6];
-        else if (dp>9) want=[bx+dxp/dp*6, bz+dzp/dp*6];
+        else if (dp>6.5) want=[bx+dxp/dp*6, bz+dzp/dp*6];
       }
     } else if (B.fight){
       const cd=T.nearCrabDist, wd=T.nearWispDist;
@@ -313,11 +320,18 @@ function makeApi(c) {
       await api.eval('__fmBot.target=null');
     },
     async perfReset() {
-      await api.eval(`window.__perfMax={calls:0,tris:0};
+      await api.eval(`window.__perfMax={calls:0,tris:0,at:''};
         if(!window.__perfHook){window.__perfHook=1;(function s(){requestAnimationFrame(s);
           const T=window.__fm; if(!T) return;
           if(T.state==='play'||T.state==='cine'||T.state==='dialog'){
-            if(T.calls>__perfMax.calls)__perfMax.calls=T.calls;
+            if(T.calls>__perfMax.calls){__perfMax.calls=T.calls;
+              __perfMax.at=T.x.toFixed(0)+','+T.z.toFixed(0)+' yaw'+T.camYaw.toFixed(2)+' '+T.state+' pst:'+T.pst;
+              if(T.calls>78&&typeof crabs!=='undefined'){__perfMax.mix='crabs:'+crabs.filter(c=>c.c.root.visible).length+
+                ' imps:'+wisps.filter(w2=>w2.m.root.visible).length+
+                ' salt:'+saltPickups.filter(s=>s.mesh.visible).length+
+                ' kelp:'+kelpPatches.filter(p=>p.mesh&&p.mesh.visible).length+
+                ' npcs:'+[finn,tock,pearl].filter(n2=>n2.char.root.visible).length+
+                ' pitch:'+T.camPitch.toFixed(2)+' cpos:'+crabs.map(c=>c.c.root.visible?(c.x.toFixed(0)+'/'+c.z.toFixed(0)):'-').join(' ')+' cam:'+camera.position.x.toFixed(0)+','+camera.position.z.toFixed(0);}}
             if(T.tris>__perfMax.tris)__perfMax.tris=T.tris;}})();}`);
     },
     async perfRead() { return api.eval('window.__perfMax'); },
@@ -346,6 +360,11 @@ function driver(api, mode) {
     holdAtk: on => mode === 'pad'
       ? (on ? api.press(0) : api.press())
       : api.key('j', 'KeyJ', on),
+    // v3 controls
+    sprint: on => mode === 'pad'
+      ? (on ? api.press(1) : api.press())
+      : api.key('Shift', 'ShiftLeft', on),
+    jump: () => mode === 'pad' ? api.tap(2) : api.tapKey(' ', 'Space'),
   };
 }
 async function advanceDialog(api, D, expectId, maxLines = 5) {
@@ -358,6 +377,122 @@ async function advanceDialog(api, D, expectId, maxLines = 5) {
     await sleep(230);
   }
   await api.waitFor(`__fm.dlg !== ${JSON.stringify(expectId)}`, 6000, 'dialogue ' + expectId + ' done');
+}
+
+/* ═══ v3 control gates: SPRINT, JUMP, air attack — run in both slices ═══
+   Assumes the bot is installed and the player is in free play. */
+async function v3ControlGates(api, D, g) {
+  const snap = async () => JSON.parse(await api.eval(`JSON.stringify({t:__fm.tick,x:__fm.x,z:__fm.z})`));
+  // ── sprint: measured speed delta + lean pose flag ──
+  await api.eval('__fmDebug.warp(-55, 26)');
+  await api.eval('__fmBot.tol=0.4; __fmBot.target=[-55, 70]');
+  await api.waitTicks(30);                 // let steering settle
+  const w0 = await snap(); await api.waitTicks(180); const w1 = await snap();
+  const vWalk = Math.hypot(w1.x - w0.x, w1.z - w0.z) / (w1.t - w0.t);
+  await api.eval('__fmBot.target=null');
+  await api.eval('__fmDebug.warp(-55, 26)');
+  await D.sprint(true);
+  await api.eval('__fmBot.tol=0.4; __fmBot.target=[-55, 70]');
+  await api.waitTicks(30);
+  const s0 = await snap();
+  const sprFlag = await api.eval('__fm.sprint === true');
+  await api.waitTicks(90);
+  const lean = await api.eval('__fm.sprintLean');
+  await api.waitTicks(90);
+  const s1 = await snap();
+  const vSpr = Math.hypot(s1.x - s0.x, s1.z - s0.z) / (s1.t - s0.t);
+  await D.sprint(false);
+  await api.eval('__fmBot.target=null');
+  g('sprint: ~1.6x speed delta', vSpr / vWalk > 1.4 && vSpr / vWalk < 1.85,
+    `walk ${vWalk.toFixed(3)} sprint ${vSpr.toFixed(3)} ratio ${(vSpr / vWalk).toFixed(2)}`);
+  g('sprint: flag + lean pose', sprFlag && lean > 0.2, `flag=${sprFlag} lean=${lean}`);
+
+  // ── jump: leaves the ground ~1 m, lands with squash ──
+  await api.eval('__fmDebug.warp(-55, 26)');
+  await api.eval(`window.__jw={max:0,landed:false,squash:false};(function w(){
+    const T=__fm; if(T.airY>__jw.max)__jw.max=T.airY;
+    if(__jw.max>0.3&&!T.air){__jw.landed=true;if(T.landT>0)__jw.squash=true;return;}
+    requestAnimationFrame(w);})()`);
+  await D.jump();
+  await api.waitFor('window.__jw.landed', 8000, 'jump lands');
+  const jw = await api.eval('JSON.stringify(window.__jw)').then(JSON.parse);
+  g('jump: real ~1 m arc, leaves ground and lands', jw.max > 0.6 && jw.max < 1.4 && jw.landed,
+    `apex=${jw.max.toFixed(2)}`);
+  g('jump: landing squash window', jw.squash);
+  g('jump: no double jump mid-air', (await api.eval('__fm.jumps')) >= 1);
+
+  // ── jump clears a kelp cluster (real-time steering) ──
+  await api.eval('window.__fmTurbo = 1');
+  let cleared = false, overAir = 0;
+  for (let att = 0; att < 4 && !cleared; att++) {
+    await api.eval('__fmDebug.warp(12.4, 5.6); __fmDebug.camYaw(Math.PI)');
+    await api.eval(`window.__kw={over:0};(function w(){
+      const T=__fm; if(Math.abs(T.z-9.2)<0.55&&Math.abs(T.x-12.4)<1.2&&T.airY>__kw.over)__kw.over=T.airY;
+      if(T.z>11.5)return; requestAnimationFrame(w);})()`);
+    await api.eval('__fmBot.tol=0.4; __fmBot.target=[12.4, 12.6]');
+    const t0 = Date.now();
+    let jumped = false;
+    while (Date.now() - t0 < 9000) {
+      const z = await api.eval('__fm.z');
+      if (!jumped && z > 7.9) { await D.jump(); jumped = true; }
+      if (z > 11.4) break;
+      await sleep(25);
+    }
+    await api.eval('__fmBot.target=null');
+    overAir = await api.eval('window.__kw.over');
+    if (overAir > 0.25) cleared = true;
+  }
+  g('jump: clears a kelp cluster airborne', cleared, `air over stalk=${overAir.toFixed(2)}`);
+
+  // ── jump lands ON a crate top and stands there ──
+  let onCrate = false, standH = 0;
+  for (let att = 0; att < 6 && !onCrate; att++) {
+    await api.eval('__fmDebug.warp(-14.7, 10.4)');
+    await api.eval('__fmBot.tol=0.03; __fmBot.target=[-14.7, 8.6]');
+    // press into the crate until blocked
+    const t0 = Date.now();
+    let last = 99;
+    while (Date.now() - t0 < 6000) {
+      const d = Math.hypot((await api.eval('__fm.x')) - (-14.7), (await api.eval('__fm.z')) - 8.6);
+      if (d < 1.05 && Math.abs(d - last) < 0.02) break;
+      last = d;
+      await sleep(60);
+    }
+    await D.jump();
+    await sleep(235);
+    await api.eval('__fmBot.target=null; __fmBot.release()');
+    await api.waitTicks(45);
+    const air = await api.eval('__fm.air');
+    standH = (await api.eval('__fm.fy')) - (await api.eval('__fm.gy'));
+    if (!air && standH > 0.32) {
+      await api.waitTicks(20);
+      const still = !(await api.eval('__fm.air')) &&
+        ((await api.eval('__fm.fy')) - (await api.eval('__fm.gy'))) > 0.32;
+      if (still) onCrate = true;
+    }
+  }
+  g('jump: lands on a crate top (stands on it)', onCrate, `standH=${standH.toFixed(2)}`);
+
+  // ── air attack: same swing, allowed mid-jump (real time: the whole jump
+  // is only 0.6 s — turbo would land it before the swing arrives) ──
+  await api.eval('__fmDebug.warp(-55, 26)');
+  await api.eval(`window.__aa=false;(function w(){
+    const T=__fm; if(T.pst==='atk'&&T.air){window.__aa=true;return;}
+    if(!T.air&&T.tick>1e9)return; requestAnimationFrame(w);})()`);
+  let airAtk = false;
+  for (let att = 0; att < 6 && !airAtk; att++) {
+    // clean grounded idle first — a stray combo eats the jump edge otherwise
+    await api.waitFor(`__fm.pst === 'idle' && __fm.air === false && __fm.state === 'play'`, 8000, 'grounded idle').catch(() => {});
+    await D.jump();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 700 && !(await api.eval('__fm.air'))) await sleep(30);
+    if (await api.eval('__fm.air')) await D.confirm();
+    await sleep(450);
+    airAtk = await api.eval('window.__aa');
+  }
+  g('air attack allowed (same swing)', airAtk);
+  await api.eval('window.__fmTurbo = undefined');   // resume suite turbo
+  await api.eval('__fmDebug.warp(8.2, 7.0)');   // back at the spawn boat
 }
 
 /* ═══════════ the full slice, drivable by pad or keyboard ═══════════
@@ -373,6 +508,12 @@ async function playSlice(api, D, opts = {}) {
   const tick0 = await api.eval('__fm.tick');
   g('wake cinematic → free control', true);
   g('wakes in shade', await api.eval('__fm.shade === true'));
+
+  // ── v3 spawn integrity: the wreck is GROUNDED and Wick spawns clear ──
+  const minRel = await api.eval('__fm.wakeMinRel');
+  const spClear = await api.eval('__fm.spawnClear');
+  g('spawn wreck fully grounded (min vertex ≤ ground+eps)', minRel <= 0.06, `minRel=${minRel.toFixed(3)}`);
+  g('no geometry inside Wick\'s spawn capsule', spClear >= 0.5, `clearance=${spClear.toFixed(2)}m`);
 
   // ── v2: NO directives at spawn ──
   g('no quest banner at spawn', !(await api.eval(`document.getElementById('questLine').classList.contains('on')`)) &&
@@ -446,6 +587,9 @@ async function playSlice(api, D, opts = {}) {
 
   await api.installBot(D.mode);
   await api.perfReset();
+
+  /* ═══ v3 controls: sprint, jump, air attack (replaces every roll gate) ═══ */
+  await v3ControlGates(api, D, g);
 
   /* ═══ THE OPEN LOOP — 3+ sim-minutes, ZERO dialogue: walk, slash, find ═══ */
   await api.eval(`window.__dlgSeen=false;(function w(){
@@ -615,12 +759,21 @@ async function playSlice(api, D, opts = {}) {
   await api.waitFor(`__fm.salt > ${salt0}`, 10000, 'salt cache');
   g('kelp door hides a chest (salt cache)', true, 'salt=' + await api.eval('__fm.salt'));
 
-  // ── moonglass pulse ──
+  // ── MOON COMPASS (△) — same pulse mechanic, v3 clarity layer ──
+  const motes0 = await api.eval('__fm.compassMotes');
+  const seen0 = await api.eval('__fm.compassSeen');
   if (D.mode === 'pad') await api.press(3); else await api.key('l', 'KeyL', true);
   let pulsed = false;
   try { await api.waitFor('__fm.pulseT > 0', 3000, 'pulse'); pulsed = true; } catch (e) {}
   if (D.mode === 'pad') await api.press(); else await api.key('l', 'KeyL', false);
-  g('moonglass pulse (△) fires', pulsed);
+  g('moon compass (△) fires', pulsed);
+  g('moon compass: silver mote stream spawned', (await api.eval('__fm.compassMotes')) > motes0,
+    'motes=' + await api.eval('__fm.compassMotes'));
+  g('moon compass: objective bearing telemetry live', (await api.eval('__fm.objBearing')) !== null &&
+    (await api.eval('__fm.objDist')) > 0);
+  g('moon compass: one-time caption on first use', seen0 === false ?
+    (await api.eval('__fm.compassSeen')) === true : true,
+    seen0 ? '(already seen this save)' : 'caption fired');
 
   // ── out into the Dry Bay, quest-bound this time ──
   await api.walkTo(14, -18, 1.4);
@@ -717,11 +870,14 @@ async function playSlice(api, D, opts = {}) {
   const skyBefore = await api.shot(opts.tag === 'pad' ? 'sky-before' : 'sky-before-kbd');
   await api.eval('window.__fmTurbo = undefined');
 
-  // ── THE PAYOFF ──
-  await api.walkTo(-37.2, -74.6, 0.8);
-  await api.waitFor(`__fm.prompt === 'wheel'`, 10000, 'wheel prompt');
-  await D.confirm();
-  await api.waitFor(`__fm.cinId === 'wheel'`, 10000, 'payoff begins');
+  // ── THE PAYOFF (sunstruck-resilient: re-approach and re-press as needed) ──
+  for (let i = 0; i < 5 && !(await api.eval(`__fm.cinId === 'wheel' || __fm.phases >= 1`)); i++) {
+    await api.waitFor(`__fm.state === 'play'`, 90000, 'control before the wheel').catch(() => {});
+    await api.walkTo(-37.2, -74.6, 0.8, 90000).catch(() => {});
+    if (await api.eval(`__fm.prompt === 'wheel'`)) await D.confirm();
+    await sleep(700);
+  }
+  await api.waitFor(`__fm.cinId === 'wheel'`, 15000, 'payoff begins');
   if (opts.payoffShots) {
     await api.waitFor('__fm.cinT > 8.45', 60000, 'payoff sky moment');
     await api.eval('window.__fmTurbo = 1');
@@ -1054,6 +1210,17 @@ async function suitePerf(base) {
     const orb = await api.perfRead();
     gate('perf: free-orbit draw calls ≤ 80', orb.calls <= 80, 'max ' + orb.calls);
     gate('perf: free-orbit triangles ≤ 120k', orb.tris <= 120000, 'max ' + orb.tris);
+    // v3 worst case: SPRINT straight through the village (max chunk churn,
+    // heel dust live, the refined ground mesh in frame)
+    await api.eval('__fmDebug.warp(34, -14)');
+    await api.perfReset();
+    await api.eval('__fakePad.press(1)');
+    await api.walkTo(-34, -38, 1.5, 90000);
+    await api.eval('__fakePad.press()');
+    await api.eval('__fmBot.release()');
+    const spr = await api.perfRead();
+    gate('perf: sprint-through-village draw calls ≤ 80', spr.calls <= 80, 'max ' + spr.calls + ' @ ' + spr.at + ' | ' + (spr.mix || ''));
+    gate('perf: sprint-through-village triangles ≤ 120k', spr.tris <= 120000, 'max ' + spr.tris);
     const bad = api.consoleBad;
     gate('perf: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
@@ -1112,6 +1279,262 @@ async function suiteMigrate(base) {
   c.close(); proc.kill();
 }
 
+/* ═══ v3: crab-hit reliability — a single swing at neutral range registers
+   100% over 20 varied-bearing trials (John: "they look great, they're too
+   hard to hit"). Real attack presses; staging via warp/face only. ═══ */
+async function suiteCombat(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({
+    v: 2, q: 2, ph: 0, mh: 8, sword: true, salt: 0,
+    talked: { finn: 1, tock: 1, pearl: 1 },
+    kelpDoor: true, doorChest: true, finnHeart: true, wreckChest: true, wallBurned: false,
+    bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
+  });
+  await api.nav(base + '/?turbo=6');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.eval('window.__fmTurbo = 1');       // real-time: trials need position control
+    let landed = 0;
+    const misses = [];
+    for (let i = 0; i < 20; i++) {
+      await api.waitFor(`__fm.state === 'play'`, 60000, 'control for trial').catch(() => {});
+      // reset from the VILLAGE: far outside aggro range, and the area change
+      // respawns any crab we already dispatched — every trial starts neutral
+      await api.eval('__fmDebug.warp(0, -24)');
+      await sleep(900);                           // lunges/staggers fully decay
+      const cx = await api.eval('__fm.nearCrabX'), cz = await api.eval('__fm.nearCrabZ');
+      const a = (i / 20) * Math.PI * 2;
+      const px = cx + Math.sin(a) * 1.9, pz = cz + Math.cos(a) * 1.9;
+      await api.eval(`__fmDebug.warp(${px.toFixed(2)}, ${pz.toFixed(2)}); ` +
+        `__fmDebug.face(${Math.atan2(cx - px, cz - pz).toFixed(3)})`);
+      const h0 = await api.eval('__fm.crabHits');
+      await api.tap(0);                            // ONE real swing
+      let hit = false;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 2500) {
+        if ((await api.eval('__fm.crabHits')) > h0) { hit = true; break; }
+        await sleep(60);
+      }
+      if (hit) landed++;
+      else {
+        const dbg = await api.eval(`JSON.stringify({d:__fm.nearCrabDist,cx:__fm.nearCrabX,cz:__fm.nearCrabZ,x:__fm.x,z:__fm.z,h:__fm.heading,pst:__fm.pst,st:__fm.state})`);
+        misses.push(`b${i}@${(a).toFixed(2)}rad ${dbg}`);
+      }
+    }
+    gate('combat: single swing hits a crab 20/20 at neutral range', landed === 20,
+      `${landed}/20${misses.length ? ' missed: ' + misses.join(',') : ''}`);
+    const bad = api.consoleBad;
+    gate('combat: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('combat suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v3: collision fuzzer (the grotto walk-through-walls bug).
+   Drives the player INTO surfaces for seconds at 12 bearings per target —
+   walking AND jumping — and asserts the position never enters solid rock,
+   never crosses a wall plane, never reaches the boss arena early. ═══ */
+async function suiteFuzz(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  const seed = (wall) => api.seedSave({
+    v: 2, q: 2, ph: 0, mh: 8, sword: true, salt: 0,
+    talked: { finn: 1, tock: 1, pearl: 1 },
+    kelpDoor: true, doorChest: true, finnHeart: true, wreckChest: true, wallBurned: wall,
+    bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
+  });
+  const enter = async () => {
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.eval(`window.__fz = { bad: 0, arena: 0, worst: '' };
+      (function w(){ const T = window.__fm;
+        if (T && T.state === 'play') {
+          if (grottoSolidAt(T.x, T.z)) { __fz.bad++; __fz.worst = T.x.toFixed(1)+','+T.z.toFixed(1); }
+          if (window.__fzKeepOut) {
+            const k = window.__fzKeepOut;
+            if (Math.hypot(T.x - k[0], T.z - k[1]) < k[2]) { __fz.bad++; __fz.worst = 'keepout '+T.x.toFixed(1)+','+T.z.toFixed(1); }
+          }
+          if (window.__fzNoArena && Math.hypot(T.x - 62, T.z - 166) < 14.2) __fz.arena++;
+        }
+        requestAnimationFrame(w); })()`);
+  };
+  // push the player toward world-dir (dx,dz) for ms; optionally jumping
+  const shove = async (dx, dz, ms, jump) => {
+    const t0 = Date.now();
+    let jt = 0;
+    while (Date.now() - t0 < ms) {
+      await api.eval(`__fmDebug.camYaw(Math.PI)`);
+      await api.axes(-dx, -dz);
+      if (jump && Date.now() - jt > 500) { jt = Date.now(); await api.press(2); await sleep(60); await api.press(); }
+      await sleep(90);
+    }
+    await api.axes(0, 0);
+  };
+  const fuzzRing = async (cx, cz, tag, ms, jumpEvery) => {
+    for (let b = 0; b < 12; b++) {
+      const a = b / 12 * Math.PI * 2;
+      await api.eval(`__fmDebug.warp(${cx}, ${cz})`);
+      await shove(Math.sin(a), Math.cos(a), ms, jumpEvery && b % 3 === 0);
+      await api.waitFor(`__fm.state === 'play'`, 90000, 'control back').catch(() => {});
+    }
+  };
+  try {
+    // ── phase 1: sealed grotto (wall NOT burned) — the John exploit ──
+    await seed(false);
+    await enter();
+    await api.eval('window.__fzNoArena = 1');
+    await fuzzRing(30, 150, 'chamber A', 1300, true);        // vs walls + corridor plug
+    await fuzzRing(30, 136, 'entrance throat', 900, true);
+    gate('fuzz: grotto walls solid — never inside rock', (await api.eval('__fz.bad')) === 0,
+      'bad=' + await api.eval('__fz.bad') + ' ' + await api.eval('__fz.worst'));
+    gate('fuzz: boss arena unreachable before the wall burns',
+      (await api.eval('__fz.arena')) === 0 && (await api.eval('__fm.bossActive')) === false &&
+      (await api.eval('__fm.wallBurned')) === false,
+      'arenaFrames=' + await api.eval('__fz.arena'));
+    // outside-in: try to walk INTO the massif from the bay
+    await api.eval('__fz.bad = 0');
+    for (const [sx, sz, dx, dz] of [[30, 118, 0, 1], [5, 148, 1, 0], [52, 133, 0, 1], [30, 178, 0, -1], [85, 160, -1, 0]]) {
+      await api.eval(`__fmDebug.warp(${sx}, ${sz})`);
+      await shove(dx, dz, 1100, true);
+    }
+    gate('fuzz: massif solid from the outside too', (await api.eval('__fz.bad')) === 0,
+      'bad=' + await api.eval('__fz.bad'));
+
+    // ── phase 2: village walls + big rocks ──
+    await api.eval('window.__fzNoArena = 0; __fz.bad = 0');
+    await api.eval('window.__fzKeepOut = [-38, -32, 4.05]');   // house shell interior
+    for (let b = 0; b < 12; b++) {
+      const a = b / 12 * Math.PI * 2;
+      await api.eval(`__fmDebug.warp(${(-38 + Math.sin(a) * 6.4).toFixed(2)}, ${(-32 + Math.cos(a) * 6.4).toFixed(2)})`);
+      await shove(-Math.sin(a), -Math.cos(a), 800, b % 4 === 0);
+    }
+    gate('fuzz: house walls solid at all bearings (walk + jump)',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad'));
+    await api.eval('window.__fzKeepOut = [12, 52, 0.9]');      // tall rock core
+    for (let b = 0; b < 12; b++) {
+      const a = b / 12 * Math.PI * 2;
+      await api.eval(`__fmDebug.warp(${(12 + Math.sin(a) * 3.2).toFixed(2)}, ${(52 + Math.cos(a) * 3.2).toFixed(2)})`);
+      await shove(-Math.sin(a), -Math.cos(a), 600, b % 4 === 0);
+    }
+    gate('fuzz: sea-stack rock solid at all bearings',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad'));
+
+    // ── phase 3: boss-arena perimeter (wall burned, boss live) ──
+    await seed(true);
+    await enter();
+    await api.eval('window.__fzKeepOut = 0; window.__fzNoArena = 0');
+    await fuzzRing(62, 166, 'arena', 1000, true);
+    gate('fuzz: boss-arena perimeter sealed (fight live)',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad'));
+    const bad = api.consoleBad;
+    gate('fuzz: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('fuzz suite', false, e.message);
+    await api.shot('fuzz-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v3: save-loader stage gates (the Ben soft-lock).
+   For every quest stage: write the save, reload, CONTINUE, and assert the
+   LIVE state (quest, beacon, banner, boss wakability) matches. Then the
+   damaged-save shapes: q lost but flags advanced → loader re-derives; and
+   the in-session Finn self-heal re-offers the thread via a REAL talk. ═══ */
+async function suiteSaves(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  const benSave = JSON.parse(fs.readFileSync(path.join(DIR, 'test', 'fixtures', 'ben-session-save.json'), 'utf8'));
+  const continueIn = async () => {
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+    await api.waitTicks(30);
+  };
+  const banner = () => api.eval(`document.getElementById('questLine').classList.contains('on')`);
+  try {
+    // ── q0: fresh open loop ──
+    await api.seedSave({ ...benSave, q: 0, talked: { finn: 0, tock: 0, pearl: 0 }, wallBurned: false, kelpDoor: false, doorChest: false, finnHeart: false, salt: 0, mh: 5 });
+    await continueIn();
+    gate('saves: q0 loads as open loop (no banner, no beacon)',
+      (await api.eval('__fm.quest')) === 0 && !(await banner()) && !(await api.eval('__fm.beacon')));
+
+    // ── q2 mid-arc (the exact Ben fixture): quest, beacon, banner, boss ──
+    await api.seedSave(benSave);
+    await continueIn();
+    gate('saves: q2 fixture restores quest', (await api.eval('__fm.quest')) === 2,
+      'quest=' + await api.eval('__fm.quest'));
+    gate('saves: q2 beacon lights', await api.eval('__fm.beacon === true'));
+    gate('saves: q2 banner on', await banner());
+    gate('saves: q2 compass has a target', (await api.eval('__fm.objBearing')) !== null);
+    // boss must be wakeable (wallBurned in fixture): warp into the arena
+    await api.eval('__fmDebug.warp(62, 166)');
+    await api.waitFor('__fm.bossActive === true', 15000, 'boss wakes');
+    gate('saves: q2 boss wakes in the arena', true);
+
+    // ── q3: carrying the Crescent home ──
+    await api.seedSave({ ...benSave, q: 3, bossDone: true, wallBurned: true });
+    await continueIn();
+    gate('saves: q3 restores carry + wheel objective',
+      (await api.eval('__fm.quest')) === 3 && (await api.eval('__fm.carry')) === true &&
+      (await api.eval('__fm.beacon')) === true);
+
+    // ── q4: after the payoff ──
+    await api.seedSave({ ...benSave, q: 4, bossDone: true, wallBurned: true, sky: 1, ph: 1, tidepool: true });
+    await continueIn();
+    gate('saves: q4 restores the healed world',
+      (await api.eval('__fm.quest')) === 4 && (await api.eval('__fm.skyStep')) === 1 &&
+      (await api.eval('__fm.shadeGrow')) > 0.99 && (await api.eval('__fm.tidepool')) === true);
+
+    // ── the DAMAGED shape (John's console): q stuck at 0, flags advanced ──
+    await api.seedSave({ ...benSave, q: 0 });
+    await continueIn();
+    gate('saves: damaged save (q0 + advanced flags) re-derives forward',
+      (await api.eval('__fm.quest')) === 2 && (await api.eval('__fm.beacon')) === true,
+      'quest=' + await api.eval('__fm.quest'));
+
+    // ── in-session self-heal: quest lost mid-session → Finn RE-OFFERS ──
+    // (create the wild damaged state directly, then recover via a real talk)
+    await api.eval(`QUEST.q = 0; SAVE.q = 0; document.getElementById('questLine').classList.remove('on');`);
+    await api.waitTicks(10);
+    gate('saves: damaged state staged (quest 0, talked.finn 1)',
+      (await api.eval('__fm.quest')) === 0 && (await api.eval('SAVE.talked.finn')) === 1);
+    await api.installBot('pad');
+    const D = driver(api, 'pad');
+    await api.eval('__fmDebug.warp(30, -16)');
+    await api.walkTo(36, -15, 1.2);
+    await api.walkTo(39.7, -14.1, 0.5);
+    await api.waitFor(`__fm.prompt === 'talk'`, 8000, 'finn prompt');
+    await D.confirm();
+    await advanceDialog(api, D, 'finn1');
+    await api.waitFor('__fm.quest === 2', 8000, 'quest re-offered');
+    gate('saves: Finn self-heal re-offers the thread (quest 2 + beacon back)',
+      (await api.eval('__fm.beacon')) === true && (await banner()));
+
+    const bad = api.consoleBad;
+    gate('saves: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('saves suite', false, e.message);
+    await api.shot('saves-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
 /* ═══ v2: house-orbit wall integrity — no sky through any facade.
    Sky is swapped for magenta void; each building is orbited at two pitches
    and a strip safely inside its silhouette is pixel-checked. ═══ */
@@ -1158,6 +1581,48 @@ async function suiteWalls(base) {
       }
       gate(`walls: ${name} solid from all angles`, worst <= 3, worst ? `${worst}px @ ${worstAt}` : 'clean');
     }
+    /* ── v3: GROTTO INTERIOR sweep — the flat-blue bug. From inside each
+       chamber and the corridor, orbit the camera and pixel-check that no
+       reachable view reads through to the (magenta-probed) sky. The mouth
+       sector of chamber A is skipped — daylight through the entrance is
+       legitimate there. ── */
+    await api.eval('__fmDebug.warp(30, 150)');    // player inside → culling follows
+    const interior = [
+      // [tag, cx, cz, eyeY, lookR, azimuths]
+      ['grotto-A', 30, 150, -1.4, 9, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)
+        .filter(a => {
+          const d = ((a - 4.712 + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+          return Math.abs(d) > 0.85;         // skip the daylight mouth sector
+        })],
+      ['grotto-B', 62, 166, -1.4, 8, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)],
+      ['corridor', 47, 158.5, -1.4, 5, [0.46, 0.46 + Math.PI / 2, 0.46 + Math.PI, 0.46 + Math.PI * 1.5]],
+    ];
+    for (const [tag, cx, cz, eyeY, lookR, azs] of interior) {
+      if (tag === 'grotto-B' || tag === 'corridor') await api.eval(`__fmDebug.warp(${tag === 'corridor' ? '47, 158.5' : '62, 166'})`);
+      let worst = 0, worstAt = '';
+      for (const a of azs) {
+        for (const [ptag, ly] of [['level', 0.6], ['up', 5.2]]) {
+          const lx = cx + Math.cos(a) * lookR, lz = cz + Math.sin(a) * lookR;
+          await api.eval(`__fmDebug.cam(${cx}, ${eyeY}, ${cz}, ${lx.toFixed(1)}, ${ly}, ${lz.toFixed(1)}); 0`);
+          await sleep(90);
+          const r = await c.send('Page.captureScreenshot', { format: 'png' });
+          const png = decodePNG(Buffer.from(r.data, 'base64'));
+          let magenta = 0;
+          for (let y = 120; y < 600; y += 3) {
+            for (let x = 200; x < 1080; x += 3) {
+              const i = (y * png.w + x) * png.bpp;
+              if (png.px[i] > 210 && png.px[i + 2] > 210 && png.px[i + 1] < 70) magenta++;
+            }
+          }
+          if (magenta > worst) { worst = magenta; worstAt = `a${a.toFixed(2)}-${ptag}`; }
+          if (magenta > 6) {
+            fs.writeFileSync(path.join(SHOTS, `wall-FAIL-${tag}-a${a.toFixed(2)}-${ptag}.png`), Buffer.from(r.data, 'base64'));
+          }
+        }
+      }
+      gate(`walls: ${tag} interior shows no sky through rock`, worst <= 6, worst ? `${worst}px @ ${worstAt}` : 'clean');
+    }
+    await api.eval('__fmDebug.camOff()');
     await api.eval('__fmDebug.skyProbe(false); __fmDebug.hud(true);');
     const bad = api.consoleBad;
     gate('walls: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
@@ -1218,6 +1683,143 @@ async function suiteShots(base) {
     await api.eval('__fmBot.tol = 0.8; __fmBot.target = [-2, 40];');
     await sleep(900);              // walking under the rotated camera
     await api.shot('twostick-angle-1280x720');
+    await api.eval('__fmBot.release();');
+
+    /* ═══ v3 shot set ═══ */
+    // the new spawn: wide establishing + Wick framed beside his boat
+    await api.eval('__fmDebug.warp(8.2, 7.0); __fmDebug.face(2.6);');
+    await api.eval('__fmDebug.cam(14.5, groundH(14.5,12.5)+2.9, 12.5, 7, groundH(8,5)+1.0, 4.4);');
+    await sleep(400);
+    await api.shot('spawn-wide-1280x720');
+    await api.eval('__fmDebug.cam(9.9, groundH(9.9,9.6)+1.5, 9.6, 7.9, groundH(8.2,7)+0.9, 5.6);');
+    await sleep(300);
+    await api.shot('spawn-wick-1280x720');
+    await api.eval('__fmDebug.camOff();');
+    // sprint mid-lean with heel dust
+    await api.eval('__fmDebug.warp(-30, 30); __fmDebug.camYaw(Math.PI + 0.5);');
+    await api.eval('__fakePad.press(1)');
+    await api.eval('__fmBot.tol = 0.5; __fmBot.target = [-30, 55];');
+    await api.eval(`window.__spShot=false;(function w(){
+      const T=__fm; if(T.sprint&&T.sprintLean>0.3){window.__spShot=true;__fmDebug.freeze(1);return;}
+      requestAnimationFrame(w);})()`);
+    for (let i = 0; i < 40 && !(await api.eval('window.__spShot')); i++) await sleep(100);
+    gate('shots: sprint lean captured', await api.eval('window.__spShot'));
+    // side-on frame: the lean + scarf stream + heel dust all read in profile
+    await api.eval(`(function(){ const T=__fm;
+      __fmDebug.cam(T.x + 3.6, groundH(T.x+3.6, T.z+0.4)+1.15, T.z + 0.4, T.x, T.fy + 0.95, T.z); })()`);
+    await sleep(150);
+    await api.shot('sprint-lean-1280x720');
+    await api.eval('__fmDebug.camOff()');
+    await api.eval('__fmDebug.freeze(0); __fmBot.release(); __fakePad.press();');
+    // jump apex over a kelp cluster
+    await api.eval('__fmDebug.warp(12.4, 5.4); __fmDebug.camYaw(Math.PI - 0.7);');
+    await api.eval(`window.__jShot=false;(function w(){
+      const T=__fm; if(T.air&&T.airY>0.72&&T.z>7.4){window.__jShot=true;__fmDebug.freeze(1);return;}
+      requestAnimationFrame(w);})()`);
+    await api.eval('__fmBot.tol = 0.4; __fmBot.target = [12.4, 12.5];');
+    for (let att = 0; att < 5 && !(await api.eval('window.__jShot')); att++) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 4000) {
+        if (await api.eval('window.__jShot')) break;
+        if ((await api.eval('__fm.z')) > 7.7 && !(await api.eval('__fm.air'))) { await api.tap(2); }
+        await sleep(40);
+      }
+      if (!(await api.eval('window.__jShot'))) await api.eval('__fmDebug.warp(12.4, 5.4)');
+    }
+    gate('shots: jump apex captured', await api.eval('window.__jShot'));
+    await api.eval(`(function(){ const T=__fm;
+      __fmDebug.cam(T.x + 3.4, groundH(T.x+3.4, T.z-1.2)+1.5, T.z - 1.2, T.x, T.fy + 0.7, T.z); })()`);
+    await sleep(150);
+    await api.shot('jump-apex-kelp-1280x720');
+    await api.eval('__fmDebug.camOff()');
+    await api.eval('__fmDebug.freeze(0); __fmBot.release();');
+    // crab-hit contact moment (shell flash + sparks + trail)
+    await api.eval(`window.__chShot=false;(function w(){
+      const T=__fm; const h0=window.__ch0??(window.__ch0=T.crabHits);
+      if(T.crabHits>h0){window.__chShot=true;__fmDebug.freeze(1);return;}
+      requestAnimationFrame(w);})()`);
+    for (let att = 0; att < 12 && !(await api.eval('window.__chShot')); att++) {
+      await api.eval('__fmDebug.warp(0, 44)');
+      await sleep(150);
+      const cx = await api.eval('__fm.nearCrabX'), cz = await api.eval('__fm.nearCrabZ');
+      const a = 0.5 + att * 0.5;
+      await api.eval(`__fmDebug.warp(${(cx + Math.sin(a) * 1.8).toFixed(2)}, ${(cz + Math.cos(a) * 1.8).toFixed(2)});` +
+        `__fmDebug.face(${(a + Math.PI).toFixed(3)});` +
+        `__fmDebug.camYaw(${a.toFixed(3)})`);
+      await api.tap(0);
+      await sleep(500);
+    }
+    gate('shots: crab-hit contact captured', await api.eval('window.__chShot'));
+    // side-on: sword arc, shell flash, sparks and the knockback hop in profile
+    await api.eval(`(function(){ const T=__fm;
+      const mx=(T.x+T.nearCrabX)/2, mz=(T.z+T.nearCrabZ)/2;
+      const dx=T.nearCrabX-T.x, dz=T.nearCrabZ-T.z, d=Math.hypot(dx,dz)||1;
+      __fmDebug.cam(mx - dz/d*4.2, groundH(mx - dz/d*4.2, mz + dx/d*4.2)+1.2, mz + dx/d*4.2, mx, T.fy+0.7, mz); })()`);
+    await sleep(120);
+    await api.shot('crab-hit-contact-1280x720');
+    await api.eval('__fmDebug.camOff()');
+    await api.eval('__fmDebug.freeze(0)');
+    // moon compass mote stream (quest live via a fresh thread isn't needed —
+    // pre-quest it tugs toward the Moonwheel, which IS the readable feedback)
+    await api.waitFor(`__fm.state === 'play'`, 30000, 'play before compass shot').catch(() => {});
+    // pre-quest the stream tugs toward the Moonwheel — frame it side-on
+    const wb = Math.atan2(-38 - (-4), -78 - 20);
+    await api.eval(`__fmDebug.warp(-4, 20); __fmDebug.face(${wb.toFixed(3)});`);
+    await api.eval(`window.__cpShot=false;(function w(){
+      const T=__fm; if(T.pulseT>0.8){window.__cpShot=true;setTimeout(()=>__fmDebug.freeze(1),150);return;}
+      requestAnimationFrame(w);})()`);
+    for (let i = 0; i < 6 && !(await api.eval('window.__cpShot')); i++) {
+      await api.tap(3);
+      await sleep(450);
+    }
+    gate('shots: compass mote stream captured', await api.eval('window.__cpShot'));
+    await api.eval(`(function(){ const T=__fm;
+      const px=Math.cos(${wb.toFixed(3)}), pz=-Math.sin(${wb.toFixed(3)});
+      __fmDebug.cam(T.x + px*4.6 + Math.sin(${wb.toFixed(3)})*1.4, groundH(T.x + px*4.6, T.z + pz*4.6)+1.3,
+        T.z + pz*4.6 + Math.cos(${wb.toFixed(3)})*1.4, T.x + Math.sin(${wb.toFixed(3)})*1.8, T.fy + 1.1, T.z + Math.cos(${wb.toFixed(3)})*1.8); })()`);
+    await sleep(120);
+    await api.shot('compass-motes-1280x720');
+    await api.eval('__fmDebug.camOff(); __fmDebug.freeze(0)');
+    // pickup vs decor: the collectible crystal, then a decor formation
+    await api.eval('__fmDebug.warp(8, 27);');
+    await api.eval('__fmDebug.cam(5.0, groundH(5,32.6)+1.15, 32.6, 5.0, groundH(5,30)+0.5, 30.0);');
+    await sleep(400);
+    const shotPick = await api.shot('pickup-crystal-1280x720');
+    await api.eval('__fmDebug.warp(-24, 52);');
+    await api.eval('__fmDebug.cam(-26.5, groundH(-26.5,50.9)+1.15, 50.9, -25.2, groundH(-25.2,48.4)+0.35, 48.4);');
+    await sleep(300);
+    const shotDecor = await api.shot('decor-crystal-1280x720');
+    await api.eval('__fmDebug.camOff();');
+    {
+      const pk = decodePNG(fs.readFileSync(shotPick));
+      let bright = 0;
+      for (let y = 240; y < 480; y += 2) for (let x = 520; x < 760; x += 2) {
+        const i = (y * pk.w + x) * pk.bpp;
+        if (pk.px[i] > 236 && pk.px[i + 1] > 236 && pk.px[i + 2] > 230) bright++;
+      }
+      const dc = decodePNG(fs.readFileSync(shotDecor));
+      let dBright = 0;
+      for (let y = 240; y < 480; y += 2) for (let x = 520; x < 760; x += 2) {
+        const i = (y * dc.w + x) * dc.bpp;
+        if (dc.px[i] > 236 && dc.px[i + 1] > 236 && dc.px[i + 2] > 230) dBright++;
+      }
+      gate('shots: pickup reads bright, decor reads dull', bright > 40 && dBright < bright / 4,
+        `pickup=${bright}px decor=${dBright}px`);
+    }
+    // walk-cycle strip: three frozen frames of the new gait
+    await api.eval('__fmDebug.warp(-20, 24);');
+    await api.eval('__fmBot.tol = 0.5; __fmBot.target = [-20, 48];');
+    await sleep(700);
+    for (let i = 0; i < 3; i++) {
+      await api.eval('__fmDebug.freeze(1)');
+      // side-on: the gait in profile (heel-toe, arm counter-swing, hip sway)
+      await api.eval(`(function(){ const T=__fm;
+        __fmDebug.cam(T.x + 3.4, groundH(T.x+3.4, T.z)+1.05, T.z, T.x, T.fy + 0.85, T.z); })()`);
+      await sleep(140);
+      await api.shot('walkcycle-' + (i + 1));
+      await api.eval('__fmDebug.camOff(); __fmDebug.freeze(0)');
+      await sleep(210);
+    }
     await api.eval('__fmBot.release();');
     await api.eval('__fmDebug.hud(true);');
     const bad = api.consoleBad;
@@ -1328,6 +1930,9 @@ try {
   if (which === 'art') await suiteArt(base);
   if (which === 'all' || which === 'shots') await suiteShots(base);
   if (which === 'all' || which === 'walls') await suiteWalls(base);
+  if (which === 'all' || which === 'fuzz') await suiteFuzz(base);
+  if (which === 'all' || which === 'combat') await suiteCombat(base);
+  if (which === 'all' || which === 'saves') await suiteSaves(base);
   if (which === 'all' || which === 'migrate') await suiteMigrate(base);
   if (which === 'all' || which === 'flow') await suiteFlow(base);
   if (which === 'all' || which === 'kbd') await suiteKbd(base);

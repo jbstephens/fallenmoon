@@ -360,3 +360,98 @@ Story progression is a thing the player WALKS UP TO, never a funnel.
 - Success metric for the slice: a kid who ignores every NPC has fun
   for 10 minutes. A kid who talks to Finn finds the whole Crescent
   arc unchanged (grotto, boss, payoff all intact).
+
+---
+
+# v3 — FEEL & CLARITY REV (decided 2026-08-10 from John's second
+playtest; locked. His frame: "keep nailing core gameplay, story
+comes later." Priority order below is the build order.)
+
+## 1. Fix the spawn wreck (photo evidence: reads as a floating
+broken husk with a detached plank; Wick's head clips into it)
+Rebuild as a proper beached rowboat lying on its side, hull ON the
+ground, visible ribs and keel, sand drifted against it — an obvious
+lean-to shelter. Spawn Wick BESIDE it, framed clear of any geometry.
+No part of the wreck may float; no spawn-camera clipping.
+
+## 2. Controls rev (locked mapping)
+- ✕ south — sword / talk (unchanged)
+- ○ east — **SPRINT** (hold-to-run), replacing dodge-roll entirely.
+  ~1.6x speed, Wick leans into it (slight crouch, scarf streaming,
+  dust kicks at his heels). Attack from sprint = small lunge.
+- □ west — **JUMP** (new; was unassigned). Real jump ~1m with
+  landing squash; clears kelp and low rocks; can hop onto crates,
+  low walls, and prop tops where sensible (simple height targets).
+  Double-jump: NO. Air attack: allowed, same swing.
+- △ north — **MOON COMPASS** (renamed EVERYWHERE from "moonglass
+  pulse" — John: "no idea what that means"). Press: a stream of
+  silver motes arcs from the sword toward the current objective +
+  soft chime. Pre-quest it swirls and drifts toward the Moonwheel.
+  First use shows one caption: "The moonglass tugs toward
+  moon-stuff." Comprehensible from its OWN feedback.
+- Keyboard: Shift sprint, Space jump, J/click attack, L compass.
+- Roll is gone; remove its gates; sprint inherits escape duty
+  (generous hearts + shade healing keep combat kid-fair).
+
+## 3. Crabs must be satisfying to kill (they look great, they're
+too hard to hit)
+Root causes to fix together: (a) sword hit volume gets a VERTICAL
+band from ground to overhead — Wick can no longer swing over a
+low crab; (b) crab hurtbox +40%; (c) swing arc slightly wider.
+Contact must be unmistakable: white shell-flash, big spark burst,
+crunch layer, knockback hop, brief hit-pause. New gate: at neutral
+range, a single swing at a crab registers a hit 100% of attempts
+(20 trials, varied bearings). Imps stay as-is (John: tuned right).
+
+## 4. Pickups must be unmistakable
+Salt crystals (collectible) vs decorative crystals/rocks currently
+confuse. Collectibles: moon-pale glow, gentle bob + spin, sparkle
+motes, soft chime within 2m, pop-and-count on collect. Decor
+crystals: duller, static, earth-toned. A kid should never walk up
+to decor expecting a pickup.
+
+## 5. Smooth + detail the world (same rev, opposing pulls, both real)
+- Terrain: kill the hard polygon seam between desert and village
+  grass — blended transition band with scattered tufts; higher
+  mesh resolution near the village.
+- Kelp sprigs (read as "cactuses"): smoother, curved blades, more
+  segments.
+- Buildings: smoother silhouettes AND more detail — door frames,
+  shuttered windows, roof-tile hint lines, chimneys, eaves.
+- Watch the budgets (≤80 calls / ≤120k tris); spend tris where the
+  camera lives (village, spawn, bay path).
+
+## 6. Walk animation rev
+Heel-toe weight, counter-rotating arm swing, subtle hip sway and
+head bob. Sprint lean per item 2. Idle stays.
+
+## 7. STRETCH (only after 1-6 green): first interiors
+Finn's lighthouse ground room + one village house enterable: door
+prompt ✕, quick fade, small furnished room (table, lamp, cot, one
+chest with salt crystals), fade back out. Interior = separate
+culled chunk; camera pulls close. If budget or time objects, ship
+1-6 without this and note it.
+
+## v3 addendum — 1.5: GROTTO COLLISION + FACE BAKE (John's photos,
+8/10, locked): grotto walls had no player collision — walkable
+straight through rock into the void and out to the boss arena,
+skipping the puzzle gate; clipped-into faces render flat saturated
+blue (unbaked). Fix: solid-means-solid collision everywhere (incl.
+under the new jump — no jumping through ceilings/over walls into
+void), proper cave bake on all interior faces, collision-fuzzer +
+interior-orbit gates. The mirror-shell puzzle and its haptics are
+untouchable — John called them out as a favorite.
+
+## Standing principle — CINEMATIC BEATS (John, 8/10, after first
+completing the Crescent: "really good... when things substantial
+happen like that, we should have a little animated sequence")
+CONFIRMED APPROACH: every substantial moment gets a short authored
+camera sequence in the style of the Moonwheel payoff (continuous
+drift, world-change visible in frame, no text). Future substantial
+moments that qualify: each new phase slotted (each with its OWN
+world-change spectacle per the phase table), first entry to a major
+new region, boss intros/cures, the finale night. Keep them short
+(≤12s), skippable after first viewing, and always SHOW the change.
+The TO BE CONTINUED card style is also confirmed ("fantastic").
+The payoff itself: "could be a little better" — fair game to polish
+in a future rev, never regress.
