@@ -57,6 +57,49 @@
   }
   #questLine.on { opacity: 1; }
 
+  /* ═══ boss HP bar — standing convention for ALL bosses (v4) ═══ */
+  #bossBar {
+    position: absolute; left: 50%; top: 58px; transform: translateX(-50%);
+    width: 560px; text-align: center; pointer-events: none;
+    display: none;
+  }
+  body.st-play #bossBar.on, body.st-dialog #bossBar.on { display: block; }
+  #bossName {
+    font-size: 14px; letter-spacing: 6px; text-indent: 6px; color: #f4e4c4;
+    text-shadow: 0 1px 3px rgba(30,20,10,0.9), 0 0 12px rgba(30,20,10,0.5);
+    margin-bottom: 7px; white-space: nowrap;
+  }
+  #bossTrack {
+    position: relative; height: 20px;
+    background: rgba(18,15,20,0.78);
+    border: 1px solid rgba(214,180,140,0.7);
+    border-radius: 2px;
+    box-shadow: 0 1px 4px rgba(20,12,8,0.6);
+  }
+  #bossFill {
+    position: absolute; left: 2px; top: 2px; bottom: 2px; width: calc(100% - 4px);
+    background: linear-gradient(180deg, #e8b25c 0%, #c96f33 45%, #96421f 100%);
+    border-radius: 1px;
+    transition: width 0.22s ease-out;
+  }
+  #bossBar.hit #bossFill {
+    background: linear-gradient(180deg, #fff3da 0%, #ffd9a0 60%, #e8a05c 100%);
+    transition: none;
+  }
+  /* chunky segmentation: dark ticks every 1/15 of the track */
+  #bossSegs {
+    position: absolute; inset: 2px; border-radius: 1px;
+    background: repeating-linear-gradient(90deg,
+      transparent 0, transparent calc(100%/15 - 2px),
+      rgba(18,12,10,0.55) calc(100%/15 - 2px), rgba(18,12,10,0.55) calc(100%/15));
+  }
+  /* phase notches at the phase thresholds */
+  .bossNotch {
+    position: absolute; top: -4px; bottom: -4px; width: 3px;
+    background: #efe0b8;
+    box-shadow: 0 0 3px rgba(30,20,10,0.8);
+  }
+
   /* context prompt near the player ("✕ TALK") */
   #prompt {
     position: absolute; left: 50%; top: 470px; transform: translateX(-50%);
@@ -176,6 +219,31 @@
     text-shadow: 0 1px 3px rgba(40,26,14,0.8);
   }
 
+  /* ═══ new-game guard modal (v4): protects family saves ═══ */
+  #ngGuard {
+    position: absolute; inset: 0;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(10,9,14,0.6);
+  }
+  body.st-title #ngGuard.on { display: flex; }
+  #ngGuard .ngbox {
+    width: 520px; padding: 30px 40px 26px;
+    background: rgba(21,20,27,0.96);
+    border: 1px solid rgba(214,196,150,0.55);
+    border-radius: 4px; text-align: center;
+  }
+  #ngGuard h2 {
+    font-size: 22px; letter-spacing: 5px; text-indent: 5px;
+    color: #f2ead4; font-weight: normal; margin-bottom: 12px;
+    white-space: nowrap;
+  }
+  #ngSub {
+    font-size: 14.5px; font-style: italic; letter-spacing: 1px;
+    color: #b6ab93; margin-bottom: 20px; line-height: 1.6;
+  }
+  #ngRow { font-size: 17px; letter-spacing: 3px; color: #d9cdb2; }
+  #ngRow b { color: #e8cf9a; font-weight: normal; }
+
   /* ═══ pause ═══ */
   #pauseUI {
     position: absolute; inset: 0;
@@ -247,6 +315,15 @@
     <canvas id="hearts" width="360" height="110"></canvas>
     <div id="questLine"></div>
   </div>
+  <div id="bossBar">
+    <div id="bossName"></div>
+    <div id="bossTrack">
+      <div id="bossFill"></div>
+      <div id="bossSegs"></div>
+      <div class="bossNotch" style="left: 66.7%"></div>
+      <div class="bossNotch" style="left: 33.3%"></div>
+    </div>
+  </div>
   <div id="prompt"></div>
   <div id="dlg">
     <div id="dlgName"></div>
@@ -266,6 +343,13 @@
       <div class="titem" id="ti1">CONTINUE</div>
     </div>
     <div id="tHint"></div>
+    <div id="ngGuard">
+      <div class="ngbox">
+        <h2>OVERWRITE THE SAVED ADVENTURE?</h2>
+        <div id="ngSub">A saved adventure already lives here.<br>Starting fresh will erase it forever.</div>
+        <div id="ngRow"><b>&#10005;</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>&#9675;</b> KEEP MY SAVE</div>
+      </div>
+    </div>
   </div>
 
   <div id="pauseUI">

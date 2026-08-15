@@ -119,6 +119,7 @@ const IN = {
   jump: false,              // v3: □ / Space edge = JUMP
   pulse: false, pause: false,
   up: false, down: false, confirm: false,
+  back: false,              // v4: ○ edge / Escape — "no" in confirm modals
   any: false,
 };
 let prevLy = 0;
@@ -143,7 +144,7 @@ function gatherInput() {
   if (kEdge('KeyJ')) { IN.atk = true; IN.confirm = true; IN.any = true; }
   if (kEdge('Space')) { IN.jump = true; IN.any = true; }
   if (kEdge('KeyL')) { IN.pulse = true; IN.any = true; }
-  if (kEdge('Escape') || kEdge('KeyP')) { IN.pause = true; IN.any = true; }
+  if (kEdge('Escape') || kEdge('KeyP')) { IN.pause = true; IN.back = true; IN.any = true; }
   if (kEdge('KeyW') || kEdge('ArrowUp')) { IN.up = true; IN.any = true; }
   if (kEdge('KeyS') || kEdge('ArrowDown')) { IN.down = true; IN.any = true; }
   if (kEdge('Enter')) { IN.confirm = true; IN.any = true; }
@@ -164,6 +165,7 @@ function gatherInput() {
       if (p.button('south')) IN.atkHeld = true;
       if (p.button('east')) IN.sprintHeld = true;            // v3: ○ hold = SPRINT
       if (p.justPressed('south')) { IN.atk = true; IN.confirm = true; IN.any = true; }
+      if (p.justPressed('east')) { IN.back = true; IN.any = true; }   // v4: ○ edge = back
       if (p.justPressed('west')) { IN.jump = true; IN.any = true; }   // v3: □ = JUMP
       if (p.justPressed('north')) { IN.pulse = true; IN.any = true; }
       if (p.justPressed('start')) { IN.pause = true; IN.any = true; }
@@ -181,7 +183,7 @@ function gatherInput() {
 }
 function clearEdges() {
   IN.atk = IN.jump = IN.pulse = IN.pause = false;
-  IN.up = IN.down = IN.confirm = IN.any = false;
+  IN.up = IN.down = IN.confirm = IN.back = IN.any = false;
 }
 // tap-to-advance-dialogue (direct manipulation — coexists with touchpad)
 stage.addEventListener('pointerdown', () => {
@@ -369,6 +371,12 @@ const SFX = {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, t + i * 0.12, 0.4, 0.09, 'triangle')); },
   heal() { if (!AC) return; const t = AC.currentTime;
     tone(784, t, 0.3, 0.05, 'sine'); tone(1175, t + 0.08, 0.34, 0.04, 'sine'); },
+  door() { if (!AC) return; const t = AC.currentTime;
+    // a latch click, a low wooden swing, a soft shut
+    noiseBurst(t, 0.04, 0.1, 2200, 1500, 2.5);
+    tone(160, t + 0.03, 0.22, 0.06, 'triangle', null, 110);
+    noiseBurst(t + 0.05, 0.16, 0.09, 420, 220, 1, 'lowpass');
+    noiseBurst(t + 0.34, 0.06, 0.08, 600, 320, 1, 'lowpass'); },
   chestOpen() { if (!AC) return; const t = AC.currentTime;
     noiseBurst(t, 0.18, 0.1, 400, 900, 1);
     [392, 523, 659, 784].forEach((f, i) => tone(f, t + 0.2 + i * 0.09, 0.35, 0.07, 'triangle')); },
@@ -425,6 +433,8 @@ function defaultSave() {
     wreckChest: false, wallBurned: false,
     bossDone: false, sky: 0, tidepool: false,
     compassSeen: false,
+    houseChest: false,        // v4: the harbor-house interior chest
+    bossHint: false,          // v4: one-time "hit the CLAW" floatText shown
     lastShade: [8.2, 7.0],
   };
 }

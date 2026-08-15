@@ -11,7 +11,7 @@ function setState(s) {
 }
 
 /* ── title ── */
-let titleFocus = 0, titleT = 0, titleMode = 'menu';   // menu | confirm (v4 guard)
+let titleFocus = 0, titleT = 0;
 function refreshTitleMenu() {
   const hasSave = !!SAVE;
   el('ti1').classList.toggle('gone', !hasSave);
@@ -20,47 +20,21 @@ function refreshTitleMenu() {
   el('ti1').classList.toggle('sel', titleFocus === 1);
   el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)';
 }
-function beginNewGame() {
-  SFX.confirm();
-  fadeBlackEl.style.opacity = '1';
-  try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
-  SAVE = defaultSave();
-  setTimeout(() => { startCine('wake'); }, 250);
-}
 function tickTitle() {
   titleT += DT;
-  /* v4 guard: NEW GAME over an existing save must be confirmed —
-     ✕ starts fresh, ○ (or Esc) keeps the save. */
-  if (titleMode === 'confirm') {
-    if (IN.confirm) {
-      titleMode = 'menu';
-      el('ngGuard').classList.remove('on');
-      beginNewGame();
-    } else if (IN.back || IN.pause) {
-      titleMode = 'menu';
-      el('ngGuard').classList.remove('on');
-      SFX.menu();
-    }
-    return;
-  }
   if ((IN.up || IN.down) && SAVE) {
     titleFocus = 1 - titleFocus;
     SFX.menu();
     refreshTitleMenu();
   }
   if (IN.confirm) {
-    if (titleFocus === 0 && SAVE) {
-      // a save exists — ask before erasing the family's adventure
-      titleMode = 'confirm';
-      el('ngGuard').classList.add('on');
-      SFX.menu();
-      return;
-    }
+    SFX.confirm();
+    fadeBlackEl.style.opacity = '1';
     if (titleFocus === 0 || !SAVE) {
-      beginNewGame();
+      try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+      SAVE = defaultSave();
+      setTimeout(() => { startCine('wake'); }, 250);
     } else {
-      SFX.confirm();
-      fadeBlackEl.style.opacity = '1';
       setTimeout(() => { applySave(); }, 250);
     }
   }
@@ -98,10 +72,6 @@ function applySave() {
   if (SAVE.wreckChest) {
     chest.opened = true;
     chest.lid.rotation.x = -1.9;
-  }
-  if (SAVE.houseChest) {
-    homeChest.opened = true;
-    homeChest.lid.rotation.x = -1.9;
   }
   if (SAVE.q === 3 && SAVE.bossDone) {
     P.carryCrescent = true;
@@ -298,11 +268,6 @@ const TL = {
   landT: 0, jumps: 0, crabHits: 0, compassMotes: 0,
   objBearing: null, objDist: null, compassSeen: false,
   wakeMinRel: 0, spawnClear: 0, solidHere: false,
-  // v4
-  bossHp: 0, bossHpMax: 0, bossBodyHits: 0, bossHintSeen: false,
-  bossBarOn: false, clawGlow: false,
-  inInterior: false, homeChest: false,
-  titleMode: 'menu', ngGuardOn: false,
 };
 window.__fm = TL;
 function syncTelemetry() {
@@ -374,15 +339,6 @@ function syncTelemetry() {
   TL.compassSeen = SAVE ? !!SAVE.compassSeen : false;
   TL.wakeMinRel = WAKE_STATS.minRel; TL.spawnClear = WAKE_STATS.spawnClear;
   TL.solidHere = grottoSolidAt(P.x, P.z);
-  // v4
-  TL.bossHp = BOSS.hp; TL.bossHpMax = BOSS.hpMax; TL.bossBodyHits = BOSS.bodyHits;
-  TL.bossHintSeen = SAVE ? !!SAVE.bossHint : false;
-  TL.bossBarOn = bossBarEl.classList.contains('on');
-  TL.clawGlow = !!(BOSS.c && BOSS.c.clawL.glow && BOSS.c.clawL.glow.visible);
-  TL.inInterior = inInteriorAt(P.x, P.z);
-  TL.homeChest = homeChest.opened;
-  TL.titleMode = titleMode;
-  TL.ngGuardOn = el('ngGuard').classList.contains('on');
 }
 const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
 let SIM_FREEZE = false;   // screenshot staging: halt sim ticks, keep rendering
@@ -428,12 +384,11 @@ function tickSim() {
       tickMirror();
       tickChest();
       tickDoorChest();
-      tickHomeChest();
       tickSalt();
       if (IN.pause) { setState('pause'); pauseFocus = 0; refreshPause(); SFX.menu(); }
       break;
     }
-    case 'dialog': tickDialog(); tickChest(); tickDoorChest(); tickHomeChest(); break;
+    case 'dialog': tickDialog(); tickChest(); tickDoorChest(); break;
     case 'pause': tickPause(); break;
     case 'cine':
       tickCine();
@@ -489,10 +444,6 @@ function updateVisuals(dtv, now) {
     beamOut.visible = inGv;
     chest.group.visible = near2(chest.x, chest.z, 75);
     doorChest.group.visible = near2(doorChest.x, doorChest.z, 60);
-    // v4: the harbor-house interior is its own culled chunk
-    const inHv = near2(INT.x, INT.z, 45);
-    if (interiorMesh) { interiorMesh.visible = inHv; interiorGlow.visible = inHv; }
-    homeChest.group.visible = inHv;
     wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
     if (grottoCapMesh) grottoCapMesh.visible = near2(46, 155, 165);
     tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);

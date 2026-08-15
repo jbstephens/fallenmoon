@@ -130,6 +130,15 @@ function grantFinnHeart() {
 function currentInteract() {
   if (!P) return null;
   const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
+  // v4: inside the harbor house — its own little world of interactions
+  if (inInteriorAt(P.x, P.z)) {
+    if (!homeChest.opened && near(homeChest.x, homeChest.z, 1.5))
+      return { id: 'homeChest', label: '✕ OPEN' };
+    if (near(INT_DOOR.x, INT_DOOR.z, 1.2)) return { id: 'leaveHouse', label: '✕ LEAVE' };
+    return null;
+  }
+  if (near(HOUSE_DOOR.outX, HOUSE_DOOR.outZ, 1.7))
+    return { id: 'houseDoor', label: '✕ ENTER' };
   if (QUEST.q === 3 && P.carryCrescent && near(WHEEL_POS.x, WHEEL_POS.z, 5.2))
     return { id: 'wheel', label: '✕ PLACE THE CRESCENT' };
   if (!chest.opened && near(chest.x, chest.z, 1.7))
@@ -167,10 +176,38 @@ function doInteract(ctx) {
     openChest();
   } else if (ctx.id === 'doorChest') {
     openDoorChest();
+  } else if (ctx.id === 'homeChest') {
+    openHomeChest();
+  } else if (ctx.id === 'houseDoor') {
+    startCine('doorIn');
+  } else if (ctx.id === 'leaveHouse') {
+    startCine('doorOut');
   } else if (ctx.id === 'wheel') {
     startCine('wheel');
   }
   // mirror: nothing on press — it's a hold
+}
+
+/* v4: the harbor-house salt chest */
+let homeChestAnimT = -1;
+function openHomeChest() {
+  homeChest.opened = true;
+  SAVE.houseChest = true; storeSave();
+  homeChestAnimT = 0;
+  SFX.chestOpen();
+}
+function tickHomeChest() {
+  if (homeChestAnimT < 0) return;
+  homeChestAnimT += DT;
+  homeChest.lid.rotation.x = -smoothstep(clamp(homeChestAnimT / 0.5, 0, 1)) * 1.9;
+  if (homeChestAnimT > 0.65) {
+    homeChestAnimT = -1;
+    P.salt += 3;
+    SAVE.salt = P.salt; storeSave();
+    itemToast('SALT CRYSTALS', 'Three of them, kept dry by a house that waited.');
+    SFX.pickup();
+    burst(psSparkle, homeChest.x, 0.9, homeChest.z, 14, 1.2, 1.3, 0.9);
+  }
 }
 
 /* lighthouse-door chest — a salt cache for the curious slasher */
@@ -395,8 +432,11 @@ function tickCrab(cr) {
       SFX.click();
     }
   } else if (cr.st === 'lunge') {
+    const lox = cr.x, loz = cr.z;
     cr.x += cr.dir[0] * 7.5 * DT; cr.z += cr.dir[1] * 7.5 * DT;
-    const c = collide(cr.x, cr.z, 0.6); cr.x = c[0]; cr.z = c[1];
+    const c = collide(cr.x, cr.z, 0.6);
+    const lr = resolveSolid(lox, loz, c[0], c[1]);
+    cr.x = lr[0]; cr.z = lr[1];
     // v3: a well-timed jump sails over the pinch
     if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z);
     if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
@@ -412,8 +452,11 @@ function tickCrab(cr) {
 function moveCrab(cr, tx, tz, sp) {
   const dx = tx - cr.x, dz = tz - cr.z, d = Math.hypot(dx, dz);
   if (d > 0.4) {
+    const ox = cr.x, oz = cr.z;
     cr.x += dx / d * sp * DT; cr.z += dz / d * sp * DT;
-    const c = collide(cr.x, cr.z, 0.5); cr.x = c[0]; cr.z = c[1];
+    const c = collide(cr.x, cr.z, 0.5);
+    const r = resolveSolid(ox, oz, c[0], c[1]);   // v4: crabs respect rock too
+    cr.x = r[0]; cr.z = r[1];
     cr.ang = Math.atan2(dx, dz);
   }
 }
@@ -504,23 +547,54 @@ function popWisp(w) {
   rumble({ duration: 60, strong: 0.25, weak: 0.35 });
 }
 
-/* ═══════════ THE SUNSTRUCK KING-CRAB ═══════════ */
+/* ═══════════ THE SUNSTRUCK KING-CRAB ═══════════
+   v4 BOSS TRUTH: the boss has real HP. Body hits ALWAYS chip (2), claw
+   hits during slam-recovery windows do 5x (10). Phases at 60 / 30 HP.
+   Proximity always wakes it — no quest-state excuses. */
+const BOSS_HP = 90;
 const BOSS = {
   c: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
+  hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
   x: GROTTO_B.x, z: GROTTO_B.z - 2, ang: Math.PI,
   slamPos: [0, 0], chargeDir: [0, 0], chargeN: 0,
   wispT: 0, defeated: false, crescentGiven: false, flash: 0,
 };
+function bossPhaseHp(ph) { return ph <= 1 ? BOSS_HP : ph === 2 ? 60 : 30; }
 function initBoss() {
   BOSS.c = buildKingCrab();
   BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
   scene.add(BOSS.c.root);
   if (SAVE && SAVE.bossDone) {
     BOSS.defeated = true; BOSS.crescentGiven = true;
+    BOSS.hp = 0;
     BOSS.c.crN.visible = false;
     calmBossEyes(1);
     BOSS.x = GROTTO_B.x - 8; BOSS.z = GROTTO_B.z + 8;
     BOSS.st = 'rest';
+  }
+}
+/* ── the boss HP bar — standing convention for every boss to come ── */
+const bossBarEl = el('bossBar'), bossFillEl = el('bossFill'), bossNameEl = el('bossName');
+let bossBarShown = false, bossBarW = -1, bossFlashTimer = 0;
+function refreshBossBar(hitFlash) {
+  const B = BOSS;
+  const want = B.active && !B.defeated;
+  if (want !== bossBarShown) {
+    bossBarShown = want;
+    bossBarEl.classList.toggle('on', want);
+    if (want) bossNameEl.textContent = 'THE SUNSTRUCK KING-CRAB';
+    if (!want) bossBarEl.classList.remove('hit');
+  }
+  if (!want) return;
+  const w = Math.round(clamp(B.hp / B.hpMax, 0, 1) * 1000) / 10;
+  if (w !== bossBarW) {
+    bossBarW = w;
+    bossFillEl.style.width = `calc((100% - 4px) * ${w / 100})`;
+  }
+  if (hitFlash) {
+    bossBarEl.classList.add('hit');
+    clearTimeout(bossFlashTimer);
+    bossFlashTimer = setTimeout(() => bossBarEl.classList.remove('hit'), 130);
   }
 }
 function calmBossEyes(t) {
@@ -540,11 +614,17 @@ function tickBoss() {
   if (!B.c || B.defeated) return;
   const inArena = Math.hypot(P.x - GROTTO_B.x, P.z - GROTTO_B.z) < GROTTO_B.r + 1;
   if (!B.active) {
-    if (inArena && wallBurned()) {
-      B.active = true; B.phase = 1; B.clawHits = 0; B.st = 'track'; B.t = 0;
+    // v4: proximity ALWAYS wakes a reachable boss — no quest-state excuses.
+    // (Ben's field failure: standing in the arena slashing a dormant crab.)
+    if (inArena) {
+      B.active = true;
+      if (B.phase === 0) B.phase = 1;
+      B.hp = bossPhaseHp(B.phase);            // checkpoint at the phase start
+      B.clawHits = 0; B.st = 'track'; B.t = 0;
       SFX.thump(true);
       CAM.shake = 0.3;
       rumble({ duration: 400, strong: 0.7, weak: 0.7 });
+      refreshBossBar(false);
     }
     return;
   }
@@ -672,6 +752,22 @@ function keepInArena(B, margin) {
   const mx = GROTTO_B.r - margin;
   if (d > mx) { B.x = GROTTO_B.x + dx / d * mx; B.z = GROTTO_B.z + dz / d * mx; }
 }
+/* v4: real HP — every registered hit calls this. Phases at 60/30, cure at 0. */
+function dealBossDamage(n) {
+  const B = BOSS;
+  if (!B.active || B.defeated) return;
+  B.hp = Math.max(0, B.hp - n);
+  refreshBossBar(true);
+  if (B.hp <= 0) {
+    startCine('bossDefeat');
+    return;
+  }
+  const thr = B.phase === 1 ? 60 : B.phase === 2 ? 30 : 0;
+  if (B.phase < 3 && B.hp <= thr && B.st !== 'roar') {
+    B.st = 'roar'; B.t = 0;
+    SFX.thump(true); CAM.shake = 0.4;
+  }
+}
 function hitBossClaw() {
   const B = BOSS;
   B.clawHits++;
@@ -680,14 +776,29 @@ function hitBossClaw() {
   P.hitstop = 4;
   CAM.shake = 0.2;
   rumble({ duration: 120, strong: 0.6, weak: 0.4 });
-  const cp = bossClawPos();
+  const cp = B.st === 'stuck' ? B.slamPos : bossClawPos();
   burst(psSpark, cp[0], groundH(cp[0], cp[1]) + 0.8, cp[1], 12, 2.2, 1.8, 0.5);
-  if (B.clawHits >= 3) {
-    if (B.phase >= 3) startCine('bossDefeat');
-    else { B.st = 'roar'; B.t = 0; SFX.thump(true); CAM.shake = 0.4; }
-  } else if (B.st === 'stuck' || B.st === 'dizzy') {
-    B.t = Math.min(B.t, 1.2);   // brief extra window
+  if (B.st === 'stuck' || B.st === 'dizzy') B.t = Math.min(B.t, 1.2);   // brief extra window
+  dealBossDamage(10);            // 5x — the telegraphed weakness pays off
+}
+/* v4: body hits ALWAYS chip — small but real, with FULL feedback. A kid
+   who only ever slashes the shell still wins this fight. */
+function hitBossBody() {
+  const B = BOSS;
+  B.bodyHits++;
+  B.flash = 0.16;
+  SFX.hit();
+  P.hitstop = 3;
+  CAM.shake = 0.12;
+  rumble({ duration: 80, strong: 0.4, weak: 0.3 });
+  const d = Math.hypot(P.x - B.x, P.z - B.z) || 1;
+  const ex = B.x + (P.x - B.x) / d * 1.7, ez = B.z + (P.z - B.z) / d * 1.7;
+  burst(psSpark, ex, groundH(ex, ez) + 1.0, ez, 10, 2.0, 1.5, 0.4);
+  if (SAVE && !SAVE.bossHint) {
+    SAVE.bossHint = true; storeSave();
+    showCaption('Hit the CLAW when it slams!', 3600);
   }
+  dealBossDamage(2);
 }
 
 /* ── sword swing resolution ──
@@ -709,9 +820,15 @@ function swingHits() {
     if (inSwingArc(w.x, w.z, 2.0) && w.y < P.fy + 2.2) { popWisp(w); any = true; }
   }
   const B = BOSS;
-  if (B.active && !B.defeated && (B.st === 'stuck' || B.st === 'dizzy')) {
+  if (B.active && !B.defeated) {
+    const vuln = B.st === 'stuck' || B.st === 'dizzy';
+    const hidden = B.st === 'burrow' && B.t > 0.4;   // underground — no target
     const cp = B.st === 'stuck' ? [B.slamPos[0], B.slamPos[1]] : [B.x, B.z];
-    if (inSwingArc(cp[0], cp[1], B.st === 'dizzy' ? 3.4 : 2.6)) { hitBossClaw(); any = true; }
+    if (vuln && inSwingArc(cp[0], cp[1], B.st === 'dizzy' ? 3.4 : 2.6)) {
+      hitBossClaw(); any = true;
+    } else if (!hidden && inSwingArc(B.x, B.z, 4.5, 1.4)) {
+      hitBossBody(); any = true;      // v4: the shell always chips
+    }
   }
   return any;
 }
@@ -732,6 +849,11 @@ function startCine(id) {
     P.sunstruckCount++;
   } else if (id === 'wake') {
     CAM.mode = 'cine';
+  } else if (id === 'doorIn' || id === 'doorOut') {
+    // v4: the doorway beat — quick fade, teleport, fade back
+    fadeBlackEl.style.transition = 'opacity 0.24s ease';
+    fadeBlackEl.style.opacity = '1';
+    SFX.door();
   }
 }
 function endCine() {
@@ -748,6 +870,26 @@ function cineCam(px, py, pz, lx, ly, lz) {
 }
 function tickCine() {
   const t = (CINE.t += DT);
+  if (CINE.id === 'doorIn' || CINE.id === 'doorOut') {
+    if (CINE.step === 0 && t >= 0.32) {
+      CINE.step = 1;
+      if (CINE.id === 'doorIn') {
+        P.x = INT_SPAWN.x; P.z = INT_SPAWN.z; P.heading = INT_SPAWN.heading;
+      } else {
+        P.x = HOUSE_DOOR.outX; P.z = HOUSE_DOOR.outZ; P.heading = HOUSE_DOOR.heading;
+      }
+      P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
+      P.vx = 0; P.vz = 0; P.st = 'idle';
+      P.area = areaAt(P.x, P.z);
+      CAM.yaw = P.heading + Math.PI; CAM.pitch = 0.35; CAM.ready = false;
+      fadeBlackEl.style.opacity = '0';
+    }
+    if (t >= 0.9) {
+      fadeBlackEl.style.transition = '';
+      endCine();
+    }
+    return;
+  }
   if (CINE.id === 'wake') {
     // under the boat, in the blue shade. no words.
     const y = groundH(P.x, P.z);
@@ -777,8 +919,10 @@ function tickCine() {
       // boss checkpoint: leave the arena reset at the CURRENT phase
       if (BOSS.active && !BOSS.defeated) {
         BOSS.st = 'track'; BOSS.t = 0; BOSS.clawHits = 0; BOSS.chargeN = 0;
+        BOSS.hp = bossPhaseHp(BOSS.phase);   // v4: HP checkpoints at the phase
         BOSS.active = false;    // re-arms on re-entry, same phase
         BOSS.x = GROTTO_B.x; BOSS.z = GROTTO_B.z - 2;
+        refreshBossBar(false);
       }
       CAM.ready = false;
     } else {
@@ -1080,6 +1224,14 @@ function animateBoss(dtv, now) {
   // hit flash + breathing moonglass glow on the crescent
   B.c.crescent.material.opacity = B.flash > 0 ? 0.55 + Math.sin(now / 30) * 0.4 : 0.95;
   B.c.crescentHalo.material.opacity = B.flash > 0 ? 0.5 : 0.09 + 0.06 * Math.sin(now / 480);
+  // v4: the claw GLOWS through the vulnerability window ("hit the CLAW")
+  const glowM = B.c.clawL.glow;
+  if (glowM) {
+    const vuln = B.active && !B.defeated && (B.st === 'stuck' || B.st === 'dizzy');
+    glowM.visible = vuln;
+    if (vuln) glowM.material.opacity = 0.38 + 0.24 * Math.sin(now / 90);
+  }
+  refreshBossBar(false);
 }
 /* crab + sun-imp render-frame animation */
 function animateEnemies(dtv, now) {

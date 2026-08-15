@@ -455,3 +455,71 @@ new region, boss intros/cures, the finale night. Keep them short
 The TO BE CONTINUED card style is also confirmed ("fantastic").
 The payoff itself: "could be a little better" — fair game to polish
 in a future rev, never regress.
+
+---
+
+# v4 — BOSS TRUTH & INTERIORS (decided 2026-08-14 from third family
+playtest; locked; auto mode "go go go")
+
+Confirmed keepers from this playtest: houses, vegetation, small-crab
+combat ("I can kill the smaller crabs now, which is great").
+
+## 1. THE KING-CRAB MUST TAKE DAMAGE (Ben slashed for 10 minutes,
+zero damage — worst possible playtest outcome)
+Root truth to fix: if boss damage is gated (claw-only windows, or a
+dormant/inactive state that ignores hits), that gating must become
+LEGIBLE or die. Locked design:
+- Body hits ALWAYS do chip damage (small but real, with full hit
+  feedback). Claw hits during slam-recovery windows do 4-6x. The
+  claw weakness is telegraphed (claw glows after a slam; first
+  body-hit shows a one-time floatText "Hit the CLAW when it
+  slams!").
+- If the boss can be reached while dormant/inactive, proximity
+  ALWAYS wakes it (no quest-state excuses — anyone standing in the
+  arena gets a boss fight).
+- Gate: a "kid bot" that ONLY body-slashes must be able to win the
+  whole fight (slowly); the claw-aiming bot wins faster. Both via
+  real input, damage asserted every phase. Plus a dormant-approach
+  gate: walk in with ANY save state → boss wakes and takes damage.
+
+## 2. BOSS HP BAR — new standing convention for ALL bosses
+Top-center boss health bar during boss fights: boss name ("THE
+SUNSTRUCK KING-CRAB"), chunky segmented bar, visible damage ticks,
+phase notches at the phase thresholds, brief flash on hit. Appears
+on wake, drops away on cure. Every future boss uses this.
+
+## 3. GROTTO WALLS: finish the job (mixed solidity is worse than
+none — "some walls work, others you can still walk through,
+disorienting")
+The v3 fuzzer sampled spots; the leak means coverage has holes.
+Fix: make the ENTIRE grotto massif + boss arena perimeter one
+authoritative solid region (single source of truth for both
+collision and geometry — no hand-kept second copy), with the only
+openings being: the entrance walkway and the post-burn corridor.
+New gate: dense perimeter fuzz — sample every ~1.5m along ALL
+interior AND exterior boundaries (walking + jumping + sprint), zero
+penetrations; plus a "corridor is the only path" reachability
+assert (flood-fill from entrance must not reach the arena until
+wallBurned).
+
+## 4. IDLE FEET BUG — feet visibly walk while standing still
+Fix the gate: locomotion pose weights must be exactly zero at rest
+(walkPhase/pose blend decays fully; no residual leg oscillation).
+Gate: capture leg joint rotations over 2s of true idle — max delta
+below a visible-motion epsilon (breathing/head-look exempt).
+
+## 5. INTERIORS — REQUIRED this rev (John: "include walking into at
+least one of the houses")
+At least ONE village house enterable end-to-end: door prompt (✕),
+short fade, furnished room (table, cot, lamp, rug, shelf, a chest
+with salt crystals), walk freely, fade back out. Interior is its
+own culled chunk; camera pulls close; budgets hold. Finn's
+lighthouse ground room too IF it fits cleanly; one house is the
+requirement. Same collision authority as item 3 (no walking
+through interior walls, obviously).
+
+## 6. Small guard from last session's lesson
+NEW GAME with an existing save asks "Overwrite the saved
+adventure?" (✕ confirm / ○ back). One modal, pad+keyboard+touch
+navigable. Protects family saves from blind confirms (I proved the
+failure mode personally).

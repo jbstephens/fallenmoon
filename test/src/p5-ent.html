@@ -170,7 +170,8 @@ const _cv = new THREE.Vector3();
 function updateCamera(dtv) {
   if (CAM.mode !== 'follow') return;
   const inG = inGrottoAt(P.x, P.z);
-  const wantDist = inG ? 2.55 : 3.3;
+  const inH = inInteriorAt(P.x, P.z);   // v4: camera pulls close indoors
+  const wantDist = inH ? 2.15 : inG ? 2.55 : 3.3;
   CAM.dist += (wantDist - CAM.dist) * Math.min(1, dtv * 3);
   // manual orbit inputs (stick/arrows are rates; mouse/touch are deltas)
   let manual = false;
@@ -202,15 +203,16 @@ function updateCamera(dtv) {
   }
   const py = P.fy;
   const tx = P.x + Math.sin(P.heading) * 0.35, tz = P.z + Math.cos(P.heading) * 0.35;
-  const ty = py + (inG ? 1.15 : 1.25);
+  const ty = py + (inH ? 1.05 : inG ? 1.15 : 1.25);
   const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
   const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp, dyv = spv;
   let dist = CAM.dist;
-  // sphere-cast pullback: terrain + solid grotto rock (grotto ceiling clamped after)
+  // sphere-cast pullback: terrain + solid grotto rock + interior walls
   for (let s = 0.2; s <= 1.0; s += 0.1) {
     const sx2 = tx + dx * dist * s, sz2 = tz + dz * dist * s;
     const sy2 = ty + dyv * dist * s;
-    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2)) {
+    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2) ||
+        (inH && (Math.abs(sx2 - INT.x) > INT.w - 0.15 || Math.abs(sz2 - INT.z) > INT.d - 0.15))) {
       dist = Math.max(0.9, dist * (s - 0.1)); break;
     }
   }
@@ -218,6 +220,7 @@ function updateCamera(dtv) {
   let cy = ty + dyv * dist;
   cy = Math.max(cy, groundH(cx, cz) + 0.4);
   if (inG) cy = Math.min(cy, py + 3.4);
+  if (inH) cy = Math.min(cy, INT.wallH - 0.3);
   const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 6.5)) : 1;
   CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
   CAM.ready = true;
@@ -334,6 +337,11 @@ function doPulse() {
 
 /* ── shared horizontal move step: circle colliders + grotto solid rock ── */
 function moveWithCollision(nx, nz) {
+  if (inInteriorAt(P.x, P.z)) {           // v4: inside the harbor house
+    const r = interiorResolve(nx, nz);
+    P.x = r[0]; P.z = r[1];
+    return;
+  }
   const ox = P.x, oz = P.z;
   const c = collide(nx, nz, 0.42, P.fy);
   const r = resolveSolid(ox, oz, c[0], c[1]);
@@ -482,27 +490,37 @@ function poseHumanoid(c, st, t, speed, opts) {
   const w = a.t;
   const brth = Math.sin(w * 2.1) * 0.012;
   c.torso.scale.y = 1 + brth;
+  /* v4 IDLE-FEET FIX: every locomotion contribution rides a weight that
+     decays to EXACTLY zero at rest (John: "feet walk while standing").
+     Breathing and head-look are exempt — everything cyclic below is not. */
+  const locoTarget = st === 'walk' ? 1 : 0;
+  if (a.loco === undefined) a.loco = locoTarget;
+  a.loco += (locoTarget - a.loco) * Math.min(1, t * 10);
+  if (!locoTarget && a.loco < 0.035) a.loco = 0;
+  if (locoTarget && a.loco > 0.97) a.loco = 1;
+  const loco = a.loco;
   let legA = 0, armA = 0, bob = 0, lean = 0, sway = 0, twist = 0, headBob = 0;
   const spr = opts.sprint ? 1 : 0;
-  if (st === 'walk') {
+  if (loco > 0) {
     /* v3 walk rev: heel-toe weight, counter-rotating shoulders over swaying
        hips, a subtle head bob. Sprint deepens everything and leans in. */
     const f = w * (7.2 + speed * 1.1 + spr * 2.4);
-    legA = Math.sin(f) * (0.62 + spr * 0.22);
-    armA = -Math.sin(f) * (0.42 + spr * 0.3);
-    bob = Math.abs(Math.cos(f)) * (0.05 + spr * 0.02);
-    lean = 0.1 + spr * 0.42;                       // sprint: crouched lean-in
-    sway = Math.sin(f) * (0.05 + spr * 0.015);     // hip sway
-    twist = Math.sin(f) * (0.09 + spr * 0.05);     // shoulder counter-rotation
-    headBob = Math.sin(f * 2) * 0.025;
+    legA = Math.sin(f) * (0.62 + spr * 0.22) * loco;
+    armA = -Math.sin(f) * (0.42 + spr * 0.3) * loco;
+    bob = Math.abs(Math.cos(f)) * (0.05 + spr * 0.02) * loco;
+    lean = (0.1 + spr * 0.42) * loco;              // sprint: crouched lean-in
+    sway = Math.sin(f) * (0.05 + spr * 0.015) * loco;     // hip sway
+    twist = Math.sin(f) * (0.09 + spr * 0.05) * loco;     // shoulder counter-rotation
+    headBob = Math.sin(f * 2) * 0.025 * loco;
   }
   c.hipL.rotation.x = legA; c.hipR.rotation.x = -legA;
   // heel-toe: the knee stays straight into heel-strike, folds through
-  // push-off — a quarter-phase lag against the hip, plus a toe-off kick
+  // push-off — a quarter-phase lag against the hip, plus a toe-off kick.
+  // The kick is locomotion too: it must be dead still at rest (v4).
   const f2 = w * (7.2 + speed * 1.1 + spr * 2.4) - 0.55;
-  const kickL = Math.max(0, -Math.sin(f2)), kickR = Math.max(0, Math.sin(f2));
-  c.kneeL.rotation.x = kickL * (1.25 + spr * 0.4) + 0.06 + spr * 0.12;
-  c.kneeR.rotation.x = kickR * (1.25 + spr * 0.4) + 0.06 + spr * 0.12;
+  const kickL = Math.max(0, -Math.sin(f2)) * loco, kickR = Math.max(0, Math.sin(f2)) * loco;
+  c.kneeL.rotation.x = kickL * (1.25 + spr * 0.4) + 0.06 + spr * 0.12 * loco;
+  c.kneeR.rotation.x = kickR * (1.25 + spr * 0.4) + 0.06 + spr * 0.12 * loco;
   if (!opts.armsOverride) {
     if (spr) {
       // pumping bent arms

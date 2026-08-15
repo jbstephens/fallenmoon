@@ -160,7 +160,7 @@ const BOT_SRC = `(function(){
     else key('ShiftLeft', on);
   }
   B.sprint = sprint;
-  B.release=()=>{ stick(0,0); press(false); sprint(false); B.target=null; B.fight=false; B.boss=false; B.still=false; };
+  B.release=()=>{ stick(0,0); press(false); sprint(false); B.target=null; B.fight=false; B.boss=false; B.bossStyle=null; B.still=false; };
   let f=0;
   // stuck detection: if a walk target exists but we stop making progress
   // (collider pockets in the village clutter), sidestep for a beat
@@ -181,13 +181,18 @@ const BOT_SRC = `(function(){
     if (B.boss){
       const st=T.bossState, bx=T.bossX, bz=T.bossZ;
       const dxp=T.x-bx, dzp=T.z-bz, dp=Math.hypot(dxp,dzp)||1;
+      const kid = B.bossStyle==='kid';    // v4: the kid bot ONLY body-slashes
       if (!T.bossActive){ want=[58,164]; press(false); sprint(false); }
       else if (st==='stuck'||st==='dizzy'){
         sprint(false);
-        // steer INTO the claw while swinging — v3's solid arena wall can pin
-        // the flee, so the slam may land right on us with our back turned
-        const cx=T.bossClawX, cz=T.bossClawZ;
-        want=[cx,cz];
+        if (kid){
+          // a kid whacks the SHELL — never aims for the claw
+          want=[bx,bz];
+        } else {
+          // steer INTO the claw while swinging — v3's solid arena wall can pin
+          // the flee, so the slam may land right on us with our back turned
+          want=[T.bossClawX,T.bossClawZ];
+        }
         press((f>>2)&1?true:false);
       } else if (st==='slamTele'||st==='slam'){
         press(false); sprint(true);            // sprint clear of the slam
@@ -195,6 +200,11 @@ const BOT_SRC = `(function(){
       } else if (st==='chargeTele'||st==='charge'){
         press(false); sprint(true);            // sprint out of the charge line
         want=[62-dzp/dp*7, 166+dxp/dp*7];
+      } else if (kid){
+        sprint(false);
+        // the kid stands at the shell and keeps slashing the body
+        if (dp>3.6){ press(false); want=[bx+dxp/dp*3.0, bz+dzp/dp*3.0]; }
+        else { want=null; stick(0,0); press((f>>2)&1?true:false); }
       } else {
         press(false); sprint(false);
         // dp 4.2..6.5 is the engagement pocket — outside it, close back in
@@ -262,10 +272,14 @@ function makeApi(c) {
       await c.send('Fetch.enable', { patterns: [{ urlPattern: '*controller.js*' }] });
     },
     async stubPad() { await c.send('Page.addScriptToEvaluateOnNewDocument', { source: PAD_STUB }); },
-    async seedSave(save) {
-      await c.send('Page.addScriptToEvaluateOnNewDocument', {
-        source: `try{localStorage.setItem('fallenmoon_save_v1', ${JSON.stringify(JSON.stringify(save))});}catch(e){}`,
-      });
+    async seedSave(save, once) {
+      // once: seed only the FIRST navigation — later reloads keep the live
+      // save (persistence gates need the game's own writes to survive)
+      const set = `localStorage.setItem('fallenmoon_save_v1', ${JSON.stringify(JSON.stringify(save))});`;
+      const source = once
+        ? `try{ if(!localStorage.getItem('__fm_seeded')){ localStorage.setItem('__fm_seeded','1'); ${set} } }catch(e){}`
+        : `try{ ${set} }catch(e){}`;
+      await c.send('Page.addScriptToEvaluateOnNewDocument', { source });
     },
     async nav(url) {
       await c.send('Page.navigate', { url });
@@ -1104,6 +1118,19 @@ async function suiteTouch(base) {
     // confirm; first ensure focus CONTINUE via the virtual stick (down flick)
     const base0 = await rectCenter('#__atp-base');
     const south = await rectCenter('#__atp-s');
+    // ── v4 guard on touch: ✕ on NEW GAME asks first; ○ keeps the save ──
+    for (let i = 0; i < 6 && !(await api.eval('__fm.ngGuardOn')); i++) {
+      await tap(south.x, south.y);
+      await sleep(400);
+    }
+    gate('touch: NEW GAME asks before overwriting the save', await api.eval('__fm.ngGuardOn === true'));
+    const east = await rectCenter('#__atp-e');
+    for (let i = 0; i < 6 && (await api.eval('__fm.ngGuardOn')); i++) {
+      await tap(east.x, east.y);
+      await sleep(400);
+    }
+    gate('touch: ○ keeps the save (back to the menu)',
+      await api.eval(`__fm.ngGuardOn === false && __fm.state === 'title'`));
     // flick the stick down until CONTINUE is focused (verified), then confirm
     for (let i = 0; i < 8 && !(await api.eval('__fm.titleFocus === 1')); i++) {
       await tStart(8, base0.x, base0.y);
@@ -1329,10 +1356,178 @@ async function suiteCombat(base) {
     }
     gate('combat: single swing hits a crab 20/20 at neutral range', landed === 20,
       `${landed}/20${misses.length ? ' missed: ' + misses.join(',') : ''}`);
+
+    /* ═══ v4: IDLE FEET — 2 s of true idle, leg joints dead still.
+       (breathing/head-look exempt; the walk-cycle weight must be 0) ═══ */
+    await api.eval('__fmDebug.warp(-55, 26)');
+    await api.waitFor(`__fm.pst === 'idle' && __fm.state === 'play'`, 10000, 'idle');
+    await api.waitTicks(100);   // idle-settle pose fully converges
+    await api.eval(`window.__legs = { min: [9,9,9,9], max: [-9,-9,-9,-9], n: 0 };
+      (function w(){
+        const j = [wick.hipL.rotation.x, wick.hipR.rotation.x,
+                   wick.kneeL.rotation.x, wick.kneeR.rotation.x];
+        for (let i = 0; i < 4; i++) {
+          if (j[i] < __legs.min[i]) __legs.min[i] = j[i];
+          if (j[i] > __legs.max[i]) __legs.max[i] = j[i];
+        }
+        if (++__legs.n >= 130) return;
+        requestAnimationFrame(w); })()`);
+    await api.waitFor('window.__legs.n >= 130', 20000, 'idle capture');
+    const legs = await api.eval('JSON.stringify(window.__legs)').then(JSON.parse);
+    let maxDelta = 0;
+    for (let i = 0; i < 4; i++) maxDelta = Math.max(maxDelta, legs.max[i] - legs.min[i]);
+    gate('combat: idle feet dead still over 2 s (max leg delta < 0.02 rad)',
+      maxDelta < 0.02, 'maxΔ=' + maxDelta.toFixed(4) + ' rad');
+
     const bad = api.consoleBad;
     gate('combat: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
     gate('combat suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v4: BOSS TRUTH — the Ben gates. Body-only kid bot must win, the
+   claw bot must win faster, a dormant boss must wake on proximity with any
+   save state, and the HP bar must live its whole lifecycle. ═══ */
+async function suiteBoss(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  const seed = (wall) => api.seedSave({
+    v: 2, q: 2, ph: 0, mh: 8, sword: true, salt: 0,
+    talked: { finn: 1, tock: 1, pearl: 1 },
+    kelpDoor: true, doorChest: true, finnHeart: true, wreckChest: true, wallBurned: wall,
+    bossDone: false, sky: 0, tidepool: false, lastShade: [8, 6],
+  });
+  const enter = async () => {
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+  };
+  /* one full fight with the given bot style; returns ticks-to-victory */
+  const fight = async (style, opts = {}) => {
+    await seed(true);
+    await enter();
+    await api.installBot('pad');
+    // per-phase damage ledger + hint/glow watchers
+    await api.eval(`window.__bdmg={p1:0,p2:0,p3:0,last:null};
+      window.__sawGlow=false; window.__sawHint=false; window.__barSeen=false;
+      (function w(){ const T=__fm;
+        if (T.bossActive){
+          if (T.bossBarOn) __barSeen=true;
+          if (__bdmg.last===null) __bdmg.last=T.bossHp;
+          if (T.bossHp < __bdmg.last) __bdmg['p'+T.bossPhase] += (__bdmg.last - T.bossHp);
+          __bdmg.last = T.bossHp;
+          if (T.clawGlow) __sawGlow=true;
+        } else __bdmg.last=null;
+        const fl = document.getElementById('floatLine');
+        if (fl.classList.contains('on') && fl.textContent.indexOf('CLAW') >= 0) __sawHint=true;
+        if (T.carry) return;
+        requestAnimationFrame(w); })()`);
+    await api.eval('__fmDebug.warp(47, 158.5)');
+    await api.walkTo(56, 163, 1.4, 60000);
+    const t0 = await api.eval('__fm.tick');
+    await api.bot({ boss: true, bossStyle: style });
+    await api.waitFor('__fm.bossActive === true', 20000, 'boss engaged (' + style + ')');
+    if (opts.hpbarShot) {
+      // mid-damage frame: freeze on a phase≥2 damage tick, let the bar settle
+      await api.eval(`window.__hpShot=false;(function w(){
+        const T=__fm;
+        if (T.bossActive && T.bossPhase >= 2 && T.bossHp < 58 && T.bossHp > 8){
+          window.__hpShot=true; __fmDebug.freeze(1); return; }
+        if (T.carry) return;
+        requestAnimationFrame(w);})()`);
+    }
+    if (opts.glowShot) {
+      await api.eval(`window.__glowShot=false;(function w(){
+        const T=__fm;
+        if (T.clawGlow && T.bossState==='stuck'){ window.__glowShot=true; __fmDebug.freeze(1); return; }
+        if (T.carry) return;
+        requestAnimationFrame(w);})()`);
+      const t1 = Date.now();
+      while (Date.now() - t1 < 90000 && !(await api.eval('window.__glowShot'))) await sleep(120);
+      gate('boss: claw glows through the slam-recovery window', await api.eval('window.__glowShot || __fm.carry === true'));
+      if (await api.eval('window.__glowShot')) {
+        await api.eval(`(function(){ const T=__fm;
+          const dx=T.bossX-T.x, dz=T.bossZ-T.z, d=Math.hypot(dx,dz)||1;
+          __fmDebug.cam(T.bossX - dx/d*8, -1.0, T.bossZ - dz/d*8, T.bossX, 0.4, T.bossZ); })()`);
+        await sleep(250);
+        await api.shot('boss-clawglow-1280x720');
+        await api.eval('__fmDebug.camOff(); __fmDebug.freeze(0)');
+      }
+    }
+    if (opts.hpbarShot) {
+      const t1 = Date.now();
+      while (Date.now() - t1 < 240000 && !(await api.eval('window.__hpShot'))) await sleep(150);
+      if (await api.eval('window.__hpShot')) {
+        await sleep(320);          // width transition settles on the frozen frame
+        await api.shot('boss-hpbar-1280x720');
+        await api.eval('__fmDebug.freeze(0)');
+      }
+      gate('boss: HP bar frame staged mid-damage', await api.eval('window.__hpShot'));
+    }
+    if (opts.victoryShot) {
+      await api.waitFor(`__fm.cinId === 'bossDefeat'`, 600000, 'defeat cinematic (' + style + ')');
+      await api.eval('window.__fmTurbo = 1');
+      await api.waitFor('__fm.cinT > 1.8 && __fm.cinT < 3.4', 60000, 'the bow moment').catch(() => {});
+      await sleep(150);
+      await api.shot('boss-kidbot-victory-1280x720');
+      await api.eval('window.__fmTurbo = undefined');
+    }
+    await api.waitFor('__fm.carry === true', 600000, 'crescent obtained (' + style + ')');
+    const ticks = (await api.eval('__fm.tick')) - t0;
+    await api.botRelease();
+    return ticks;
+  };
+  try {
+    // ── 1. the dormant boss (the field failure): wall NOT burned, any save ──
+    await seed(false);
+    await enter();
+    await api.eval('__fmDebug.warp(62, 166)');
+    await api.waitFor('__fm.bossActive === true', 20000, 'dormant boss wakes');
+    gate('boss: proximity wakes a dormant boss (wall unburned save)', true);
+    gate('boss: HP bar appears on wake, named, with phase notches',
+      await api.eval(`__fm.bossBarOn === true &&
+        document.getElementById('bossName').textContent.indexOf('KING-CRAB') >= 0 &&
+        document.querySelectorAll('.bossNotch').length === 2`));
+    await api.eval(`__fmDebug.face(Math.atan2(__fm.bossX-__fm.x, __fm.bossZ-__fm.z))`);
+    const hp0 = await api.eval('__fm.bossHp');
+    for (let i = 0; i < 8 && (await api.eval('__fm.bossHp')) === hp0; i++) await api.tap(0);
+    const hp1 = await api.eval('__fm.bossHp');
+    gate('boss: body swing damages the woken boss (real input)', hp1 < hp0, `hp ${hp0} → ${hp1}`);
+    gate('boss: one-time CLAW hint on first body hit', await api.eval('__fm.bossHintSeen === true'));
+    const fillW = await api.eval(`document.getElementById('bossFill').getBoundingClientRect().width /
+      (document.getElementById('bossTrack').getBoundingClientRect().width - 4)`);
+    gate('boss: HP bar visibly chips', fillW < 0.999 && Math.abs(fillW - hp1 / 90) < 0.03,
+      'fill=' + (fillW * 100).toFixed(1) + '% hp=' + hp1);
+
+    // ── 2. the KID BOT: body slashes only, must WIN (slowly) ──
+    const kidTicks = await fight('kid', { victoryShot: true });
+    const dmg = await api.eval('JSON.stringify(window.__bdmg)').then(JSON.parse);
+    gate('boss: kid bot (body-only) wins the whole fight', true, kidTicks + ' ticks');
+    gate('boss: kid bot dealt damage in EVERY phase',
+      dmg.p1 > 0 && dmg.p2 > 0 && dmg.p3 > 0, JSON.stringify(dmg));
+    gate('boss: hint floatText fired during the fight-or-earlier', await api.eval('window.__sawHint || __fm.bossHintSeen'));
+    gate('boss: HP bar gone on cure', await api.eval('__fm.bossBarOn === false'));
+
+    // ── 3. the CLAW BOT: aims the weakness, must win FASTER ──
+    const clawTicks = await fight('claw', { hpbarShot: true, glowShot: true });
+    const dmg2 = await api.eval('JSON.stringify(window.__bdmg)').then(JSON.parse);
+    gate('boss: claw bot wins too (damage every phase)',
+      dmg2.p1 > 0 && dmg2.p2 > 0 && dmg2.p3 > 0, JSON.stringify(dmg2));
+    gate('boss: claw aiming beats body mashing', clawTicks < kidTicks,
+      `claw ${clawTicks} vs kid ${kidTicks} ticks`);
+
+    const bad = api.consoleBad;
+    gate('boss: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('boss suite', false, e.message);
+    await api.shot('boss-FAIL').catch(() => {});
+    console.log('  state:', await api.eval('JSON.stringify({s:__fm.state,b:__fm.bossState,ph:__fm.bossPhase,hp:__fm.bossHp,x:__fm.x,z:__fm.z,h:__fm.hearts})').catch(() => '?'));
   }
   c.close(); proc.kill();
 }
@@ -1358,7 +1553,7 @@ async function suiteFuzz(base) {
     await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
     await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
     await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
-    await api.eval(`window.__fz = { bad: 0, arena: 0, worst: '' };
+    await api.eval(`window.__fz = { bad: 0, arena: 0, worst: '', mouthT: 0, corT: 0 };
       (function w(){ const T = window.__fm;
         if (T && T.state === 'play') {
           if (grottoSolidAt(T.x, T.z)) { __fz.bad++; __fz.worst = T.x.toFixed(1)+','+T.z.toFixed(1); }
@@ -1367,20 +1562,34 @@ async function suiteFuzz(base) {
             if (Math.hypot(T.x - k[0], T.z - k[1]) < k[2]) { __fz.bad++; __fz.worst = 'keepout '+T.x.toFixed(1)+','+T.z.toFixed(1); }
           }
           if (window.__fzNoArena && Math.hypot(T.x - 62, T.z - 166) < 14.2) __fz.arena++;
+          // legal-opening transit flags (v4 dense fuzz: an "escape" that went
+          // through the mouth funnel or the corridor is a legitimate walk)
+          if (T.z > 121 && T.z < 134 && Math.abs(T.x - 30) < 8.5) __fz.mouthT = 1;
+          const ct = ((T.x - 41) * 12 + (T.z - 155.5) * 6) / 180;
+          if (ct > -0.15 && ct < 1.15 &&
+              Math.hypot(T.x - (41 + 12 * ct), T.z - (155.5 + 6 * ct)) < 3.2) __fz.corT = 1;
         }
         requestAnimationFrame(w); })()`);
   };
   // push the player toward world-dir (dx,dz) for ms; optionally jumping
-  const shove = async (dx, dz, ms, jump) => {
+  // and/or sprint-holding (v4: the dense fuzz rotates through all three)
+  const shove = async (dx, dz, ms, jump, sprint) => {
     const t0 = Date.now();
     let jt = 0;
+    if (sprint) await api.press(1);
     while (Date.now() - t0 < ms) {
       await api.eval(`__fmDebug.camYaw(Math.PI)`);
       await api.axes(-dx, -dz);
-      if (jump && Date.now() - jt > 500) { jt = Date.now(); await api.press(2); await sleep(60); await api.press(); }
+      if (jump && Date.now() - jt > 500) {
+        jt = Date.now();
+        await api.press(...(sprint ? [1, 2] : [2]));
+        await sleep(60);
+        await api.press(...(sprint ? [1] : []));
+      }
       await sleep(90);
     }
     await api.axes(0, 0);
+    await api.press();
   };
   const fuzzRing = async (cx, cz, tag, ms, jumpEvery) => {
     for (let b = 0; b < 12; b++) {
@@ -1412,6 +1621,121 @@ async function suiteFuzz(base) {
     gate('fuzz: massif solid from the outside too', (await api.eval('__fz.bad')) === 0,
       'bad=' + await api.eval('__fz.bad'));
 
+    /* ═══ v4 DENSE PERIMETER FUZZ — every ~1.5 m along every boundary,
+       walking + jumping + sprinting into it; zero penetrations. ═══ */
+    const floodFill = () => api.eval(`(function(){
+      const step=0.75, x0=0, x1=92, z0=112, z1=186;
+      const nx=Math.ceil((x1-x0)/step), nz=Math.ceil((z1-z0)/step);
+      const seen=new Uint8Array(nx*nz);
+      const qx=[Math.round((30-x0)/step)], qz=[Math.round((118-z0)/step)];
+      seen[qx[0]*nz+qz[0]]=1;
+      let reach=false, cells=0;
+      while(qx.length){
+        const ix=qx.pop(), iz=qz.pop(); cells++;
+        if(Math.hypot(x0+ix*step-62, z0+iz*step-166)<11) reach=true;
+        for(const dd of [[1,0],[-1,0],[0,1],[0,-1]]){
+          const jx=ix+dd[0], jz=iz+dd[1];
+          if(jx<0||jz<0||jx>=nx||jz>=nz) continue;
+          if(seen[jx*nz+jz]) continue;
+          if(grottoSolidAt(x0+jx*step, z0+jz*step)) continue;
+          seen[jx*nz+jz]=1; qx.push(jx); qz.push(jz);
+        }
+      }
+      return { reach, cells };
+    })()`);
+    const ff1 = await floodFill();
+    gate('fuzz: flood-fill — arena UNREACHABLE until wallBurned',
+      ff1.reach === false, JSON.stringify(ff1));
+
+    // interior chamber-A ring, one sample per ~1.5 m of boundary
+    await api.eval('__fz.bad = 0');
+    let escapes = 0;
+    const denseRing = async (cx2, cz2, rOpen, skipsectors) => {
+      const n = Math.ceil((Math.PI * 2 * rOpen) / 1.5);
+      for (let i = 0; i < n; i++) {
+        const a = i / n * Math.PI * 2;
+        let skip = false;
+        for (const [sa, shw] of skipsectors) {
+          let d = Math.abs(((a - sa) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2));
+          if (d > Math.PI) d = Math.PI * 2 - d;
+          if (d < shw) skip = true;
+        }
+        const wx = cx2 + Math.cos(a) * (rOpen - 1.2), wz = cz2 + Math.sin(a) * (rOpen - 1.2);
+        const ss0 = await api.eval('__fm.sunstruck');
+        await api.eval(`__fz.mouthT = 0; __fz.corT = 0; __fmDebug.warp(${wx.toFixed(2)}, ${wz.toFixed(2)})`);
+        await shove(Math.cos(a), Math.sin(a), 700, i % 2 === 0, i % 3 === 0);
+        await api.waitFor(`__fm.state === 'play'`, 60000, 'control back').catch(() => {});
+        if (!skip && (await api.eval('__fm.sunstruck')) === ss0 &&
+            !(await api.eval('__fz.mouthT || __fz.corT'))) {
+          const d2 = await api.eval(`Math.hypot(__fm.x - ${cx2}, __fm.z - ${cz2})`);
+          if (d2 > rOpen + 1.6) { escapes++; console.log('    escape @', (await api.eval('__fm.x')).toFixed(1), (await api.eval('__fm.z')).toFixed(1)); }
+        }
+      }
+    };
+    // chamber A: skip the corridor (0.46) and entrance (-π/2) sectors
+    await denseRing(30, 150, 14.8, [[0.4636, 0.4], [Math.PI * 1.5, 0.35]]);
+    // entrance walkway edges every ~1.5 m, both sides
+    for (let z = 126; z <= 139; z += 1.5) {
+      for (const s of [-1, 1]) {
+        await api.eval(`__fmDebug.warp(${(30 + s * 1.4).toFixed(2)}, ${z.toFixed(2)})`);
+        await shove(s, 0, 700, z % 3 < 1.5, z % 4.5 < 1.5);
+        await api.waitFor(`__fm.state === 'play'`, 60000, 'control back').catch(() => {});
+        if (z >= 132.5 && z <= 134.5) {
+          // (above z≈135.2 the walkway legally opens into chamber A's circle)
+          const px = await api.eval('__fm.x'), pz = await api.eval('__fm.z');
+          if (Math.abs(px - 30) > 3.4 && pz > 131 && pz < 135.2) {
+            escapes++;
+            console.log('    throat escape @', px.toFixed(1), pz.toFixed(1));
+          }
+        }
+      }
+    }
+    // the corridor PLUG: push straight into the kelp wall from both ends
+    for (const lat of [-1.5, 0, 1.5]) {
+      const px2 = -6 / 13.4, pz2 = 12 / 13.4;
+      await api.eval(`__fmDebug.warp(${(42.8 + px2 * lat).toFixed(2)}, ${(156.4 + pz2 * lat).toFixed(2)})`);
+      await shove(12 / 13.4, 6 / 13.4, 900, true, false);
+      await api.waitFor(`__fm.state === 'play'`, 60000, 'control back').catch(() => {});
+      const t = await api.eval(`((__fm.x - 41) * 12 + (__fm.z - 155.5) * 6) / 180`);
+      if (t > 0.5) escapes++;
+    }
+    gate('fuzz: dense interior perimeter — never inside rock',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad') + ' ' + await api.eval('__fz.worst'));
+    gate('fuzz: dense interior perimeter — never THROUGH a wall', escapes === 0, 'escapes=' + escapes);
+
+    // exterior massif perimeter, inward shoves every ~1.5 m
+    await api.eval('__fz.bad = 0');
+    let breaches = 0, extN = 0;
+    for (const [mx, mz, mr, mouthA] of [[30, 150, 22.65, Math.PI * 1.5], [62, 166, 20.55, null], [46, 158, 16.35, null]]) {
+      const n = Math.ceil((Math.PI * 2 * (mr + 0.8)) / 1.5);
+      for (let i = 0; i < n; i++) {
+        const a = i / n * Math.PI * 2;
+        if (mouthA !== null) {
+          let d = Math.abs(((a - mouthA) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2));
+          if (d > Math.PI) d = Math.PI * 2 - d;
+          if (d < 0.62) continue;               // the mouth funnel is a legal way in
+        }
+        const wx = mx + Math.cos(a) * (mr + 0.9), wz = mz + Math.sin(a) * (mr + 0.9);
+        if (Math.abs(wx) > 96 || wz > 182 || wz < -96) continue;
+        // skip points that start inside a NEIGHBOR cap's rock or open air
+        // (the cap footprints overlap the chambers of their neighbors)
+        if (await api.eval(`grottoSolidAt(${wx.toFixed(2)}, ${wz.toFixed(2)}) || grottoOpenAt(${wx.toFixed(2)}, ${wz.toFixed(2)}, true)`)) continue;
+        extN++;
+        await api.eval(`__fz.mouthT = 0; __fz.corT = 0; __fmDebug.warp(${wx.toFixed(2)}, ${wz.toFixed(2)})`);
+        await shove(-Math.cos(a), -Math.sin(a), 650, i % 2 === 0, i % 3 === 0);
+        await api.waitFor(`__fm.state === 'play'`, 60000, 'control back').catch(() => {});
+        if ((await api.eval('grottoOpenAt(__fm.x, __fm.z, true)')) &&
+            !(await api.eval('__fz.mouthT'))) {
+          breaches++;
+          console.log('    breach from', wx.toFixed(1), wz.toFixed(1), '→', (await api.eval('__fm.x')).toFixed(1), (await api.eval('__fm.z')).toFixed(1));
+        }
+      }
+    }
+    gate('fuzz: dense exterior perimeter — never inside rock',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad') + ' over ' + extN + ' samples');
+    gate('fuzz: dense exterior perimeter — never INTO the grotto through rock',
+      breaches === 0, 'breaches=' + breaches);
+
     // ── phase 2: village walls + big rocks ──
     await api.eval('window.__fzNoArena = 0; __fz.bad = 0');
     await api.eval('window.__fzKeepOut = [-38, -32, 4.05]');   // house shell interior
@@ -1438,6 +1762,36 @@ async function suiteFuzz(base) {
     await fuzzRing(62, 166, 'arena', 1000, true);
     gate('fuzz: boss-arena perimeter sealed (fight live)',
       (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad'));
+    // v4 dense pass over the arena ring + the now-open corridor edges
+    const ff2 = await floodFill();
+    gate('fuzz: flood-fill — arena reachable AFTER the burn (corridor only path)',
+      ff2.reach === true, JSON.stringify(ff2));
+    await api.eval('__fz.bad = 0');
+    escapes = 0;
+    await denseRing(62, 166, 13.8, [[0.4636 + Math.PI, 0.4]]);
+    for (let ti = 1; ti <= 8; ti++) {
+      const t = ti / 9;
+      const lx2 = 41 + 12 * t, lz2 = 155.5 + 6 * t;
+      const px3 = -6 / 13.4, pz3 = 12 / 13.4;
+      for (const s of [-1, 1]) {
+        const ss0 = await api.eval('__fm.sunstruck');
+        await api.eval(`__fmDebug.warp(${(lx2 + px3 * s * 0.8).toFixed(2)}, ${(lz2 + pz3 * s * 0.8).toFixed(2)})`);
+        await shove(px3 * s, pz3 * s, 700, ti % 2 === 0, ti % 3 === 0);
+        await api.waitFor(`__fm.state === 'play'`, 90000, 'control back').catch(() => {});
+        if ((await api.eval('__fm.sunstruck')) !== ss0) continue;
+        const lat = await api.eval(`(function(){ const t2=((__fm.x-41)*12+(__fm.z-155.5)*6)/180;
+          if (t2 < 0.2 || t2 > 0.8) return 0;
+          // the chamber circles legally overlap the corridor ends
+          if (Math.hypot(__fm.x - 30, __fm.z - 150) < 15.7) return 0;
+          if (Math.hypot(__fm.x - 62, __fm.z - 166) < 14.7) return 0;
+          return Math.hypot(__fm.x-(41+12*t2), __fm.z-(155.5+6*t2)); })()`);
+        if (lat > 3.6) { escapes++; console.log('    corridor escape @', (await api.eval('__fm.x')).toFixed(1), (await api.eval('__fm.z')).toFixed(1)); }
+      }
+    }
+    gate('fuzz: dense arena + corridor perimeter — never inside rock',
+      (await api.eval('__fz.bad')) === 0, 'bad=' + await api.eval('__fz.bad'));
+    gate('fuzz: dense arena + corridor perimeter — never through a wall',
+      escapes === 0, 'escapes=' + escapes);
     const bad = api.consoleBad;
     gate('fuzz: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
@@ -1445,6 +1799,139 @@ async function suiteFuzz(base) {
     await api.shot('fuzz-FAIL').catch(() => {});
   }
   c.close(); proc.kill();
+}
+
+/* ═══ v4: INTERIORS — the harbor house, end to end, pad-alone and
+   keyboard-alone. Enter via the door prompt, walk freely, open the salt
+   chest, fuzz the walls, sample perf, leave, and persist the chest. ═══ */
+async function suiteInterior(base) {
+  const seedSave = {
+    v: 2, q: 0, ph: 0, mh: 5, sword: true, salt: 0,
+    talked: { finn: 0, tock: 0, pearl: 0 },
+    kelpDoor: false, doorChest: false, finnHeart: false, wreckChest: false, wallBurned: false,
+    bossDone: false, sky: 0, tidepool: false, lastShade: [-30, -28],
+  };
+  const run = async (mode) => {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init();
+    if (mode === 'pad') await api.stubPad();
+    await api.seedSave(seedSave, true);   // once — reloads keep live writes
+    await api.nav(base + '/?turbo=6');
+    const D = driver(api, mode);
+    const g = (n, ok, d) => gate(`interior(${mode}): ${n}`, ok, d);
+    try {
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+      await tapUntil(api, () => D.down(), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+      await api.installBot(mode);
+      // ── to the door, by real input ──
+      await api.walkTo(-33, -40, 1.6, 60000);
+      await api.walkTo(-39.48, -36.78, 0.6, 60000);
+      await api.waitFor(`__fm.prompt === 'houseDoor'`, 10000, 'door prompt');
+      g('door prompt at the harbor house', true);
+      if (mode === 'pad') {
+        // the door-prompt shot: from outside the door, Wick at the threshold
+        await api.eval('window.__fmTurbo = 1');
+        await api.eval(`__fmDebug.face(${(0.3).toFixed(2)});
+          __fmDebug.cam(-38.85, groundH(-38.85,-39.51)+1.75, -39.51, -38.95, groundH(-38.95,-35.09)+1.5, -35.09)`);
+        await sleep(400);
+        await api.shot('house-door-prompt-1280x720');
+        await api.eval('__fmDebug.camOff(); window.__fmTurbo = undefined');
+      }
+      // ── enter ──
+      await D.confirm();
+      await api.waitFor(`__fm.inInterior === true && __fm.state === 'play'`, 15000, 'inside');
+      g('✕ enters through the fade', true);
+      g('interior counts as shade sanctuary', await api.eval('__fm.shade === true'));
+      // ── walk freely between corners ──
+      await api.walkTo(332.6, -61.4, 0.6, 30000);
+      await api.walkTo(328.6, -61.6, 0.7, 30000);
+      await api.walkTo(331.8, -58.2, 0.7, 30000);
+      g('walks freely between the corners', true);
+      if (mode === 'pad') {
+        // interior beauty shots: wide from the door corner + the lamp table
+        await api.eval('window.__fmTurbo = 1');
+        await api.eval('__fmBot.release(); __fmDebug.warp(329.0, -60.9); __fmDebug.face(0.5);');
+        await api.eval('__fmDebug.cam(332.9, 1.85, -57.4, 328.2, 0.65, -61.3)');
+        await sleep(500);
+        await api.shot('interior-wide-1280x720');
+        await api.eval('__fmDebug.cam(328.6, 1.35, -58.2, 331.6, 0.75, -60.9)');
+        await sleep(350);
+        await api.shot('interior-detail-1280x720');
+        await api.eval('__fmDebug.camOff(); window.__fmTurbo = undefined');
+      }
+      // ── the salt chest ──
+      const salt0 = await api.eval('__fm.salt');
+      await api.walkTo(328.6, -58.6, 0.55, 30000);
+      await api.waitFor(`__fm.prompt === 'homeChest'`, 10000, 'chest prompt');
+      await D.confirm();
+      await api.waitFor('__fm.homeChest === true', 15000, 'chest opened');
+      await api.waitFor(`__fm.salt > ${salt0}`, 10000, 'salt gained');
+      g('salt-crystal chest opens', true, 'salt=' + await api.eval('__fm.salt'));
+      // ── interior collision fuzz: 12 bearings, walk + jump, stay inside ──
+      await api.eval(`window.__fzi = { out: 0, done: 0 };
+        (function w(){ const T = __fm;
+          if (__fzi.done) return;
+          if (T.state === 'play' && T.tick > 0) {
+            if (Math.abs(T.x - 330) > 3.62 || Math.abs(T.z - (-60)) > 2.92) __fzi.out++;
+          }
+          requestAnimationFrame(w); })()`);
+      for (let b = 0; b < 12; b++) {
+        const a = b / 12 * Math.PI * 2;
+        await api.eval('__fmDebug.warp(330, -60)');
+        const t0 = Date.now();
+        let jt = 0;
+        while (Date.now() - t0 < 650) {
+          await api.eval(`__fmDebug.camYaw(Math.PI)`);
+          if (mode === 'pad') await api.axes(-Math.sin(a), -Math.cos(a));
+          else {
+            await api.eval(`__fmBot.target=[${(330 + Math.sin(a) * 9).toFixed(1)}, ${(-60 + Math.cos(a) * 9).toFixed(1)}]; __fmBot.tol=0.05;`);
+          }
+          if (b % 2 === 0 && Date.now() - jt > 500) { jt = Date.now(); await D.jump(); }
+          await sleep(90);
+        }
+        if (mode === 'pad') await api.axes(0, 0);
+        else await api.eval('__fmBot.target=null');
+      }
+      g('collision fuzz: never outside the room, all bearings',
+        (await api.eval('__fzi.out')) === 0, 'out=' + await api.eval('__fzi.out'));
+      await api.eval('__fzi.done = 1');
+      // ── perf inside ──
+      await api.perfReset();
+      await api.walkTo(331.5, -58.4, 0.8, 30000);
+      await api.walkTo(327.8, -61.0, 0.8, 30000);
+      await api.waitTicks(120);
+      const pf = await api.perfRead();
+      g('draw calls ≤ 80 inside', pf.calls <= 80, 'max ' + pf.calls);
+      g('triangles ≤ 120k inside', pf.tris <= 120000, 'max ' + pf.tris);
+      // ── leave ──
+      await api.walkTo(330, -57.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'leaveHouse'`, 10000, 'leave prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.inInterior === false && __fm.state === 'play'`, 15000, 'back outside');
+      g('✕ leaves back to the village', true,
+        'at ' + (await api.eval('__fm.x')).toFixed(1) + ',' + (await api.eval('__fm.z')).toFixed(1));
+      // ── persistence: reload → CONTINUE → chest stays opened ──
+      await api.nav(base + '/?turbo=6');
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title again');
+      await tapUntil(api, () => D.down(), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+      g('chest state persists across reload', await api.eval('__fm.homeChest === true && __fm.salt >= 3'),
+        'salt=' + await api.eval('__fm.salt'));
+      const bad = api.consoleBad;
+      g('zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate(`interior(${mode}) suite`, false, e.message);
+      await api.shot('interior-FAIL-' + mode).catch(() => {});
+    }
+    c.close(); proc.kill();
+  };
+  await run('pad');
+  await run('kbd');
 }
 
 /* ═══ v3: save-loader stage gates (the Ben soft-lock).
@@ -1525,6 +2012,43 @@ async function suiteSaves(base) {
     await api.waitFor('__fm.quest === 2', 8000, 'quest re-offered');
     gate('saves: Finn self-heal re-offers the thread (quest 2 + beacon back)',
       (await api.eval('__fm.beacon')) === true && (await banner()));
+
+    /* ═══ v4: the NEW-GAME GUARD — protects family saves ═══ */
+    await api.seedSave(benSave);
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title (guard)');
+    gate('guard: NEW GAME focused by default', await api.eval('__fm.titleFocus === 0'));
+    await tapUntil(api, () => api.tap(0), '__fm.ngGuardOn === true', 8, 'guard modal');
+    gate('guard: modal appears instead of wiping', await api.eval(`__fm.ngGuardOn === true && __fm.state === 'title'`));
+    await sleep(400);
+    await api.shot('newgame-guard-1280x720');
+    await tapUntil(api, () => api.tap(1), '__fm.ngGuardOn === false', 8, 'guard declined');
+    const kept = await api.eval(`(function(){ try { const s = JSON.parse(localStorage.getItem('fallenmoon_save_v1')); return s && s.q === 2; } catch(e){ return false; } })()`);
+    gate('guard: ○ declines — the save is untouched', kept &&
+      (await api.eval(`__fm.state === 'title' && !document.getElementById('ti1').classList.contains('gone')`)));
+    // keyboard: J opens the modal, Esc declines
+    await api.tapKey('j', 'KeyJ');
+    await api.waitFor('__fm.ngGuardOn === true', 5000, 'guard via J');
+    gate('guard(kbd): J asks again', true);
+    await api.tapKey('Escape', 'Escape');
+    await api.waitFor('__fm.ngGuardOn === false', 5000, 'declined via Esc');
+    gate('guard(kbd): Esc declines — save still there',
+      await api.eval(`(function(){ try { const s = JSON.parse(localStorage.getItem('fallenmoon_save_v1')); return s && s.q === 2; } catch(e){ return false; } })()`));
+    // CONTINUE never asks
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'continue straight in');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'continued (no modal)');
+    gate('guard: CONTINUE untouched — straight into the save',
+      (await api.eval('__fm.quest')) === 2 && (await api.eval('__fm.ngGuardOn')) === false);
+    // and ✕ on the modal really does start fresh
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title (guard 2)');
+    await tapUntil(api, () => api.tap(0), '__fm.ngGuardOn === true', 8, 'guard modal 2');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 8, 'confirm fresh');
+    await api.waitFor(`__fm.state === 'play'`, 40000, 'fresh adventure');
+    gate('guard: ✕ confirms — a truly fresh adventure',
+      (await api.eval('__fm.quest')) === 0 && (await api.eval('__fm.salt')) === 0 &&
+      (await api.eval('__fm.maxHearts')) === 5);
 
     const bad = api.consoleBad;
     gate('saves: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
@@ -1922,22 +2446,27 @@ function medianColorAt(png, cx, cy, r) {
 }
 
 /* ═══════════ main ═══════════ */
-const which = process.argv[2] || 'all';
+const whichArg = process.argv[2] || 'all';
+const parts = whichArg.split(',');
+const which = parts.length > 1 ? 'list' : whichArg;
+const wants = (name) => which === 'all' || which === name || (which === 'list' && parts.includes(name));
 const { srv, port: httpPort } = await serve();
 const base = `http://127.0.0.1:${httpPort}`;
 const t0 = Date.now();
 try {
   if (which === 'art') await suiteArt(base);
-  if (which === 'all' || which === 'shots') await suiteShots(base);
-  if (which === 'all' || which === 'walls') await suiteWalls(base);
-  if (which === 'all' || which === 'fuzz') await suiteFuzz(base);
-  if (which === 'all' || which === 'combat') await suiteCombat(base);
-  if (which === 'all' || which === 'saves') await suiteSaves(base);
-  if (which === 'all' || which === 'migrate') await suiteMigrate(base);
-  if (which === 'all' || which === 'flow') await suiteFlow(base);
-  if (which === 'all' || which === 'kbd') await suiteKbd(base);
-  if (which === 'all' || which === 'touch') await suiteTouch(base);
-  if (which === 'all' || which === 'perf') await suitePerf(base);
+  if (wants('shots')) await suiteShots(base);
+  if (wants('walls')) await suiteWalls(base);
+  if (wants('fuzz')) await suiteFuzz(base);
+  if (wants('boss')) await suiteBoss(base);
+  if (wants('interior')) await suiteInterior(base);
+  if (wants('combat')) await suiteCombat(base);
+  if (wants('saves')) await suiteSaves(base);
+  if (wants('migrate')) await suiteMigrate(base);
+  if (wants('flow')) await suiteFlow(base);
+  if (wants('kbd')) await suiteKbd(base);
+  if (wants('touch')) await suiteTouch(base);
+  if (wants('perf')) await suitePerf(base);
 } finally {
   srv.close();
 }
