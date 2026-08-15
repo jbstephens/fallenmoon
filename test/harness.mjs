@@ -1934,6 +1934,455 @@ async function suiteInterior(base) {
   await run('kbd');
 }
 
+/* ═══ v4.5: EVERY DOOR OPENS — Granny Tock's house, Pearl's family house,
+   Finn's lighthouse ground room, and the harbor net-mending bench.
+   Pad-alone AND keyboard-alone; every interaction by real input; state
+   persisted across reload; collision fuzz + perf per room. ═══ */
+async function suiteRooms(base) {
+  const seedSave = {
+    v: 2, q: 0, ph: 0, mh: 5, sword: true, salt: 0,
+    talked: { finn: 0, tock: 0, pearl: 0 },
+    kelpDoor: false, doorChest: true, finnHeart: false, wreckChest: false, wallBurned: false,
+    bossDone: false, sky: 0, tidepool: false, lastShade: [-2, -34],
+  };
+  const run = async (mode) => {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init();
+    if (mode === 'pad') await api.stubPad();
+    await api.seedSave(seedSave, true);   // once — reloads keep live writes
+    await api.nav(base + '/?turbo=6');
+    const D = driver(api, mode);
+    const g = (n, ok, d) => gate(`rooms(${mode}): ${n}`, ok, d);
+    const pad = mode === 'pad';
+    const stage = async (cam, ms) => {   // beauty staging at 1x sim
+      await api.eval('window.__fmTurbo = 1');
+      await api.eval(cam);
+      await sleep(ms || 450);
+    };
+    const unstage = async () => api.eval('__fmDebug.camOff(); window.__fmTurbo = undefined');
+    try {
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+      await tapUntil(api, () => D.down(), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+      await api.installBot(mode);
+
+      /* ═══ 1. GRANNY TOCK'S HOUSE (the small house at 6,-38) ═══ */
+      await api.walkTo(9, -42.6, 1.4, 60000);
+      await api.walkTo(5.37, -42.15, 0.55, 60000);
+      await api.waitFor(`__fm.prompt === 'tockDoor'`, 10000, 'tock door prompt');
+      g('door prompt at Granny Tock’s', true);
+      if (pad) {
+        await stage(`__fmDebug.face(0.15);
+          __fmDebug.cam(4.6, groundH(4.6,-43.6)+1.7, -43.6, 5.9, groundH(5.9,-39.6)+1.5, -39.6)`);
+        await api.shot('tock-door-prompt-1280x720');
+        await unstage();
+      }
+      await D.confirm();
+      await api.waitFor(`__fm.room === 'tock' && __fm.state === 'play'`, 15000, 'inside tock');
+      g('✕ enters through the fade', true);
+      g('room counts as shade sanctuary', await api.eval('__fm.shade === true'));
+      await api.walkTo(328.0, -101.2, 0.7, 30000);
+      await api.walkTo(332.0, -99.2, 0.7, 30000);
+      g('walks freely between the corners', true);
+      if (pad) {
+        await stage(`__fmBot.release(); __fmDebug.warp(331.4, -98.6); __fmDebug.face(3.6);
+          __fmDebug.cam(332.2, 1.8, -97.9, 328.6, 0.9, -101.6)`, 550);
+        await api.shot('room-tock-wide-1280x720');
+        await stage(`__fmDebug.cam(329.3, 1.75, -99.3, 327.0, 1.7, -100.4)`, 400);
+        await api.shot('room-tock-clockwall-1280x720');
+        await unstage();
+      }
+      // ── wind the floor clock: crank, ticks, dies; Granny's one warm line ──
+      await api.walkTo(329.5, -100.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'windClock'`, 10000, 'clock prompt');
+      await D.confirm();
+      await api.waitFor('__fm.clockTicking === true', 15000, 'the clock lives');
+      g('winding starts the clock (real input)', true);
+      if (pad) {
+        await api.eval('window.__fmTurbo = 1');
+        await sleep(600);
+        await api.shot('tock-clock-wound-1280x720');
+        await api.eval('window.__fmTurbo = undefined');
+      }
+      await api.waitFor('__fm.clockTicking === false', 30000, 'the clock dies');
+      g('…and it dies again', true);
+      g('Granny’s line arrives from outside',
+        await api.eval(`__fm.caption !== null && __fm.caption.indexOf('lovely') >= 0`),
+        String(await api.eval('__fm.caption')));
+      g('clock-wound flag saved', await api.eval('__fm.clockWound === true'));
+      // ── her salt chest ──
+      const salt0 = await api.eval('__fm.salt');
+      await api.walkTo(331.75, -101.2, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'tockChest'`, 10000, 'tock chest prompt');
+      await D.confirm();
+      await api.waitFor('__fm.tockChest === true', 15000, 'tock chest opened');
+      await api.waitFor(`__fm.salt > ${salt0}`, 10000, 'salt gained');
+      g('salt chest opens', true, 'salt=' + await api.eval('__fm.salt'));
+      await roomFuzz(api, D, mode, g, 330, -100, '(Math.abs(__fm.x - 330) > 2.92 || Math.abs(__fm.z - (-100)) > 2.32)');
+      await api.perfReset();
+      await api.walkTo(332.0, -98.6, 0.8, 30000);
+      await api.walkTo(328.2, -101.4, 0.8, 30000);
+      await api.waitTicks(120);
+      const pfT = await api.perfRead();
+      g('draw calls ≤ 80 inside', pfT.calls <= 80, 'max ' + pfT.calls);
+      g('triangles ≤ 120k inside', pfT.tris <= 120000, 'max ' + pfT.tris);
+      await api.walkTo(330, -98.1, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'leaveHouse'`, 10000, 'leave prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.room === null && __fm.state === 'play'`, 15000, 'back outside');
+      g('✕ leaves back to the village', true);
+
+      /* ═══ 2. PEARL'S FAMILY HOUSE (the small house at -22,-40) ═══ */
+      await api.walkTo(-14, -44.5, 1.4, 90000);
+      await api.walkTo(-21.17, -44.12, 0.55, 60000);
+      await api.waitFor(`__fm.prompt === 'pearlDoor'`, 10000, 'pearl door prompt');
+      g('door prompt at Pearl’s', true);
+      if (pad) {
+        await stage(`__fmDebug.face(-0.2);
+          __fmDebug.cam(-22.1, groundH(-22.1,-45.6)+1.7, -45.6, -21.7, groundH(-21.7,-41.5)+1.5, -41.5)`);
+        await api.shot('pearl-door-prompt-1280x720');
+        await unstage();
+      }
+      await D.confirm();
+      await api.waitFor(`__fm.room === 'pearl' && __fm.state === 'play'`, 15000, 'inside pearl');
+      g('✕ enters through the fade', true);
+      g('room counts as shade sanctuary', await api.eval('__fm.shade === true'));
+      if (pad) {
+        await stage(`__fmBot.release(); __fmDebug.warp(331.9, -138.3); __fmDebug.face(3.5);
+          __fmDebug.cam(332.4, 1.9, -137.7, 328.4, 0.7, -140.8)`, 550);
+        await api.shot('room-pearl-wide-1280x720');
+        await stage(`__fmDebug.warp(331.9, -140.9); __fmDebug.cam(330.3, 1.9, -140.9, 330.1, 0.0, -139.1)`, 400);
+        await api.shot('room-pearl-chalk-1280x720');
+        await unstage();
+      }
+      // ── the toy boat goes to the window facing the bay ──
+      await api.walkTo(330.5, -139.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'toyBoat'`, 10000, 'boat prompt');
+      await D.confirm();
+      await api.waitFor('__fm.boatWindow === true', 15000, 'boat placed');
+      g('toy boat set in the window (real input)', true);
+      g('boat caption (one line)',
+        await api.eval(`__fm.caption !== null && __fm.caption.indexOf('tide') >= 0`),
+        String(await api.eval('__fm.caption')));
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'boat beat over');
+      if (pad) {
+        await stage(`__fmBot.release(); __fmDebug.cam(330.9, 1.35, -140.6, 331.05, 1.1, -142.2)`, 500);
+        await api.shot('pearl-boat-window-1280x720');
+        await unstage();
+      }
+      // ── the star chart: blank; nobody could draw them for her ──
+      await api.walkTo(332.0, -139.45, 0.45, 30000);
+      await api.waitFor(`__fm.prompt === 'starChart'`, 10000, 'chart prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.chartSeen === true`, 15000, 'chart seen');
+      g('star chart read, caption lands',
+        await api.eval(`__fm.caption !== null && __fm.caption.indexOf('Nobody') >= 0`),
+        String(await api.eval('__fm.caption')));
+      g('no star on the chart before the payoff', await api.eval('__fm.starOn === false'));
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'chart beat over');
+      // ── the chest under the bunk ──
+      const salt1 = await api.eval('__fm.salt');
+      await api.walkTo(329.25, -139.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'pearlChest'`, 10000, 'pearl chest prompt');
+      await D.confirm();
+      await api.waitFor('__fm.pearlChest === true', 15000, 'pearl chest opened');
+      await api.waitFor(`__fm.salt > ${salt1}`, 10000, 'salt gained');
+      g('the chest under the bunk opens', true, 'salt=' + await api.eval('__fm.salt'));
+      await roomFuzz(api, D, mode, g, 330, -140, '(Math.abs(__fm.x - 330) > 2.92 || Math.abs(__fm.z - (-140)) > 2.32)');
+      await api.perfReset();
+      await api.walkTo(332.0, -138.6, 0.8, 30000);
+      await api.walkTo(329.0, -141.2, 0.8, 30000);
+      await api.waitTicks(120);
+      const pfP = await api.perfRead();
+      g('draw calls ≤ 80 inside', pfP.calls <= 80, 'max ' + pfP.calls);
+      g('triangles ≤ 120k inside', pfP.tris <= 120000, 'max ' + pfP.tris);
+      await api.walkTo(330, -138.1, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'leaveHouse'`, 10000, 'leave prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.room === null && __fm.state === 'play'`, 15000, 'back outside');
+      g('✕ leaves back to the village', true);
+
+      /* ═══ 3. FINN'S LIGHTHOUSE — kelp bars it until cut, then the
+         ground room, the logbook, the crates, the HEART CONTAINER ═══ */
+      await api.walkTo(20, -30, 1.6, 90000);
+      await api.walkTo(38, -17, 1.2, 90000);
+      await api.walkTo(40.75, -16.05, 0.5, 60000);
+      g('kelp still bars the lighthouse door (no prompt)',
+        (await api.eval('__fm.prompt')) !== 'lightDoor', String(await api.eval('__fm.prompt')));
+      for (const [kx, kz] of [[41.4, -15.9], [41.6, -16.7], [41.9, -15.2]]) {
+        if (await api.eval('__fm.kelpDoorCut')) break;
+        await api.walkTo(kx, kz, 0.5).catch(() => {});
+        for (let i = 0; i < 6 && !(await api.eval('__fm.kelpDoorCut')); i++) {
+          await D.confirm();
+          await sleep(260);
+        }
+      }
+      g('door kelp cut with real swings', await api.eval('__fm.kelpDoorCut'));
+      await api.walkTo(40.75, -16.05, 0.45, 60000);
+      await api.waitFor(`__fm.prompt === 'lightDoor'`, 10000, 'light door prompt');
+      g('door prompt once the kelp is gone', true);
+      if (pad) {
+        await stage(`__fmDebug.face(4.7);
+          __fmDebug.cam(39.4, groundH(39.4,-16.6)+1.6, -16.6, 42.4, groundH(42.4,-15.9)+1.5, -15.9)`);
+        await api.shot('light-door-prompt-1280x720');
+        await unstage();
+      }
+      await D.confirm();
+      await api.waitFor(`__fm.room === 'light' && __fm.state === 'play'`, 15000, 'inside lighthouse');
+      g('✕ enters through the fade', true);
+      g('room counts as shade sanctuary', await api.eval('__fm.shade === true'));
+      if (pad) {
+        await stage(`__fmBot.release(); __fmDebug.warp(329.7, -179.5); __fmDebug.face(Math.PI);
+          __fmDebug.cam(330.4, 2.0, -177.7, 329.6, 0.9, -181.2)`, 550);
+        await api.shot('room-light-wide-1280x720');
+        await stage(`__fmDebug.cam(329.5, 1.35, -179.6, 328.2, 0.72, -180.75)`, 400);
+        await api.shot('room-light-desk-1280x720');
+        await unstage();
+      }
+      // ── the logbook: one entry, one line ──
+      await api.walkTo(329.15, -180.2, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'logbook'`, 10000, 'logbook prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.caption !== null && __fm.caption.indexOf('Keeping it clean') >= 0`, 15000, 'logbook line');
+      g('logbook read: the last entry, a year old', true);
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'logbook beat over');
+      // ── the crated stairs ──
+      await api.walkTo(331.15, -179.1, 0.55, 30000);
+      await api.waitFor(`__fm.prompt === 'crates'`, 10000, 'crates prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.caption !== null && __fm.caption.indexOf('lamp worth lighting') >= 0`, 15000, 'crates line');
+      g('crates carry Finn’s one line', true);
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'crates beat over');
+      // ── the HEART CONTAINER ──
+      const mh0 = await api.eval('__fm.maxHearts');
+      await api.walkTo(330.2, -180.6, 0.55, 30000);
+      await api.waitFor(`__fm.prompt === 'lightChest'`, 10000, 'chest prompt');
+      if (pad) {
+        await api.eval('window.__fmTurbo = 1');
+        await api.eval(`window.__heartShot = 0;
+          (function w(){ if (lightHeartT > 0.45 && lightHeartT < 1.0) { __fmDebug.freeze(1); window.__heartShot = 1; return; }
+            if (lightHeartT >= 1.0) { window.__heartShot = -1; return; } requestAnimationFrame(w); })()`);
+      }
+      await D.confirm();
+      await api.waitFor('__fm.lightChest === true', 15000, 'chest opened');
+      if (pad) {
+        await api.waitFor('window.__heartShot !== 0', 10000, 'heart mid-float');
+        await api.eval(`__fmDebug.cam(331.7, 1.5, -179.7, 330.2, 0.85, -181.6)`);
+        await sleep(350);
+        await api.shot('light-heart-container-1280x720');
+        await api.eval('__fmDebug.camOff(); __fmDebug.freeze(0); window.__fmTurbo = undefined');
+      }
+      await api.waitFor(`__fm.maxHearts === ${mh0 + 1}`, 20000, 'heart granted');
+      g('chest grants a HEART CONTAINER', true, `maxHearts ${mh0} → ${mh0 + 1}`);
+      g('hearts refill with the container', await api.eval('__fm.hearts === __fm.maxHearts'));
+      await roomFuzz(api, D, mode, g, 330, -180, '(Math.hypot(__fm.x - 330, __fm.z - (-180)) > 2.64)');
+      await api.perfReset();
+      await api.walkTo(330.9, -178.3, 0.8, 30000);
+      await api.walkTo(328.9, -181.1, 0.8, 30000);
+      await api.waitTicks(120);
+      const pfL = await api.perfRead();
+      g('draw calls ≤ 80 inside', pfL.calls <= 80, 'max ' + pfL.calls);
+      g('triangles ≤ 120k inside', pfL.tris <= 120000, 'max ' + pfL.tris);
+      await api.walkTo(330, -177.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'leaveHouse'`, 10000, 'leave prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.room === null && __fm.state === 'play'`, 15000, 'back outside');
+      g('✕ leaves back beside the tower', true);
+
+      /* ═══ 3.5 THE CARTOGRAPHER'S HOUSE (the small house at 22,-28) ═══ */
+      await api.walkTo(28.5, -24.5, 1.8, 90000);
+      await api.walkTo(23.63, -31.87, 0.6, 60000);
+      await api.waitFor(`__fm.prompt === 'cartDoor'`, 10000, 'cartographer door prompt');
+      g('door prompt at the cartographer’s', true);
+      if (pad) {
+        await stage(`__fmDebug.face(-0.4);
+          __fmDebug.cam(24.9, groundH(24.9,-33.4)+1.7, -33.4, 22.6, groundH(22.6,-29.4)+1.5, -29.4)`);
+        await api.shot('cart-door-prompt-1280x720');
+        await unstage();
+      }
+      await D.confirm();
+      await api.waitFor(`__fm.room === 'cart' && __fm.state === 'play'`, 15000, 'inside the map room');
+      g('✕ enters the cartographer’s house', true);
+      g('map room counts as shade sanctuary', await api.eval('__fm.shade === true'));
+      if (pad) {
+        await stage(`__fmBot.release(); __fmDebug.warp(330.2, -218.4); __fmDebug.face(Math.PI);
+          __fmDebug.cam(330.4, 1.8, -217.5, 329.9, 0.95, -221.5)`, 550);
+        await api.shot('room-cart-wide-1280x720');
+        await stage(`__fmDebug.cam(330.3, 1.6, -220.3, 330.85, 1.45, -222.1)`, 400);
+        await api.shot('room-cart-wallmap-1280x720');
+        await unstage();
+      }
+      // ── the wall map: pins following the water out ──
+      await api.walkTo(329.7, -220.95, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'tideMap'`, 10000, 'wall map prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.caption !== null && __fm.caption.indexOf('keeps measuring') >= 0`, 15000, 'tide line');
+      g('wall map carries the tide line', true);
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'map beat over');
+      // ── the half-drawn new map ──
+      await api.walkTo(331.8, -220.15, 0.45, 30000);
+      await api.waitFor(`__fm.prompt === 'mapTable'`, 10000, 'table prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.caption !== null && __fm.caption.indexOf('the good way') >= 0`, 15000, 'table line');
+      g('drafting table carries its line', true);
+      await api.waitFor(`__fm.state === 'play'`, 15000, 'table beat over');
+      // ── the chest ──
+      const saltC = await api.eval('__fm.salt');
+      await api.walkTo(328.55, -218.7, 0.6, 30000);
+      await api.waitFor(`__fm.prompt === 'cartChest'`, 10000, 'cart chest prompt');
+      await D.confirm();
+      await api.waitFor('__fm.cartChest === true', 15000, 'cart chest opened');
+      await api.waitFor(`__fm.salt === ${saltC + 3}`, 15000, 'salt granted');
+      g('chest gives three salt crystals', true, `salt ${saltC} → ${saltC + 3}`);
+      await roomFuzz(api, D, mode, g, 330, -220, '(Math.abs(__fm.x - 330) > 2.92 || Math.abs(__fm.z - (-220)) > 2.32)');
+      await api.perfReset();
+      await api.walkTo(328.0, -221.2, 0.7, 30000);
+      await api.walkTo(332.2, -219.4, 0.7, 30000);
+      await api.waitTicks(120);
+      const pfC = await api.perfRead();
+      g('draw calls ≤ 80 inside', pfC.calls <= 80, 'max ' + pfC.calls);
+      g('triangles ≤ 120k inside', pfC.tris <= 120000, 'max ' + pfC.tris);
+      await api.walkTo(330, -217.9, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'leaveHouse'`, 10000, 'leave prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.room === null && __fm.state === 'play'`, 15000, 'back outside');
+      g('✕ leaves the map room', true);
+
+      /* ═══ 4. THE HARBOR HOUSE differentiator — sit at the net bench ═══ */
+      await api.walkTo(20, -30, 1.8, 120000);
+      await api.walkTo(-20, -36, 1.8, 120000);
+      await api.walkTo(-33, -40, 1.6, 90000);
+      await api.walkTo(-39.48, -36.78, 0.6, 60000);
+      await api.waitFor(`__fm.prompt === 'houseDoor'`, 10000, 'harbor door prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.room === 'harbor' && __fm.state === 'play'`, 15000, 'inside harbor house');
+      await api.walkTo(328.85, -61.3, 0.5, 30000);
+      await api.waitFor(`__fm.prompt === 'benchSit'`, 10000, 'sit prompt');
+      if (pad) {
+        await api.eval('window.__fmTurbo = 1');
+        await api.eval(`window.__sitShot = 0;
+          (function w(){ if (__fm.sitting && CINE.t >= 1.35 && CINE.t < 2.4) { __fmDebug.freeze(1); window.__sitShot = 1; return; }
+            if (CINE.t >= 2.4) { window.__sitShot = -1; return; } requestAnimationFrame(w); })()`);
+      }
+      await D.confirm();
+      await api.waitFor('__fm.sitting === true', 15000, 'Wick sits');
+      g('✕ sits at the net-mending bench', true);
+      if (pad) {
+        await api.waitFor('window.__sitShot !== 0', 10000, 'sit mid-beat');
+        await sleep(250);
+        await api.shot('harbor-bench-sit-1280x720');
+        await api.eval('__fmDebug.freeze(0); window.__fmTurbo = undefined');
+      }
+      await api.waitFor(`__fm.sitting === false && __fm.state === 'play'`, 20000, 'the beat ends');
+      g('…and the beat hands control back', true);
+
+      /* ═══ persistence: reload → CONTINUE → everything remembered ═══ */
+      await api.nav(base + '/?turbo=6');
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title again');
+      await tapUntil(api, () => D.down(), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+      g('chests persist across reload',
+        await api.eval('__fm.tockChest === true && __fm.pearlChest === true && __fm.lightChest === true && __fm.cartChest === true'));
+      g('salt persists', (await api.eval('__fm.salt')) >= 6, 'salt=' + await api.eval('__fm.salt'));
+      g('heart container persists', (await api.eval('__fm.maxHearts')) === 6,
+        'maxHearts=' + await api.eval('__fm.maxHearts'));
+      g('clock/boat/chart flags persist',
+        await api.eval('__fm.clockWound === true && __fm.boatWindow === true && __fm.chartSeen === true'));
+      const bad = api.consoleBad;
+      g('zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate(`rooms(${mode}) suite`, false, e.message);
+      await api.shot('rooms-FAIL-' + mode).catch(() => {});
+    }
+    c.close(); proc.kill();
+  };
+  await run('pad');
+  await run('kbd');
+
+  /* ═══ the Pearl stretch: after the Crescent payoff, ONE real star ═══ */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    await api.seedSave({
+      v: 2, q: 4, ph: 1, mh: 6, sword: true, salt: 2,
+      talked: { finn: 1, tock: 1, pearl: 1 },
+      kelpDoor: true, doorChest: true, finnHeart: true, wreckChest: false,
+      wallBurned: true, bossDone: true, sky: 1, tidepool: false,
+      chartSeen: true, lastShade: [-21.17, -43.6],
+    }, true);
+    await api.nav(base + '/?turbo=6');
+    const D = driver(api, 'pad');
+    try {
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+      await tapUntil(api, () => D.down(), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, D.confirm, `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+      await api.installBot('pad');
+      await api.walkTo(-21.17, -44.12, 0.5, 60000);
+      await api.waitFor(`__fm.prompt === 'pearlDoor'`, 10000, 'pearl door');
+      await api.tap(0);
+      await api.waitFor(`__fm.room === 'pearl' && __fm.state === 'play'`, 15000, 'inside');
+      gate('stretch: one real star on the chart after the payoff', await api.eval('__fm.starOn === true'));
+      await api.walkTo(332.0, -139.45, 0.45, 30000);
+      await api.waitFor(`__fm.prompt === 'starChart'`, 10000, 'chart prompt');
+      await api.tap(0);
+      await api.waitFor(`__fm.caption !== null && __fm.caption.indexOf('herself') >= 0`, 15000, 'star caption');
+      gate('stretch: the chart caption knows', true, String(await api.eval('__fm.caption')));
+      await api.eval('window.__fmTurbo = 1');
+      await api.eval(`__fmBot.release(); __fmDebug.warp(330.9, -141.6); __fmDebug.face(0.75);
+        __fmDebug.cam(331.3, 1.4, -140.9, 332.85, 1.5, -139.5)`);
+      await sleep(500);
+      await api.shot('pearl-chart-star-1280x720');
+      const bad = api.consoleBad;
+      gate('stretch: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('rooms stretch suite', false, e.message);
+      await api.shot('rooms-stretch-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+}
+
+/* interior collision fuzz shared by the v4.5 rooms: 12 bearings from the
+   room center, walking + jumping, asserting the player NEVER leaves the
+   authoritative bound (rect or circle). */
+async function roomFuzz(api, D, mode, g, cx, cz, outExpr) {
+  await api.eval(`window.__fzr = { out: 0, done: 0 };
+    (function w(){
+      if (__fzr.done) return;
+      if (__fm.state === 'play' && __fm.tick > 0 &&
+          Math.hypot(__fm.x - (${cx}), __fm.z - (${cz})) < 12) {
+        if (${outExpr}) __fzr.out++;
+      }
+      requestAnimationFrame(w); })()`);
+  for (let b = 0; b < 12; b++) {
+    const a = b / 12 * Math.PI * 2;
+    await api.eval(`__fmDebug.warp(${cx}, ${cz})`);
+    const t0 = Date.now();
+    let jt = 0;
+    while (Date.now() - t0 < 650) {
+      await api.eval(`__fmDebug.camYaw(Math.PI)`);
+      if (mode === 'pad') await api.axes(-Math.sin(a), -Math.cos(a));
+      else {
+        await api.eval(`__fmBot.target=[${(cx + Math.sin(a) * 9).toFixed(1)}, ${(cz + Math.cos(a) * 9).toFixed(1)}]; __fmBot.tol=0.05;`);
+      }
+      if (b % 2 === 0 && Date.now() - jt > 500) { jt = Date.now(); await D.jump(); }
+      await sleep(90);
+    }
+    if (mode === 'pad') await api.axes(0, 0);
+    else await api.eval('__fmBot.target=null');
+  }
+  g('collision fuzz: never outside the room, all bearings',
+    (await api.eval('__fzr.out')) === 0, 'out=' + await api.eval('__fzr.out'));
+  await api.eval('__fzr.done = 1');
+}
+
 /* ═══ v3: save-loader stage gates (the Ben soft-lock).
    For every quest stage: write the save, reload, CONTINUE, and assert the
    LIVE state (quest, beacon, banner, boss wakability) matches. Then the
@@ -2460,6 +2909,7 @@ try {
   if (wants('fuzz')) await suiteFuzz(base);
   if (wants('boss')) await suiteBoss(base);
   if (wants('interior')) await suiteInterior(base);
+  if (wants('rooms')) await suiteRooms(base);
   if (wants('combat')) await suiteCombat(base);
   if (wants('saves')) await suiteSaves(base);
   if (wants('migrate')) await suiteMigrate(base);

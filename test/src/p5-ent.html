@@ -170,8 +170,8 @@ const _cv = new THREE.Vector3();
 function updateCamera(dtv) {
   if (CAM.mode !== 'follow') return;
   const inG = inGrottoAt(P.x, P.z);
-  const inH = inInteriorAt(P.x, P.z);   // v4: camera pulls close indoors
-  const wantDist = inH ? 2.15 : inG ? 2.55 : 3.3;
+  const inR = roomAt(P.x, P.z);   // v4: camera pulls close indoors (v4.5: any room)
+  const wantDist = inR ? 2.15 : inG ? 2.55 : 3.3;
   CAM.dist += (wantDist - CAM.dist) * Math.min(1, dtv * 3);
   // manual orbit inputs (stick/arrows are rates; mouse/touch are deltas)
   let manual = false;
@@ -203,16 +203,19 @@ function updateCamera(dtv) {
   }
   const py = P.fy;
   const tx = P.x + Math.sin(P.heading) * 0.35, tz = P.z + Math.cos(P.heading) * 0.35;
-  const ty = py + (inH ? 1.05 : inG ? 1.15 : 1.25);
+  const ty = py + (inR ? 1.05 : inG ? 1.15 : 1.25);
   const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
   const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp, dyv = spv;
   let dist = CAM.dist;
   // sphere-cast pullback: terrain + solid grotto rock + interior walls
+  // (rect rooms clamp on the rect; the lighthouse clamps on its circle)
+  const outsideRoom = (sx2, sz2) => inR && (inR.r
+    ? Math.hypot(sx2 - inR.x, sz2 - inR.z) > inR.r - 0.15
+    : (Math.abs(sx2 - inR.x) > inR.w - 0.15 || Math.abs(sz2 - inR.z) > inR.d - 0.15));
   for (let s = 0.2; s <= 1.0; s += 0.1) {
     const sx2 = tx + dx * dist * s, sz2 = tz + dz * dist * s;
     const sy2 = ty + dyv * dist * s;
-    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2) ||
-        (inH && (Math.abs(sx2 - INT.x) > INT.w - 0.15 || Math.abs(sz2 - INT.z) > INT.d - 0.15))) {
+    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2) || outsideRoom(sx2, sz2)) {
       dist = Math.max(0.9, dist * (s - 0.1)); break;
     }
   }
@@ -220,7 +223,7 @@ function updateCamera(dtv) {
   let cy = ty + dyv * dist;
   cy = Math.max(cy, groundH(cx, cz) + 0.4);
   if (inG) cy = Math.min(cy, py + 3.4);
-  if (inH) cy = Math.min(cy, INT.wallH - 0.3);
+  if (inR) cy = Math.min(cy, inR.wallH - 0.3);
   const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 6.5)) : 1;
   CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
   CAM.ready = true;
@@ -337,8 +340,9 @@ function doPulse() {
 
 /* ── shared horizontal move step: circle colliders + grotto solid rock ── */
 function moveWithCollision(nx, nz) {
-  if (inInteriorAt(P.x, P.z)) {           // v4: inside the harbor house
-    const r = interiorResolve(nx, nz);
+  const R = roomAt(P.x, P.z);
+  if (R) {                                // v4.5: inside any interior room
+    const r = interiorResolve(R, nx, nz);
     P.x = r[0]; P.z = r[1];
     return;
   }
@@ -600,6 +604,19 @@ function poseItemGet(c, ph) {
   c.shL.rotation.x = 0.15; c.shL.rotation.z = 0.25;
   c.head.rotation.x = -up * 0.4;
 }
+/* v4.5: sitting on the mender's stool — eased in and out via ph 0..1 */
+function poseSit(c, ph) {
+  const k = smoothstep(clamp(ph, 0, 1));
+  c.pelvis.position.y = (c.pelvis.userData.y0 || c.pelvis.position.y) - k * 0.33;
+  c.hipL.rotation.x = -k * 1.45; c.hipR.rotation.x = -k * 1.4;
+  c.kneeL.rotation.x = k * 1.5; c.kneeR.rotation.x = k * 1.42;
+  c.torso.rotation.x = k * 0.16;
+  // hands resting on the knees
+  c.shL.rotation.x = -k * 0.55; c.shL.rotation.z = 0.14 * k;
+  c.shR.rotation.x = -k * 0.55; c.shR.rotation.z = -0.14 * k;
+  c.elL.rotation.x = -k * 0.5; c.elR.rotation.x = -k * 0.5;
+  c.head.rotation.x = k * 0.1;
+}
 function poseCrumple(c, ph) {
   const k = smoothstep(clamp(ph, 0, 1));
   c.pelvis.position.y = (c.pelvis.userData.y0 || c.pelvis.position.y) - k * 0.35;
@@ -663,6 +680,11 @@ function animateWick(dtv, now) {
   } else if (state === 'cine' && CINE.id === 'wake') {
     poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
     poseCrumple(c, 1 - clamp((CINE.t - 0.9) / 1.8, 0, 1));   // rises from the sand
+    swordToHand(false);
+  } else if (state === 'cine' && CINE.id === 'sit') {
+    // v4.5: the net-mending stool — settle in, rest, rise at the end
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true });
+    poseSit(c, Math.min(CINE.t * 2.4, (SIT_DUR - CINE.t) * 2.4));
     swordToHand(false);
   } else {
     c.pelvis.rotation.x = 0;

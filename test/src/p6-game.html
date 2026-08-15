@@ -130,21 +130,54 @@ function grantFinnHeart() {
 function currentInteract() {
   if (!P) return null;
   const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
-  // v4: inside the harbor house — its own little world of interactions
-  if (inInteriorAt(P.x, P.z)) {
-    if (!homeChest.opened && near(homeChest.x, homeChest.z, 1.5))
-      return { id: 'homeChest', label: '✕ OPEN' };
-    if (near(INT_DOOR.x, INT_DOOR.z, 1.2)) return { id: 'leaveHouse', label: '✕ LEAVE' };
+  // v4.5: inside ANY room — each one its own little world of interactions
+  const R = roomAt(P.x, P.z);
+  if (R) {
+    if (R.id === 'harbor') {
+      if (!homeChest.opened && near(homeChest.x, homeChest.z, 1.5))
+        return { id: 'homeChest', label: '✕ OPEN' };
+      if (near(328.25, -61.75, 1.25)) return { id: 'benchSit', label: '✕ SIT' };
+    } else if (R.id === 'tock') {
+      if (!tockChest.opened && near(tockChest.x, tockChest.z, 1.5))
+        return { id: 'tockChest', label: '✕ OPEN' };
+      if (tockClock.ticksLeft <= 0 && near(R.clockPos.x, R.clockPos.z, 1.45))
+        return { id: 'windClock', label: '✕ WIND THE CLOCK' };
+    } else if (R.id === 'pearl') {
+      if (!pearlChest.opened && near(pearlChest.x, pearlChest.z, 1.4))
+        return { id: 'pearlChest', label: '✕ OPEN' };
+      if (!SAVE.boatWindow && pearlBoatAnimT < 0 && near(R.boatRug.x, R.boatRug.z, 1.3))
+        return { id: 'toyBoat', label: '✕ PLACE THE BOAT' };
+      if (near(R.chart.x, R.chart.z, 1.45)) return { id: 'starChart', label: '✕ LOOK' };
+    } else if (R.id === 'light') {
+      if (!lightChest.opened && near(lightChest.x, lightChest.z, 1.5))
+        return { id: 'lightChest', label: '✕ OPEN' };
+      if (near(R.desk.x, R.desk.z, 1.35)) return { id: 'logbook', label: '✕ READ THE LOGBOOK' };
+      if (near(R.stairs.x, R.stairs.z, 1.35)) return { id: 'crates', label: '✕ LOOK' };
+    } else if (R.id === 'cart') {
+      if (!cartChest.opened && near(cartChest.x, cartChest.z, 1.5))
+        return { id: 'cartChest', label: '✕ OPEN' };
+      if (near(R.table.x, R.table.z, 1.3)) return { id: 'mapTable', label: '✕ LOOK' };
+      if (near(R.wallMap.x, R.wallMap.z + 0.6, 1.45)) return { id: 'tideMap', label: '✕ LOOK' };
+    }
+    if (near(R.inDoor.x, R.inDoor.z, 1.2)) return { id: 'leaveHouse', room: R, label: '✕ LEAVE' };
     return null;
   }
   if (near(HOUSE_DOOR.outX, HOUSE_DOOR.outZ, 1.7))
-    return { id: 'houseDoor', label: '✕ ENTER' };
+    return { id: 'houseDoor', room: ROOMS[0], label: '✕ ENTER' };
   if (QUEST.q === 3 && P.carryCrescent && near(WHEEL_POS.x, WHEEL_POS.z, 5.2))
     return { id: 'wheel', label: '✕ PLACE THE CRESCENT' };
   if (!chest.opened && near(chest.x, chest.z, 1.7))
     return { id: 'chest', label: '✕ OPEN' };
   if (!doorChest.opened && kelpDoorCut && near(doorChest.x, doorChest.z, 1.8))
     return { id: 'doorChest', label: '✕ OPEN' };
+  // v4.5: the other village doors (after the chests — the lighthouse door
+  // spot overlaps the door-chest beat and must never steal its ✕)
+  for (let i = 1; i < ROOMS.length; i++) {
+    const Rd = ROOMS[i];
+    if (Rd.id === 'light' && !kelpDoorCut) continue;   // kelp still bars it
+    if (near(Rd.ext.outX, Rd.ext.outZ, Rd.id === 'light' ? 1.4 : 1.7))
+      return { id: Rd.promptId, room: Rd, label: '✕ ENTER' };
+  }
   for (const [npc, tag, rad] of [[finn, 'finn', 2.4], [tock, 'tock', 2.4], [pearl, 'pearl', 2.9]]) {
     if (near(npc.x, npc.z, rad)) return { id: 'talk', npc, tag, label: '✕ TALK' };
   }
@@ -178,14 +211,216 @@ function doInteract(ctx) {
     openDoorChest();
   } else if (ctx.id === 'homeChest') {
     openHomeChest();
-  } else if (ctx.id === 'houseDoor') {
+  } else if (ctx.id === 'tockChest') {
+    openRoomChest(tockChest, 'tockChest', 3, 'SALT CRYSTALS',
+      'Three, from a tin marked RAINY DAYS. It has been sunny a year.');
+  } else if (ctx.id === 'pearlChest') {
+    openRoomChest(pearlChest, 'pearlChest', 3, 'SALT CRYSTALS',
+      'Three of them, hidden where mothers never sweep.');
+  } else if (ctx.id === 'lightChest') {
+    openLightChest();
+  } else if (ctx.id === 'cartChest') {
+    openRoomChest(cartChest, 'cartChest', 3, 'SALT CRYSTALS',
+      'Three, weighting the corners of a map that would not lie flat.');
+  } else if (ctx.id === 'tideMap') {
+    lookAtTideMap();
+  } else if (ctx.id === 'mapTable') {
+    lookAtMapTable();
+  } else if (ctx.id === 'houseDoor' || ctx.id === 'tockDoor' || ctx.id === 'pearlDoor' || ctx.id === 'lightDoor' || ctx.id === 'cartDoor') {
+    CINE.room = ctx.room;
     startCine('doorIn');
   } else if (ctx.id === 'leaveHouse') {
+    CINE.room = ctx.room;
     startCine('doorOut');
+  } else if (ctx.id === 'benchSit') {
+    startCine('sit');
+  } else if (ctx.id === 'windClock') {
+    windTheClock();
+  } else if (ctx.id === 'toyBoat') {
+    placeToyBoat();
+  } else if (ctx.id === 'starChart') {
+    lookAtChart();
+  } else if (ctx.id === 'logbook') {
+    readLogbook();
+  } else if (ctx.id === 'crates') {
+    lookAtCrates();
   } else if (ctx.id === 'wheel') {
     startCine('wheel');
   }
   // mirror: nothing on press — it's a hold
+}
+
+/* ═══ v4.5: THE ROOMS' INTERACTIONS — every one is ✕-prompted, one line
+   at most, and gets a tiny camera acknowledgment (a micro-beat, never a
+   text dump). State that matters is saved. ═══ */
+const MICRO = { cam: null, look: null, dur: 1.6, at: 0.55, t0: null, fired: false, caption: null, ms: 3000, onFire: null };
+function startMicro(o) {
+  MICRO.cam = o.cam; MICRO.look = o.look;
+  MICRO.dur = o.dur || 1.6; MICRO.at = o.at !== undefined ? o.at : 0.55;
+  MICRO.caption = o.caption || null; MICRO.ms = o.ms || 3000;
+  MICRO.onFire = o.onFire || null; MICRO.fired = false;
+  MICRO.t0 = [camera.position.x, camera.position.y, camera.position.z];
+  startCine('micro');
+}
+/* Granny's floor clock — wind it, hear it live, hear it die */
+const tockClock = { ticksLeft: 0, phase: 0, lastSign: 1, wasTicking: false };
+function windTheClock() {
+  SFX.crank();
+  startMicro({
+    cam: [330.35, 1.5, -100.5], look: [329.05, 1.6, -102.0], dur: 2.1, at: 0.9,
+    onFire() { tockClock.ticksLeft = 4.2; tockClock.phase = 0; tockClock.wasTicking = true; },
+  });
+}
+function tickClock() {
+  const C = tockClock;
+  if (C.ticksLeft > 0) {
+    C.ticksLeft -= DT;
+    // the swing dies with the spring: full arc at first, then nothing
+    const env = clamp(C.ticksLeft / 1.6, 0, 1) * 0.42 + 0.02;
+    C.phase += DT * 4.4;
+    const s = Math.sin(C.phase);
+    if (tockPend) tockPend.rotation.z = s * env;
+    const sign = s >= 0 ? 1 : -1;
+    if (sign !== C.lastSign) { C.lastSign = sign; if (roomAt(P.x, P.z)) SFX.tick(sign > 0); }
+    if (C.ticksLeft <= 0) {
+      C.ticksLeft = 0;
+      if (tockPend) tockPend.rotation.z = 0;
+      if (!SAVE.clockWound) {
+        SAVE.clockWound = true; storeSave();
+        showCaption('From outside, warm: “You hear that? …lovely.”', 3800);
+      }
+    }
+  }
+}
+/* Pearl's toy boat — Wick sets it in the window facing the dry bay */
+let pearlBoatAnimT = -1;
+function placeToyBoat() {
+  const R2 = pearlRoom;
+  startMicro({
+    cam: [330.3, 1.35, -139.6], look: [R2.boatSill.x, R2.boatSill.y + 0.1, R2.boatSill.z], dur: 2.3, at: 0.5,
+    caption: 'For when the tide comes back.', ms: 3200,
+    onFire() { pearlBoatAnimT = 0; SFX.pickup(); },
+  });
+}
+function tickBoat() {
+  if (pearlBoatAnimT < 0 || !pearlBoat) return;
+  pearlBoatAnimT += DT;
+  const R2 = pearlRoom;
+  const k = smoothstep(clamp(pearlBoatAnimT / 1.1, 0, 1));
+  const y = 0.015 + (R2.boatSill.y - 0.015) * k + Math.sin(k * Math.PI) * 0.35;
+  pearlBoat.position.set(
+    lerp(R2.boatRug.x, R2.boatSill.x, k), y, lerp(R2.boatRug.z, R2.boatSill.z, k));
+  pearlBoat.rotation.y = lerp(0.6, Math.PI / 2, k);
+  if (pearlBoatAnimT >= 1.1) {
+    pearlBoatAnimT = -1;
+    SAVE.boatWindow = true; storeSave();
+  }
+}
+/* the star chart — blank until the sky gets its first star back */
+function lookAtChart() {
+  const starred = SAVE.sky >= 1;
+  SFX.page();
+  startMicro({
+    cam: [331.5, 1.45, -139.85], look: [332.75, 1.45, -139.55], dur: 1.9, at: 0.55,
+    caption: starred ? 'One real star on it now. She drew it herself.'
+                     : 'Nobody could draw them for her.', ms: 3400,
+    onFire() { if (!SAVE.chartSeen) { SAVE.chartSeen = true; storeSave(); } },
+  });
+}
+/* the cartographer's wall map — pins following the water out */
+function lookAtTideMap() {
+  SFX.page();
+  startMicro({
+    cam: [330.2, 1.5, -220.4], look: [330.75, 1.45, -222.0], dur: 1.9, at: 0.55,
+    caption: 'The sea used to reach the third stone. Someone keeps measuring.', ms: 3600,
+    onFire() { if (!SAVE.mapTides) { SAVE.mapTides = true; storeSave(); } },
+  });
+}
+/* the half-drawn new map on the drafting table */
+function lookAtMapTable() {
+  SFX.page();
+  startMicro({
+    cam: [331.1, 1.35, -220.1], look: [331.95, 0.8, -221.15], dur: 1.9, at: 0.55,
+    caption: 'A new map, half-drawn. Waiting to be wrong again — the good way.', ms: 3600,
+    onFire() { if (!SAVE.mapTable) { SAVE.mapTable = true; storeSave(); } },
+  });
+}
+/* Finn's logbook — the last entry, a year old */
+function readLogbook() {
+  SFX.page();
+  startMicro({
+    cam: [329.35, 1.5, -179.75], look: [328.35, 0.85, -180.6], dur: 2.2, at: 0.6,
+    caption: '“Day 1 without night. Light not needed. Keeping it clean anyway.”', ms: 3800,
+  });
+}
+/* the crated stairs — Finn's polite "not yet" */
+function lookAtCrates() {
+  startMicro({
+    cam: [330.6, 1.1, -180.3], look: [331.3, 1.9, -178.6], dur: 1.9, at: 0.55,
+    caption: 'Finn’s hand: “The lamp room can wait for a lamp worth lighting.”', ms: 3600,
+  });
+}
+/* shared salt-chest opener for the v4.5 rooms */
+const roomChestAnims = [];
+function openRoomChest(ch, saveKey, salt, big, small) {
+  ch.opened = true;
+  SAVE[saveKey] = true; storeSave();
+  roomChestAnims.push({ ch, t: 0, salt, big, small });
+  SFX.chestOpen();
+}
+function tickRoomChests() {
+  for (let i = roomChestAnims.length - 1; i >= 0; i--) {
+    const a = roomChestAnims[i];
+    a.t += DT;
+    a.ch.lid.rotation.x = -smoothstep(clamp(a.t / 0.5, 0, 1)) * 1.9;
+    if (a.t > 0.65) {
+      roomChestAnims.splice(i, 1);
+      P.salt += a.salt;
+      SAVE.salt = P.salt; storeSave();
+      itemToast(a.big, a.small);
+      SFX.pickup();
+      burst(psSparkle, a.ch.x, 0.9, a.ch.z, 14, 1.2, 1.3, 0.9);
+    }
+  }
+}
+/* Finn's lighthouse chest — the HEART CONTAINER (same beat as the wreck) */
+let lightChestAnimT = -1, lightHeartT = -1;
+function openLightChest() {
+  lightChest.opened = true;
+  SAVE.lightChest = true; storeSave();
+  lightChestAnimT = 0;
+  SFX.chestOpen();
+}
+function tickLightChest() {
+  if (lightChestAnimT < 0) return;
+  lightChestAnimT += DT;
+  lightChest.lid.rotation.x = -smoothstep(clamp(lightChestAnimT / 0.5, 0, 1)) * 1.9;
+  if (lightChestAnimT > 0.4 && lightHeartT < 0) {
+    lightHeartT = 0;
+    lightChest.heart.visible = true;
+  }
+  if (lightHeartT >= 0) {
+    lightHeartT += DT;
+    const y0 = 0.5;
+    if (lightHeartT < 1.0) {
+      lightChest.heart.position.set(lightChest.x, y0 + lightHeartT * 0.9, lightChest.z);
+      lightChest.heart.rotation.y += DT * 3;
+    } else if (lightHeartT < 1.7) {
+      const t = (lightHeartT - 1.0) / 0.7;
+      lightChest.heart.position.set(lerp(lightChest.x, P.x, t), lerp(y0 + 0.9, 1.9, t), lerp(lightChest.z, P.z, t));
+      lightChest.heart.rotation.y += DT * 6;
+    } else {
+      lightChest.heart.visible = false;
+      lightChestAnimT = -1; lightHeartT = -1;
+      P.maxHearts = Math.min(8, P.maxHearts + 1);
+      P.hearts = P.maxHearts;
+      SAVE.mh = P.maxHearts; storeSave();
+      itemGetT = 0;
+      itemToast('HEART CONTAINER', 'Kept polished for a night worth lighting.');
+      SFX.heart();
+      burst(psSparkle, P.x, 1.4, P.z, 18, 1.4, 1.2, 1.0);
+    }
+  }
 }
 
 /* v4: the harbor-house salt chest */
@@ -854,6 +1089,16 @@ function startCine(id) {
     fadeBlackEl.style.transition = 'opacity 0.24s ease';
     fadeBlackEl.style.opacity = '1';
     SFX.door();
+  } else if (id === 'micro') {
+    // v4.5: the smallest cinematic beat — the camera leans at the subject
+    CAM.mode = 'cine';
+  } else if (id === 'sit') {
+    // v4.5: Wick takes the mender's stool; the camera rests a beat
+    CAM.mode = 'cine';
+    SIT_RET[0] = P.x; SIT_RET[1] = P.z;
+    P.x = 328.25; P.z = -61.75; P.heading = 4.12;   // square to the bench
+    P.vx = 0; P.vz = 0; P.st = 'idle';
+    SFX.creak();
   }
 }
 function endCine() {
@@ -862,6 +1107,8 @@ function endCine() {
   CAM.ready = false;
   setState('play');
 }
+const SIT_DUR = 3.0;               // v4.5: the whole sit beat, seconds
+const SIT_RET = [328.6, -61.3];    // where Wick steps back to afterwards
 const _cp = new THREE.Vector3(), _cl = new THREE.Vector3();
 function cineCam(px, py, pz, lx, ly, lz) {
   camera.position.set(px, py, pz);
@@ -870,13 +1117,44 @@ function cineCam(px, py, pz, lx, ly, lz) {
 }
 function tickCine() {
   const t = (CINE.t += DT);
+  if (CINE.id === 'micro') {
+    // ease the camera from where it was toward the subject frame, hold
+    const k = smoothstep(clamp(t / 0.55, 0, 1));
+    cineCam(
+      lerp(MICRO.t0[0], MICRO.cam[0], k), lerp(MICRO.t0[1], MICRO.cam[1], k), lerp(MICRO.t0[2], MICRO.cam[2], k),
+      MICRO.look[0], MICRO.look[1], MICRO.look[2]);
+    if (!MICRO.fired && t >= MICRO.at) {
+      MICRO.fired = true;
+      if (MICRO.caption) showCaption(MICRO.caption, MICRO.ms);
+      if (MICRO.onFire) MICRO.onFire();
+    }
+    if (t >= MICRO.dur) endCine();
+    return;
+  }
+  if (CINE.id === 'sit') {
+    // a low resting frame along the bench line: the sitter in profile,
+    // the net waiting in front of him
+    const k = smoothstep(clamp(t / 0.8, 0, 1));
+    cineCam(lerp(330.3, 329.95, k), lerp(1.35, 1.02, k), lerp(-61.2, -61.7, k),
+      327.75, 0.72, -62.2);
+    if (CINE.step === 0 && t >= 1.1) {
+      CINE.step = 1;
+      showCaption('The nets still smell of the sea.', 2800);
+    }
+    if (t >= SIT_DUR) {
+      P.x = SIT_RET[0]; P.z = SIT_RET[1];
+      endCine();
+    }
+    return;
+  }
   if (CINE.id === 'doorIn' || CINE.id === 'doorOut') {
+    const R = CINE.room || ROOMS[0];
     if (CINE.step === 0 && t >= 0.32) {
       CINE.step = 1;
       if (CINE.id === 'doorIn') {
-        P.x = INT_SPAWN.x; P.z = INT_SPAWN.z; P.heading = INT_SPAWN.heading;
+        P.x = R.spawn.x; P.z = R.spawn.z; P.heading = R.spawn.heading;
       } else {
-        P.x = HOUSE_DOOR.outX; P.z = HOUSE_DOOR.outZ; P.heading = HOUSE_DOOR.heading;
+        P.x = R.ext.outX; P.z = R.ext.outZ; P.heading = R.ext.heading;
       }
       P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
       P.vx = 0; P.vz = 0; P.st = 'idle';

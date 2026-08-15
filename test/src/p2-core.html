@@ -371,6 +371,25 @@ const SFX = {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, t + i * 0.12, 0.4, 0.09, 'triangle')); },
   heal() { if (!AC) return; const t = AC.currentTime;
     tone(784, t, 0.3, 0.05, 'sine'); tone(1175, t + 0.08, 0.34, 0.04, 'sine'); },
+  /* v4.5 — interior interaction voices */
+  crank() { if (!AC) return; const t = AC.currentTime;
+    // winding a clock: a ratchet of dry clicks climbing in pitch
+    for (let i = 0; i < 7; i++) {
+      noiseBurst(t + i * 0.11, 0.03, 0.09, 1400 + i * 220, 1000 + i * 180, 3);
+      tone(220 + i * 26, t + i * 0.11, 0.05, 0.025, 'square');
+    } },
+  tick(hi) { if (!AC) return; const t = AC.currentTime;
+    // one woodblock tock of the escapement — alternates tick / tock
+    noiseBurst(t, 0.03, 0.08, hi ? 2100 : 1500, hi ? 1500 : 1000, 3);
+    tone(hi ? 940 : 660, t, 0.06, 0.05, 'triangle'); },
+  creak() { if (!AC) return; const t = AC.currentTime;
+    // a stool taking weight
+    noiseBurst(t, 0.16, 0.07, 300, 160, 1.4, 'lowpass');
+    tone(140, t + 0.02, 0.18, 0.04, 'triangle', null, 90); },
+  page() { if (!AC) return; const t = AC.currentTime;
+    // a dry page turned
+    noiseBurst(t, 0.12, 0.06, 2400, 4200, 1.1);
+    noiseBurst(t + 0.1, 0.08, 0.04, 3200, 5000, 1.3); },
   door() { if (!AC) return; const t = AC.currentTime;
     // a latch click, a low wooden swing, a soft shut
     noiseBurst(t, 0.04, 0.1, 2200, 1500, 2.5);
@@ -435,6 +454,16 @@ function defaultSave() {
     compassSeen: false,
     houseChest: false,        // v4: the harbor-house interior chest
     bossHint: false,          // v4: one-time "hit the CLAW" floatText shown
+    /* v4.5 — EVERY DOOR OPENS */
+    tockChest: false,         // Granny Tock's salt chest
+    pearlChest: false,        // the chest under Pearl's bunk
+    lightChest: false,        // Finn's lighthouse chest (HEART CONTAINER)
+    clockWound: false,        // wound Granny's floor clock once (her line)
+    boatWindow: false,        // Pearl's toy boat set in the window
+    chartSeen: false,         // read the blank star chart
+    cartChest: false,         // the cartographer's salt chest
+    mapTides: false,          // read the cartographer's wall map
+    mapTable: false,          // looked at the half-drawn new map
     lastShade: [8.2, 7.0],
   };
 }

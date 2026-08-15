@@ -523,3 +523,51 @@ NEW GAME with an existing save asks "Overwrite the saved
 adventure?" (✕ confirm / ○ back). One modal, pad+keyboard+touch
 navigable. Protects family saves from blind confirms (I proved the
 failure mode personally).
+
+---
+
+# v4.5 — EVERY DOOR OPENS (decided 2026-08-15, John: "make the rest
+of the houses interiors. Differentiate them. Put things to do in
+them.")
+
+All remaining village buildings become enterable via the proven v4
+door/fade/chunk pattern. Each room is SOMEBODY'S — differentiated by
+its resident's story, told through objects, not text. Every room has
+at least one thing to DO. All interactions are ✕-prompted, ≤1 line
+of caption, saved where it matters.
+
+1. **GRANNY TOCK'S HOUSE** — the house of stopped time. Walls of
+   stopped clocks (all reading different times — none has moved in
+   a year), knitting basket with an absurdly long scarf spilling
+   across the floor, kettle at the cold hearth, rocking chair.
+   DO: wind the big floor clock (✕, crank sfx) — it ticks for a few
+   seconds then dies; Granny's voice from outside: "You hear that?
+   ...lovely." (one line, warm). A small chest: salt crystals.
+   Secret: her knitting scarf pattern is moon phases.
+2. **PEARL'S FAMILY HOUSE** — a kid's world. Bunk with a boat-sail
+   blanket, floor of chalk drawings — stars the way she imagines
+   them (wrong: five-pointed, smiling), a toy boat on a rug "sea,"
+   a jar of fireflies long empty. DO: pick up the toy boat (✕) —
+   Wick sets it in the window facing the dry bay; open the star
+   chart on the wall (✕): it's blank parchment, caption "Nobody
+   could draw them for her." Chest under the bunk: salt crystals.
+   (After the Crescent payoff this house changes: one real star
+   drawn on the chart — tiny world-fixing echo, if cheap to do.)
+3. **FINN'S LIGHTHOUSE — ground room** — the keeper's kit: coiled
+   rope, oil cans, a logbook desk, spare lamp lenses, stairs up
+   (blocked by crates + one line: "The lamp room can wait for a
+   lamp worth lighting."). DO: read the logbook (✕): last entry a
+   year old — "Day 1 without night. Light not needed. Keeping it
+   clean anyway." Chest: a HEART CONTAINER (the village's one big
+   find — earned by curiosity, John's open-loop philosophy).
+4. Harbor house (v4) stays as-is; add ONE differentiator so it's
+   somebody's too: fisherman's oilskins + a net-mending bench, DO:
+   sit on the bench stool (✕, Wick sits, camera rests a beat).
+
+Rules: every door gets the ✕ ENTER prompt + doormat; interiors are
+culled chunks with solid-by-construction collision (v4 authority
+pattern), shade-sanctuary inside, budgets hold (≤80/≤120k measured
+in every room); chest/interaction state persists in the save; all
+interactions reachable pad-alone, keyboard-alone, touch. Cinematic
+beats principle applies at its smallest scale: interactions get a
+tiny camera acknowledgment, never a text dump.

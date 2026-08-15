@@ -103,6 +103,15 @@ function applySave() {
     homeChest.opened = true;
     homeChest.lid.rotation.x = -1.9;
   }
+  /* v4.5: the other rooms remember too */
+  if (SAVE.tockChest) { tockChest.opened = true; tockChest.lid.rotation.x = -1.9; }
+  if (SAVE.pearlChest) { pearlChest.opened = true; pearlChest.lid.rotation.x = -1.9; }
+  if (SAVE.cartChest) { cartChest.opened = true; cartChest.lid.rotation.x = -1.9; }
+  if (SAVE.lightChest) { lightChest.opened = true; lightChest.lid.rotation.x = -1.9; }
+  if (SAVE.boatWindow && pearlBoat) {
+    pearlBoat.position.set(pearlRoom.boatSill.x, pearlRoom.boatSill.y, pearlRoom.boatSill.z);
+    pearlBoat.rotation.y = Math.PI / 2;
+  }
   if (SAVE.q === 3 && SAVE.bossDone) {
     P.carryCrescent = true;
   }
@@ -303,6 +312,10 @@ const TL = {
   bossBarOn: false, clawGlow: false,
   inInterior: false, homeChest: false,
   titleMode: 'menu', ngGuardOn: false,
+  // v4.5
+  room: null, tockChest: false, pearlChest: false, lightChest: false, cartChest: false,
+  clockWound: false, clockTicking: false, boatWindow: false, chartSeen: false,
+  sitting: false, caption: null, starOn: false,
 };
 window.__fm = TL;
 function syncTelemetry() {
@@ -383,6 +396,18 @@ function syncTelemetry() {
   TL.homeChest = homeChest.opened;
   TL.titleMode = titleMode;
   TL.ngGuardOn = el('ngGuard').classList.contains('on');
+  /* v4.5 */
+  const TR = roomAt(P.x, P.z);
+  TL.room = TR ? TR.id : null;
+  TL.tockChest = tockChest.opened; TL.pearlChest = pearlChest.opened;
+  TL.lightChest = lightChest.opened; TL.cartChest = cartChest.opened;
+  TL.clockWound = SAVE ? !!SAVE.clockWound : false;
+  TL.clockTicking = tockClock.ticksLeft > 0;
+  TL.boatWindow = SAVE ? !!SAVE.boatWindow : false;
+  TL.chartSeen = SAVE ? !!SAVE.chartSeen : false;
+  TL.sitting = state === 'cine' && CINE.id === 'sit';
+  TL.caption = floatEl.classList.contains('on') ? floatEl.textContent : null;
+  TL.starOn = !!(pearlStar && pearlStar.visible);
 }
 const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
 let SIM_FREEZE = false;   // screenshot staging: halt sim ticks, keep rendering
@@ -429,15 +454,18 @@ function tickSim() {
       tickChest();
       tickDoorChest();
       tickHomeChest();
+      tickRoomChests(); tickLightChest(); tickClock(); tickBoat();   // v4.5
       tickSalt();
       if (IN.pause) { setState('pause'); pauseFocus = 0; refreshPause(); SFX.menu(); }
       break;
     }
-    case 'dialog': tickDialog(); tickChest(); tickDoorChest(); tickHomeChest(); break;
+    case 'dialog': tickDialog(); tickChest(); tickDoorChest(); tickHomeChest();
+      tickRoomChests(); tickLightChest(); tickClock(); tickBoat(); break;
     case 'pause': tickPause(); break;
     case 'cine':
       tickCine();
       if (CINE.id === 'wake' || CINE.id === 'sunstruck') tickChest();
+      if (CINE.id === 'micro' || CINE.id === 'sit') { tickClock(); tickBoat(); }   // v4.5
       break;
     case 'tbc': tickTBC(); break;
   }
@@ -489,10 +517,16 @@ function updateVisuals(dtv, now) {
     beamOut.visible = inGv;
     chest.group.visible = near2(chest.x, chest.z, 75);
     doorChest.group.visible = near2(doorChest.x, doorChest.z, 60);
-    // v4: the harbor-house interior is its own culled chunk
-    const inHv = near2(INT.x, INT.z, 45);
-    if (interiorMesh) { interiorMesh.visible = inHv; interiorGlow.visible = inHv; }
-    homeChest.group.visible = inHv;
+    // v4.5: every interior room is its own culled chunk (rooms sit 40 m
+    // apart off-world, so a 25 m radius shows exactly the one you're in)
+    for (let ri = 0; ri < ROOMS.length; ri++) {
+      const R = ROOMS[ri];
+      const rv = near2(R.x, R.z, 25);
+      if (R.mesh) R.mesh.visible = rv;
+      if (R.glow) R.glow.visible = rv;
+      for (let vi = 0; vi < R.vis.length; vi++) R.vis[vi].visible = rv;
+    }
+    if (pearlStar) pearlStar.visible = near2(330, -140, 25) && SAVE && SAVE.sky >= 1;
     wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
     if (grottoCapMesh) grottoCapMesh.visible = near2(46, 155, 165);
     tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);
