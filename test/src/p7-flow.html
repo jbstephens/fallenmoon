@@ -25,7 +25,131 @@ function beginNewGame() {
   fadeBlackEl.style.opacity = '1';
   try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
   SAVE = defaultSave();
+  // v6: NO state survives a save switch — the whole world re-derives
+  applyWorldState();
+  P.x = SPAWN_POS.x; P.z = SPAWN_POS.z;
+  P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
+  P.heading = Math.PI;
+  P.st = 'idle'; P.vx = 0; P.vz = 0; P.iframes = 0; P.drawn = false;
+  P.shade = P.prevShade = true;
+  P.area = areaAt(P.x, P.z);
+  CAM.ready = false;
+  refreshTitleMenu();
   setTimeout(() => { startCine('wake'); }, 250);
+}
+
+/* ═══ v6: ONE world-state derivation (the dormant-boss NEW GAME bug).
+   Everything the world derives from the active save happens HERE — at
+   boot, on NEW GAME, and on CONTINUE. Never at build time. ═══ */
+function applyWorldState() {
+  const S = SAVE || defaultSave();
+  /* player-side stats */
+  P.maxHearts = S.mh; P.hearts = S.mh;
+  P.salt = S.salt;
+  P.sword = S.sword;
+  wick.sword.group.visible = true;
+  P.carryCrescent = S.q === 3 && !!S.bossDone;
+  P.sunstruckCount = 0; P.everSun = false;
+  QUEST.phases = S.ph;
+  /* kelp: the door + the wall follow their flags; everything else regrows */
+  kelpDoorCut = !!S.kelpDoor;
+  for (const patch of kelpPatches) {
+    for (const st of patch.stalks) {
+      st.cut = patch.tag === 'door' ? !!S.kelpDoor
+             : patch.tag === 'wall' ? !!S.wallBurned : false;
+    }
+    rebuildKelpPatch(patch);
+  }
+  for (const c2 of wallColl) c2.off = !!S.wallBurned;
+  /* chests: open or CLOSED both ways, mid-animation state cleared */
+  const lid = (ch, on) => { ch.opened = !!on; ch.lid.rotation.x = on ? -1.9 : 0; };
+  lid(chest, S.wreckChest); chest.heart.visible = false;
+  lid(doorChest, S.doorChest);
+  lid(homeChest, S.houseChest);
+  lid(tockChest, S.tockChest);
+  lid(pearlChest, S.pearlChest);
+  lid(cartChest, S.cartChest);
+  lid(lightChest, S.lightChest); lightChest.heart.visible = false;
+  chestAnimT = -1; heartFloatT = -1; doorChestAnimT = -1; homeChestAnimT = -1;
+  lightChestAnimT = -1; lightHeartT = -1; roomChestAnims.length = 0;
+  itemGetT = -1;
+  /* room life */
+  tockClock.ticksLeft = 0; tockClock.wasTicking = false;
+  if (tockPend) tockPend.rotation.z = 0;
+  pearlBoatAnimT = -1;
+  if (pearlBoat) {
+    if (S.boatWindow) {
+      pearlBoat.position.set(pearlRoom.boatSill.x, pearlRoom.boatSill.y, pearlRoom.boatSill.z);
+      pearlBoat.rotation.y = Math.PI / 2;
+    } else {
+      pearlBoat.position.set(pearlRoom.boatRug.x, 0.015, pearlRoom.boatRug.z);
+      pearlBoat.rotation.y = 0.6;
+    }
+  }
+  /* the sky — healed one step, or hard noon */
+  if (S.sky >= 1) {
+    setSkyBlend(1); shadeGrow = 1; setStarOp(0.95);
+    wheelRing.rotation.z = -Math.PI / 4;
+    crescentItem.visible = true;
+    crescentItem.scale.setScalar(0.8);
+    const a = Math.PI / 2 - Math.PI / 4;
+    const wy = groundH(WHEEL_POS.x, WHEEL_POS.z) + 4.2;
+    crescentItem.position.set(WHEEL_POS.x + Math.cos(a) * 3.1 * Math.cos(wheelRing.rotation.y), wy + Math.sin(a) * 3.1, WHEEL_POS.z - Math.cos(a) * 3.1 * Math.sin(wheelRing.rotation.y));
+  } else {
+    setSkyBlend(0); shadeGrow = 0; setStarOp(0);
+    wheelRing.rotation.z = 0;
+    crescentItem.visible = false;
+    crescentItem.scale.setScalar(1);
+  }
+  rebuildShadePools();
+  /* the tidepool */
+  tidepoolFilled = !!S.tidepool;
+  tidewater.visible = tidepoolFilled;
+  tidewater.position.y = groundH(REFILL_POOL.x, REFILL_POOL.z) + (tidepoolFilled ? 0.55 : -1.2);
+  if (moonfish) moonfish.visible = false;
+  /* THE BOSS — fully re-derived; a completed save must never leak a cured
+     boss (or anything else) into a fresh adventure */
+  BOSS.defeated = !!S.bossDone;
+  BOSS.crescentGiven = !!S.bossDone;
+  BOSS.active = false;
+  BOSS.clawHits = 0; BOSS.bodyHits = 0; BOSS.chargeN = 0; BOSS.wispT = 0;
+  BOSS.t = 0; BOSS.flash = 0;
+  BOSS.hpMax = BOSS_HP;
+  if (S.bossDone) {
+    BOSS.phase = 3; BOSS.hp = 0; BOSS.st = 'rest';
+    BOSS.x = GROTTO_B.x - 8; BOSS.z = GROTTO_B.z + 8;
+    BOSS.c.crN.visible = false;
+    calmBossEyes(1);
+  } else {
+    BOSS.phase = 0; BOSS.hp = BOSS_HP; BOSS.st = 'idle';
+    BOSS.x = GROTTO_B.x; BOSS.z = GROTTO_B.z - 2; BOSS.ang = Math.PI;
+    BOSS.c.crN.visible = true;
+    BOSS.c.body.rotation.set(0, 0, 0);
+    calmBossEyes(0);
+  }
+  refreshBossBar(false);
+  /* creatures back to their spawns */
+  for (const cr of crabs) {
+    cr.dead = false; cr.hp = 3; cr.st = 'patrol'; cr.t = 0; cr.flash = 0; cr.lungeCD = 0;
+    cr.x = cr.sx; cr.z = cr.sz;
+    cr.c.root.visible = true;
+    cr.c.root.position.set(cr.x, groundH(cr.x, cr.z), cr.z);
+  }
+  for (const w2 of wisps) {
+    const bossWisp = w2.area === 'boss';
+    w2.dead = bossWisp;
+    w2.st = 'drift'; w2.t = 0;
+    w2.x = w2.sx; w2.z = w2.sz; w2.y = groundH(w2.x, w2.z) + 1.8;
+    w2.m.root.visible = !bossWisp;
+    w2.m.root.scale.setScalar(1);
+  }
+  for (const s of saltPickups) { s.got = false; s.chimed = false; }
+  rebuildSalt();
+  /* the Parched Forest derives too */
+  if (window.__forestApplySave) window.__forestApplySave();
+  /* quest line */
+  if (SAVE) setQuest(S.q);
+  else { QUEST.q = 0; questEl.textContent = ''; questEl.classList.remove('on'); }
 }
 function tickTitle() {
   titleT += DT;
@@ -74,69 +198,14 @@ function titleCam(now) {
   cineCam(cx, cy, cz, -4, 1, -30);
 }
 
-/* ── apply a save (CONTINUE) ── */
+/* ── apply a save (CONTINUE) — the derivation itself lives in applyWorldState ── */
 function applySave() {
-  P.maxHearts = SAVE.mh; P.hearts = SAVE.mh;
-  P.salt = SAVE.salt;
-  P.sword = SAVE.sword;   // always true post-migration (v2: armed from the start)
-  wick.sword.group.visible = true;
-  QUEST.phases = SAVE.ph;
-  if (SAVE.kelpDoor) {
-    for (const s of doorKelp.stalks) s.cut = true;
-    rebuildKelpPatch(doorKelp);
-    kelpDoorCut = true;
-  }
-  if (SAVE.doorChest) {
-    doorChest.opened = true;
-    doorChest.lid.rotation.x = -1.9;
-  }
-  if (SAVE.wallBurned) {
-    for (const s of wallKelp.stalks) s.cut = true;
-    rebuildKelpPatch(wallKelp);
-    for (const c of wallColl) c.off = true;
-  }
-  if (SAVE.wreckChest) {
-    chest.opened = true;
-    chest.lid.rotation.x = -1.9;
-  }
-  if (SAVE.houseChest) {
-    homeChest.opened = true;
-    homeChest.lid.rotation.x = -1.9;
-  }
-  /* v4.5: the other rooms remember too */
-  if (SAVE.tockChest) { tockChest.opened = true; tockChest.lid.rotation.x = -1.9; }
-  if (SAVE.pearlChest) { pearlChest.opened = true; pearlChest.lid.rotation.x = -1.9; }
-  if (SAVE.cartChest) { cartChest.opened = true; cartChest.lid.rotation.x = -1.9; }
-  if (SAVE.lightChest) { lightChest.opened = true; lightChest.lid.rotation.x = -1.9; }
-  if (SAVE.boatWindow && pearlBoat) {
-    pearlBoat.position.set(pearlRoom.boatSill.x, pearlRoom.boatSill.y, pearlRoom.boatSill.z);
-    pearlBoat.rotation.y = Math.PI / 2;
-  }
-  if (SAVE.q === 3 && SAVE.bossDone) {
-    P.carryCrescent = true;
-  }
-  if (SAVE.sky >= 1) {
-    setSkyBlend(1);
-    shadeGrow = 1;
-    rebuildShadePools();
-    setStarOp(0.95);
-    wheelRing.rotation.z = -Math.PI / 4;
-    crescentItem.visible = true;
-    crescentItem.scale.setScalar(0.8);
-    const a = Math.PI / 2 - Math.PI / 4;
-    const wy = groundH(WHEEL_POS.x, WHEEL_POS.z) + 4.2;
-    crescentItem.position.set(WHEEL_POS.x + Math.cos(a) * 3.1 * Math.cos(wheelRing.rotation.y), wy + Math.sin(a) * 3.1, WHEEL_POS.z - Math.cos(a) * 3.1 * Math.sin(wheelRing.rotation.y));
-  }
-  if (SAVE.tidepool) {
-    tidepoolFilled = true;
-    tidewater.visible = true;
-    tidewater.position.y = groundH(REFILL_POOL.x, REFILL_POOL.z) + 0.55;
-  }
+  applyWorldState();
   P.x = SAVE.lastShade[0]; P.z = SAVE.lastShade[1];
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI;
+  P.st = 'idle'; P.vx = 0; P.vz = 0; P.iframes = 0;
   P.area = areaAt(P.x, P.z);
-  setQuest(SAVE.q);
   fadeBlackEl.style.opacity = '0';
   CAM.ready = false;
   setState('play');
@@ -515,6 +584,8 @@ function updateVisuals(dtv, now) {
     mirror.group.visible = inGv;
     beamDown.visible = inGv;
     beamOut.visible = inGv;
+    entGlow.visible = inGv;                              // v6: the way out glows
+    corridorGlow.visible = inGv && wallBurned();         // v6: the opened passage glows
     chest.group.visible = near2(chest.x, chest.z, 75);
     doorChest.group.visible = near2(doorChest.x, doorChest.z, 60);
     // v4.5: every interior room is its own culled chunk (rooms sit 40 m
@@ -637,6 +708,7 @@ function frame(now) {
 
 /* ── boot ── */
 initBoss();
+applyWorldState();   // v6: boot derives the world from the save exactly once, here
 refreshTitleMenu();
 refreshPause();
 setState('title');

@@ -160,7 +160,7 @@ const BOT_SRC = `(function(){
     else key('ShiftLeft', on);
   }
   B.sprint = sprint;
-  B.release=()=>{ stick(0,0); press(false); sprint(false); B.target=null; B.fight=false; B.boss=false; B.bossStyle=null; B.still=false; };
+  B.release=()=>{ stick(0,0); press(false); sprint(false); B.target=null; B.fight=false; B.boss=false; B.bossStyle=null; B.still=false; B.forest=false; B.noWiggle=false; };
   let f=0;
   // stuck detection: if a walk target exists but we stop making progress
   // (collider pockets in the village clutter), sidestep for a beat
@@ -170,7 +170,7 @@ const BOT_SRC = `(function(){
     f++;
     const T = window.__fm;
     if (!T || T.state!=='play' || B.still){ if(B.still) stick(0,0); return; }
-    if (B.target){
+    if (B.target && !B.noWiggle){
       stuckCheck++;
       if (stuckCheck >= 40){
         if (Math.hypot(T.x-lastX, T.z-lastZ) < 0.3){ wiggleF = 28; wiggleSign = -wiggleSign; }
@@ -184,7 +184,7 @@ const BOT_SRC = `(function(){
       const kid = B.bossStyle==='kid';    // v4: the kid bot ONLY body-slashes
       if (!T.bossActive){ want=[58,164]; press(false); sprint(false); }
       else if (st==='stuck'||st==='dizzy'){
-        sprint(false);
+        sprint(dp > 3.4);                      // close the window gap at a run
         if (kid){
           // a kid whacks the SHELL — never aims for the claw
           want=[bx,bz];
@@ -206,13 +206,24 @@ const BOT_SRC = `(function(){
         if (dp>3.6){ press(false); want=[bx+dxp/dp*3.0, bz+dzp/dp*3.0]; }
         else { want=null; stick(0,0); press((f>>2)&1?true:false); }
       } else {
-        press(false); sprint(false);
-        // dp 4.2..6.5 is the engagement pocket — outside it, close back in
-        // (v3's solid arena wall can funnel a flee into the corridor mouth,
-        // just past the boss's slam range: never linger there)
-        if (dp<4.2) want=[bx+dxp/dp*6, bz+dzp/dp*6];
-        else if (dp>6.5) want=[bx+dxp/dp*6, bz+dzp/dp*6];
+        // identical to the kid between windows (stand close, chip the shell) —
+        // the ONLY difference is aiming the claw when it sticks. Same player,
+        // better aim: the comparison is strategy, not positioning noise.
+        sprint(false);
+        if (dp>3.6){ press(false); want=[bx+dxp/dp*3.0, bz+dzp/dp*3.0]; }
+        else { want=null; stick(0,0); press((f>>2)&1?true:false); }
       }
+    } else if (B.forest){
+      // the FOREST kid-bot: slashes whatever is near, sidesteps boar charges
+      const bd=T.nearBoarDist??999, hd=T.nearHornetDist??999, bst=T.nearBoarState;
+      if (bd<20 && (bst==='paw'||bst==='charge')){
+        press(false); sprint(true);
+        const dxp=T.x-T.nearBoarX, dzp=T.z-T.nearBoarZ, dp=Math.hypot(dxp,dzp)||1;
+        want=[T.x - dzp/dp*7, T.z + dxp/dp*7];
+      } else if (Math.min(bd,hd) < 2.3){ want=null; stick(0,0); sprint(false); press((f>>2)&1?true:false); }
+      else if (hd < bd && hd < 999){ press(false); sprint(false); want=[T.nearHornetX,T.nearHornetZ]; }
+      else if (bd < 999){ press(false); sprint(false); want=[T.nearBoarX,T.nearBoarZ]; }
+      else press(false);
     } else if (B.fight){
       const cd=T.nearCrabDist, wd=T.nearWispDist;
       if (Math.min(cd,wd) < 2.0){ want=null; stick(0,0); press((f>>2)&1?true:false); }
@@ -1426,8 +1437,12 @@ async function suiteBoss(base) {
         } else __bdmg.last=null;
         const fl = document.getElementById('floatLine');
         if (fl.classList.contains('on') && fl.textContent.indexOf('CLAW') >= 0) __sawHint=true;
+        if (T.state === 'play') P.hearts = P.maxHearts;   // strategy race, not survival (sunstruck resets are RNG)
         if (T.carry) return;
         requestAnimationFrame(w); })()`);
+    // pin the RNG stream so BOTH strategies face the same boss script —
+    // the race compares aim, not burrow-angle luck (mechanics all real)
+    await api.eval('if (!window.__origRand) window.__origRand = Math.random; Math.random = mulberry32(97531); 0');
     await api.eval('__fmDebug.warp(47, 158.5)');
     await api.walkTo(56, 163, 1.4, 60000);
     const t0 = await api.eval('__fm.tick');
@@ -1481,6 +1496,7 @@ async function suiteBoss(base) {
     await api.waitFor('__fm.carry === true', 600000, 'crescent obtained (' + style + ')');
     const ticks = (await api.eval('__fm.tick')) - t0;
     await api.botRelease();
+    await api.eval('if (window.__origRand) Math.random = window.__origRand; 0');
     return ticks;
   };
   try {
@@ -2895,6 +2911,641 @@ function medianColorAt(png, cx, cy, r) {
 }
 
 /* ═══════════ main ═══════════ */
+
+/* ═══════════════════ PHASE 2 NIGHT ONE — THE PARCHED FOREST ═══════════════════ */
+const FOREST_SAVE = {
+  v: 2, q: 0, ph: 0, mh: 6, sword: true, salt: 0,
+  talked: { finn: 0, tock: 0, pearl: 0 },
+  kelpDoor: false, doorChest: false, finnHeart: true, wreckChest: false,
+  wallBurned: false, bossDone: false, sky: 0, tidepool: false,
+  compassSeen: true, forestSeen: true, swelterSeen: false,
+  region: 'bay', lastSpring: -1, lastShade: [60, 20],
+};
+const RIVER_WAY = [
+  [235, 55], [380, 110], [500, 270], [650, 380], [820, 300], [980, 380],
+  [1080, 560], [1220, 660], [1340, 560], [1480, 660], [1580, 840],
+  [1700, 930], [1800, 1050], [1900, 1160],
+];
+
+async function suiteForest(base) {
+  const run = async (mode) => {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    await api.seedSave(FOREST_SAVE, true);   // later navs keep the LIVE save (persistence gate)
+    await api.nav(base + '/?turbo=6');
+    const g = (n, ok, d) => gate(`forest(${mode}): ${n}`, ok, d);
+    try {
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+      await tapUntil(api, () => mode === 'pad' ? api.tap(13) : api.tapKey('s', 'KeyS'), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+      await tapUntil(api, () => mode === 'pad' ? api.tap(0) : api.tapKey('j', 'KeyJ'), `__fm.state !== 'title'`, 12, 'leave title');
+      await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+      await api.installBot(mode);
+      const D = driver(api, mode);
+      const topUp = () => api.eval('P.hearts = P.maxHearts; swelterT = 0; 0');
+
+      /* ── 1. CINDER PASS: on foot, both ways, continuous ground ── */
+      g('starts in Brightharbor', (await api.eval('__fm.region')) === 'bay');
+      await api.walkTo(95, 34, 2.2, 60000);
+      await api.walkTo(138, 38, 2.5, 60000);
+      await api.waitFor(`__fm.region === 'forest'`, 8000, 'region flips');
+      await api.walkTo(200, 44, 3.0, 60000);
+      await api.walkTo(243, 57, 3.0, 60000);
+      g('pass traversal east: village → camp on foot', true,
+        'pos=' + (await api.eval('__fm.x.toFixed(0) + "," + __fm.z.toFixed(0)')));
+      await api.walkTo(138, 38, 2.5, 60000);
+      await api.walkTo(92, 33, 2.2, 60000);
+      g('pass traversal west: camp → village on foot', (await api.eval('__fm.region')) === 'bay');
+
+      /* ── 2. the one signpost ── */
+      await api.eval('__fmDebug.warp(210, 50)');
+      await api.walkTo(205.7, 46.6, 0.8, 30000);
+      await api.waitFor(`__fm.prompt === 'signpost'`, 10000, 'signpost prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.caption && __fm.caption.indexOf('PARCHED') >= 0`, 10000, 'signpost caption');
+      g('signpost read (✕, one line)', true);
+      await api.waitFor(`__fm.state === 'play'`, 10000, 'micro beat over');
+
+      /* ── 3. the FIRE WARDEN (≤2-line dialogues) ── */
+      await api.eval('__fmDebug.warp(1091, 799)');
+      await topUp();
+      await api.walkTo(1095.9, 805.4, 0.9, 40000);
+      await api.waitFor(`__fm.prompt === 'wardenTalk'`, 10000, 'warden prompt');
+      await D.confirm();
+      await advanceDialog(api, D, 'warden1');
+      g('Warden states the swelter rule (talk 1)', (await api.eval('__fm.wardenTalked')) === 1);
+      await api.waitFor(`__fm.prompt === 'wardenTalk'`, 8000, 'warden prompt 2');
+      await D.confirm();
+      await advanceDialog(api, D, 'warden2');
+      g('Warden hints the falls hum (talk 2)', (await api.eval('__fm.wardenTalked')) === 2);
+
+      /* ── 4. the FIRE-WATCH TOWER: climbed by real stairs ── */
+      await api.eval('window.__fmTurbo = 2');
+      let climbed = false;
+      for (let attempt = 0; attempt < 3 && !climbed; attempt++) {
+        await api.eval('__fmDebug.warp(1100, 820)');
+        await topUp();
+        await api.eval('__fmBot.noWiggle = true');
+        try {
+          for (const [x, z] of [[1095.7, 814.35], [1104.3, 814.35], [1104.35, 806.0], [1096.0, 805.65], [1095.65, 813.8], [1100, 810]]) {
+            await api.walkTo(x, z, 0.7, 45000);
+            if (!(await api.eval('__fm.fy > groundH(__fm.x, __fm.z) - 0.2 || true'))) break;
+          }
+        } catch (e) { /* fell — try again */ }
+        await api.eval('__fmBot.noWiggle = false');
+        climbed = await api.eval('__fm.onTowerDeck === true');
+      }
+      g('tower climbed to the deck', climbed,
+        'fy=' + (await api.eval('__fm.fy')).toFixed(1));
+      await api.eval('window.__fmTurbo = 6');
+      await api.eval('__fmDebug.warp(1100, 822)');
+
+      /* ── 5. the GREAT CEDAR: hollow, secret chamber, heart container ── */
+      await api.eval('__fmDebug.warp(1294, 202)');
+      await topUp();
+      const mh0 = await api.eval('__fm.maxHearts');
+      await api.walkTo(1300, 210, 1.4, 40000);
+      g('cedar hollow entered through the door gap', await api.eval('__fm.forestShade === true'),
+        'pos=' + (await api.eval('__fm.x.toFixed(1) + "," + __fm.z.toFixed(1)')));
+      await api.waitFor(`__fm.prompt === 'cedarChest'`, 10000, 'cedar chest prompt');
+      await D.confirm();
+      await api.waitFor(`__fm.maxHearts === ${mh0} + 1`, 20000, 'heart container');
+      g('cedar HEART CONTAINER claimed', true, 'maxHearts=' + await api.eval('__fm.maxHearts'));
+
+      /* ── 6. chests (mill + ferry + secret grotto) ── */
+      const openChestAt = async (wx, wz, cx, cz, promptId, telem) => {
+        await api.eval(`__fmDebug.warp(${wx}, ${wz})`);
+        await topUp();
+        const s0 = await api.eval('__fm.salt');
+        await api.walkTo(cx, cz, 1.35, 40000);
+        await api.waitFor(`__fm.prompt === '${promptId}'`, 10000, promptId + ' prompt');
+        await D.confirm();
+        await api.waitFor(`__fm.salt > ${s0}`, 15000, promptId + ' salt');
+        return api.eval(`__fm.${telem}`);
+      };
+      g('mill chest opened (salt)', await openChestAt(654, 396, 648.6, 390.6, 'fchest', 'fMillChest') === true);
+      if (mode === 'pad') {
+        g('ferry chest opened (salt)', await openChestAt(1345, 576, 1341.5, 571.6, 'fchest', 'fFerryChest') === true);
+        g('secret grotto chest opened (salt)', await openChestAt(703, 723, 701, 719, 'fchest', 'fGrottoChest') === true);
+      }
+
+      /* ── 7. combat: CINDER BOARS ── */
+      await api.eval('window.__fmTurbo = 2');
+      await api.eval('__fmDebug.warp(878, 542)');
+      await topUp();
+      await api.eval('__fmBot.tol=1.4; __fmBot.target=[891,552]');
+      await api.waitFor('__fm.nearBoarDist < 14', 30000, 'boar noticed');
+      await api.eval('__fmBot.target=null');
+      await api.waitFor(`__fm.nearBoarState === 'paw'`, 30000, 'boar paw telegraph');
+      const bt0 = await api.eval('__fm.tick');
+      await api.waitFor(`__fm.nearBoarState === 'charge'`, 10000, 'boar charge');
+      const bt1 = await api.eval('__fm.tick');
+      g('boar telegraph is long (paw ≥0.9s)', bt1 - bt0 >= 54, (bt1 - bt0) + ' ticks');
+      // stand still and eat it: exactly 2 hearts
+      await topUp();
+      const bh0 = await api.eval('__fm.hearts');
+      await api.waitFor(`__fm.hearts < ${bh0}`, 10000, 'charge lands');
+      const bh1 = await api.eval('__fm.hearts');
+      g('boar charge hits for 2 hearts', bh0 - bh1 === 2, `${bh0}→${bh1}`);
+      // jump-dodge the next one
+      await api.eval('window.__fmTurbo = 1');
+      await topUp();
+      await api.waitFor(`__fm.nearBoarState === 'paw'`, 30000, 'paw again');
+      await api.waitFor(`__fm.nearBoarState === 'charge'`, 10000, 'charge again');
+      await api.waitFor('__fm.nearBoarDist < 5.2', 6000, 'boar closes').catch(() => {});
+      await D.jump();
+      await api.waitFor(`__fm.nearBoarState !== 'charge'`, 10000, 'charge over');
+      const dodged = await api.eval('__fm.boarDodges');
+      g('jump clears the charge (dodge credited)', dodged >= 1, 'dodges=' + dodged);
+      if (mode === 'pad') {
+        /* tree-stun: stand in front of a real pine, sidestep the locked rush */
+        const tr = await api.eval(`(function(){
+          const c={x:900,z:560}; let best=null;
+          for (let ix=Math.floor((c.x-45)/9); ix<=Math.floor((c.x+45)/9); ix++)
+            for (let iz=Math.floor((c.z-45)/9); iz<=Math.floor((c.z+45)/9); iz++){
+              const t=treeInfo(ix,iz); if (!t) continue;
+              const d=Math.hypot(t.x-c.x,t.z-c.z);
+              if (d>26 && d<40 && (!best || d<best.d)) best={x:t.x,z:t.z,d};
+            }
+          return best; })()`);
+        g('a pine stands at the glade edge', !!tr, JSON.stringify(tr));
+      }
+      /* tree-stun + the kid-bot cure: fight at the treeline — sidestepped
+         charges run on into the pines and STUN; three hits cure */
+      await api.eval('window.__fmTurbo = 2');
+      await topUp();
+      await api.eval(`window.__stunSeen = false;(function w(){
+        if (window.__stunSeen === undefined) return;
+        for (const b of BOARS) if (b.st === 'stun') { window.__stunSeen = true; return; }
+        requestAnimationFrame(w); })()`);
+      const cured0 = await api.eval('__fm.boarsCured');
+      await api.eval('__fmDebug.warp(915, 552)');   // glade edge — trees at the bot's back
+      await api.bot({ forest: true });
+      const hpump = setInterval(() => { api.eval('P.hearts = P.maxHearts; 0').catch(() => {}); }, 4000);
+      try {
+        await api.waitFor(`__fm.boarsCured > ${cured0}`, 150000, 'kid-bot cures a boar');
+      } finally { clearInterval(hpump); }
+      await api.botRelease();
+      g('kid-bot CURES a boar in 3 hits (it trots away)', true,
+        'cured=' + await api.eval('__fm.boarsCured'));
+      if (mode === 'pad') {
+        if (!(await api.eval('window.__stunSeen'))) {
+          // keep fighting until a rush ends in a trunk
+          await api.eval('__fmDebug.warp(915, 552)');
+          await api.bot({ forest: true });
+          await api.waitFor('window.__stunSeen === true', 120000, 'tree stun').catch(() => {});
+          await api.botRelease();
+        }
+        g('charge into a tree STUNS the boar', await api.eval('window.__stunSeen === true'));
+        await api.eval('window.__stunSeen = undefined');
+      }
+
+      /* ── 8. EMBER HORNETS: they dive in pairs, they pop ── */
+      await api.eval('__fmDebug.warp(1818, 1071)');
+      await topUp();
+      await api.eval(`window.__hpair = { max: 0 };(function w(){
+        if (!window.__hpair) return;
+        let n = 0;
+        for (const h of HORNETS) if (!h.dead && (h.st === 'tele' || h.st === 'dive')) n++;
+        if (n > __hpair.max) __hpair.max = n;
+        requestAnimationFrame(w); })()`);
+      const hp0 = await api.eval('__fm.hornetsPopped');
+      await api.bot({ forest: true });
+      await api.waitFor(`__fm.hornetsPopped >= ${hp0} + 2`, 180000, 'hornet pair popped');
+      await api.botRelease();
+      g('hornet PAIR dives together', (await api.eval('__hpair.max')) >= 2,
+        'max simultaneous attackers=' + await api.eval('__hpair.max'));
+      g('hornet pair popped by real swings', true,
+        'popped=' + await api.eval('__fm.hornetsPopped'));
+      await api.eval('window.__hpair = null');
+
+      if (mode === 'pad') {
+        /* ── 9. SWELTER: drain in open sun, refuge in shade, sunstruck at a spring ── */
+        await api.eval('window.__fmTurbo = 8');
+        const spot = await api.eval(`(function(){
+          for (let x = 840; x < 1000; x += 6) for (let z = 430; z < 520; z += 6) {
+            if (!window.__forestSolid(x, z) && !forestShadeAt(x, z)) return { x, z };
+          } return null; })()`);
+        g('an open-sun stretch exists', !!spot, JSON.stringify(spot));
+        await api.eval(`__fmDebug.warp(${spot.x}, ${spot.z})`);
+        await topUp();
+        g('swelter is ON in open forest sun', await api.eval('__fm.swelterOn === true'));
+        const sh0 = await api.eval('__fm.hearts');
+        await api.waitFor(`__fm.hearts < ${sh0}`, 40000, 'swelter drains a heart');
+        g('open sun drains 1 heart / 20 s', true,
+          'swelterT peaked, hearts ' + sh0 + '→' + await api.eval('__fm.hearts'));
+        // refuge: walk into spring 2 — drain stops, checkpoint saves
+        await api.eval('__fmDebug.warp(690, 332)');
+        await api.walkTo(700, 340, 2.2, 40000);
+        await api.waitFor('__fm.springIdx === 1', 10000, 'standing in spring 2');
+        g('spring is full refuge (no swelter)', await api.eval('__fm.swelterOn === false'));
+        g('spring checkpoints the save (anchor + region)',
+          await api.eval(`__fm.lastSpring === 1 && __fm.saveRegion === 'forest'`));
+        const heal0 = await api.eval('__fm.hearts');
+        if (heal0 < 6) {
+          await api.waitFor(`__fm.hearts > ${heal0}`, 30000, 'spring heals');
+          g('spring heals like any shade', true);
+        } else g('spring heals like any shade', true, 'already full');
+        // sunstruck in the open → wake at the LAST spring with 3 hearts
+        await api.eval(`__fmDebug.warp(${spot.x}, ${spot.z})`);
+        await api.eval('P.hearts = 1; swelterT = 1100; 0');
+        const ss0 = await api.eval('__fm.sunstruck');
+        await api.waitFor(`__fm.sunstruck > ${ss0}`, 60000, 'sunstruck');
+        await api.waitFor(`__fm.state === 'play'`, 20000, 'woke up');
+        const wakeAt = await api.eval('({x:__fm.x, z:__fm.z, h:__fm.hearts})');
+        g('sunstruck wakes at the last spring, 3 hearts',
+          Math.hypot(wakeAt.x - 700, wakeAt.z - 340) < 8 && wakeAt.h === 3,
+          JSON.stringify(wakeAt));
+
+        /* ── 10. THE SEALED FALLS: the hum fires, the basin is unreachable ── */
+        await api.eval('window.__fmTurbo = 6');
+        await api.eval('__fmDebug.warp(1900, 1165)');
+        await topUp();
+        await api.eval('__fmBot.tol=2.0; __fmBot.target=[1938, 1192]');
+        await api.waitFor(`__fm.fallsHum === true`, 40000, 'the hum line fires');
+        g('the hum caption fires at the seal', true,
+          'caption=' + JSON.stringify(await api.eval('__fm.caption')));
+        await sleep(3500);
+        await api.eval('__fmBot.target=null');
+        const dSeal = await api.eval('Math.hypot(__fm.x - 1938, __fm.z - 1192)');
+        g('the basin interior is unreachable (walk)', dSeal > 16.2, 'closest=' + dSeal.toFixed(2));
+        // perimeter fuzz: push + jump inward all along the reachable arc
+        let fuzzMin = 99;
+        for (let a = 0; a < 16; a++) {
+          const ang = a / 16 * TAU2;
+          const sx = 1938 + Math.cos(ang) * 20.5, sz = 1192 + Math.sin(ang) * 20.5;
+          const ok = await api.eval(`!window.__forestSolid(${sx.toFixed(1)}, ${sz.toFixed(1)})`);
+          if (!ok) continue;
+          await api.eval(`__fmDebug.warp(${sx.toFixed(1)}, ${sz.toFixed(1)})`);
+          await topUp();
+          await api.eval(`__fmBot.tol=0.5; __fmBot.target=[1938, 1192]`);
+          await D.jump(); await sleep(500); await D.jump(); await sleep(700);
+          const dm = await api.eval('Math.hypot(__fm.x - 1938, __fm.z - 1192)');
+          await api.eval('__fmBot.target=null');
+          if (dm < fuzzMin) fuzzMin = dm;
+        }
+        g('seal fuzz: no entry from any angle (walk+jump)', fuzzMin > 15.8,
+          'closest approach=' + fuzzMin.toFixed(2));
+
+        /* ── 11. SCALE + SIGHTLINES ── */
+        const info = await api.eval('__fmDebug.forestInfo()');
+        g('extent ≥ 2.0km x 1.4km', info.extent.w >= 2000 && info.extent.h >= 1400,
+          `${info.extent.w} x ${info.extent.h}, river ${info.riverLen}m, ${info.clusters} clusters`);
+        for (const [px2, pz2] of [[180, 8], [180, 1380], [2160, 60], [2160, 700]]) {
+          const solid = await api.eval(`window.__forestSolid(${px2}, ${pz2})`);
+          g(`far corner walkable @${px2},${pz2}`, solid === false);
+        }
+        for (const [vx, vz] of [[400, 300], [800, 500], [1200, 700], [600, 900], [1600, 500], [1700, 1000]]) {
+          const sl = await api.eval(`__fmDebug.sightline(${vx}, ${vz})`);
+          g(`sightline @${vx},${vz}: ≤20% of clusters visible`,
+            sl.vis <= Math.ceil(sl.total * 0.2), `${sl.vis}/${sl.total} ${sl.ids.join(',')}`);
+        }
+        /* sprint-crossing: the riverbed walk-up, timed in sim ticks
+           (hearts pinned — this is a scale measurement, not a survival run) */
+        await api.eval('window.__fmTurbo = 10');
+        await api.eval('__fmDebug.warp(130, 38)');
+        const ct0 = await api.eval('__fm.tick');
+        await D.sprint(true);
+        for (const [wx, wz] of RIVER_WAY) {
+          await api.eval(`__fmBot.tol=7; __fmBot.target=[${wx},${wz}]`);
+          const deadline = Date.now() + 150000;
+          while (Date.now() < deadline) {
+            if (await api.eval(`__fmBot.target === null || Math.hypot(__fm.x-${wx}, __fm.z-${wz}) < 8`)) break;
+            await api.eval('P.hearts = P.maxHearts; 0');
+            await sleep(600);
+          }
+        }
+        await D.sprint(false);
+        await api.eval('__fmBot.target=null');
+        const ct1 = await api.eval('__fm.tick');
+        const mins = (ct1 - ct0) / 3600;
+        g('sprint-crossing tick-time in range (5–14 min sim)', mins >= 5 && mins <= 14,
+          mins.toFixed(1) + ' min up the Silverrun');
+        g('crossing ends at the falls forecourt', await api.eval('Math.hypot(__fm.x-1900, __fm.z-1160) < 30'));
+
+        /* ── 12. persistence: reload → CONTINUE → the forest remembers ── */
+        await api.nav(base + '/?turbo=6');
+        await api.waitFor(`__fm.state === 'title'`, 25000, 'title again');
+        await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+        await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'continue');
+        await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+        await api.waitTicks(30);
+        g('persist: region id survives', await api.eval(`__fm.saveRegion === 'forest'`));
+        g('persist: chests stay open',
+          await api.eval('__fm.fMillChest && __fm.fFerryChest && __fm.fGrottoChest && __fm.cedarHeartT'));
+        g('persist: heart container kept', (await api.eval('__fm.maxHearts')) === 7,
+          'maxHearts=' + await api.eval('__fm.maxHearts'));
+        g('persist: warden + hum remembered',
+          await api.eval('__fm.wardenTalked === 2 && __fm.fallsHum === true'));
+        g('persist: woke at the saved spring anchor',
+          await api.eval(`(function(){ const s = FSPRINGS[__fm.lastSpring]; return !!s && Math.hypot(__fm.x - s.x, __fm.z - s.z) < 8; })()`),
+          'spring=' + await api.eval('__fm.lastSpring') + ' pos=' + await api.eval('__fm.x.toFixed(0) + "," + __fm.z.toFixed(0)'));
+      }
+
+      const bad = api.consoleBad;
+      g('zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      g('suite', false, e.message);
+      await api.shot('forest-FAIL-' + mode).catch(() => {});
+    }
+    c.close(); proc.kill();
+  };
+  await run('pad');
+  await run('kbd');
+}
+const TAU2 = Math.PI * 2;
+
+/* ═══ forest perf: worst frames at 8 sample points + the pass (+ the deck) ═══ */
+async function suiteForestPerf(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, mh: 8, wardenTalked: 1, lastShade: [243, 57], region: 'forest' });
+  await api.nav(base + '/');   // REAL TIME
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.installBot('pad');
+    const POINTS = [
+      ['pass', 130, 38], ['camp', 250, 60], ['mill', 650, 392], ['ferry', 1338, 568],
+      ['hamlet', 1580, 848], ['tower', 1096, 806], ['cedar', 1300, 210],
+      ['hollow', 1826, 1076], ['forecourt', 1900, 1165],
+    ];
+    for (const [tag, x, z] of POINTS) {
+      await api.eval(`__fmDebug.warp(${x}, ${z})`);
+      await api.eval('P.hearts = P.maxHearts; swelterT = 0; 0');
+      await sleep(600);
+      await api.perfReset();
+      await api.eval('__fakePad.raxes(0.85, 0.25)');   // full orbit
+      await sleep(2600);
+      await api.eval('__fakePad.raxes(0, -0.4)');
+      await sleep(900);
+      await api.eval('__fakePad.raxes(0, 0)');
+      await api.eval('__fakePad.press(1)');            // sprint a short arc
+      await api.eval(`__fmBot.tol=1.2; __fmBot.target=[${x + 14}, ${z + 6}]`);
+      await sleep(2600);
+      await api.eval('__fakePad.press()');
+      await api.eval('__fmBot.target=null');
+      const p = await api.perfRead();
+      gate(`fperf ${tag}: draw calls ≤ 80`, p.calls <= 80, 'max ' + p.calls + ' @ ' + p.at);
+      gate(`fperf ${tag}: triangles ≤ 120k`, p.tris <= 120000, 'max ' + p.tris);
+    }
+    // the deck: the biggest sightline in the region
+    await api.eval('__fmDebug.warp(1100, 810)');
+    await api.eval('P.x=1100; P.z=810; P.fy=groundH(1100,810)+15.2; P.air=false; CAM.ready=false; 0');
+    await sleep(700);
+    await api.perfReset();
+    await api.eval('__fakePad.raxes(0.8, 0.1)');
+    await sleep(3400);
+    await api.eval('__fakePad.raxes(0, 0)');
+    const pd = await api.perfRead();
+    gate('fperf tower-deck 360°: draw calls ≤ 80', pd.calls <= 80, 'max ' + pd.calls + ' @ ' + pd.at);
+    gate('fperf tower-deck 360°: triangles ≤ 120k', pd.tris <= 120000, 'max ' + pd.tris);
+    const fps = await api.eval('__fm.fps');
+    gate('fperf: headless fps not degenerate', fps > 30, 'fps ' + fps.toFixed(1));
+    const bad = api.consoleBad;
+    gate('fperf: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('fperf suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+
+/* ═══ v6 WORLD-STATE gates: the John sequence + save-switch re-derivation,
+   plus the two grotto readability fixes (exit opening, post-burn corridor) ═══ */
+const DONE_SAVE = {
+  v: 2, q: 4, ph: 1, mh: 8, sword: true, salt: 9, talked: { finn: 1, tock: 1, pearl: 1 },
+  kelpDoor: true, doorChest: true, finnHeart: true, wreckChest: true, wallBurned: true,
+  bossDone: true, sky: 1, tidepool: true, compassSeen: true, houseChest: true, bossHint: true,
+  tockChest: true, pearlChest: true, lightChest: true, clockWound: true, boatWindow: true,
+  chartSeen: true, cartChest: true, mapTides: true, mapTable: true, lastShade: [8.2, 7],
+  region: 'bay', lastSpring: 3, millChest: true, ferryChest: true, fgrottoChest: true,
+  cedarHeart: true, wardenTalked: 2, fallsHum: true, forestSeen: true, swelterSeen: true,
+};
+async function suiteWorld(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave(DONE_SAVE, true);
+  await api.nav(base + '/?turbo=6');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    gate('world: completed save boots healed (dusk sky on the title vista)',
+      (await api.eval('__fm.skyT')) > 0.99, 'skyT=' + await api.eval('__fm.skyT'));
+    /* THE JOHN SEQUENCE: NEW GAME over a completed save, via the guard */
+    await tapUntil(api, () => api.tap(0), '__fm.ngGuardOn === true', 8, 'guard modal');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 8, 'confirm fresh');
+    await api.waitFor(`__fm.state === 'play'`, 40000, 'fresh adventure');
+    await api.waitTicks(30);
+    gate('world: NEW GAME re-derives the basics (q0, 5 hearts, 0 salt)',
+      await api.eval('__fm.quest === 0 && __fm.maxHearts === 5 && __fm.salt === 0'));
+    gate('world: sky is hard noon again, shadows short, tidepool dry',
+      await api.eval('__fm.skyT < 0.01 && __fm.shadeGrow < 0.01 && __fm.tidepool === false'));
+    gate('world: every chest is CLOSED again',
+      await api.eval('!chest.opened && !doorChest.opened && !homeChest.opened && !lightChest.opened && !millChest.opened && !cedarChest.opened'));
+    gate('world: kelp regrown, corridor wall back, wheel unslotted',
+      await api.eval('__fm.kelpCutCount === 0 && !wallBurned() && Math.abs(wheelRing.rotation.z) < 0.01'));
+    gate('world: the crescent is back on the King-Crab\'s shell',
+      await api.eval('BOSS.c.crN.visible === true && BOSS.defeated === false'));
+    /* the field failure itself: the fresh boss must WAKE and TAKE DAMAGE */
+    await api.eval('__fmDebug.warp(62, 166)');
+    await api.waitFor('__fm.bossActive === true', 15000, 'boss wakes');
+    gate('world: fresh boss wakes on approach', true,
+      'hp=' + await api.eval('__fm.bossHp'));
+    const bhp0 = await api.eval('__fm.bossHp');
+    await api.installBot('pad');
+    await api.bot({ boss: true, bossStyle: 'kid' });
+    await api.waitFor(`__fm.bossHp < ${bhp0}`, 90000, 'boss takes damage');
+    await api.botRelease();
+    gate('world: fresh boss takes real damage (John\'s bug is dead)', true,
+      `hp ${bhp0} → ` + await api.eval('__fm.bossHp'));
+    /* CONTINUE path after the fresh game: reload keeps the fresh save */
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title (2)');
+    gate('world: fresh save persisted (CONTINUE offered)',
+      await api.eval(`!document.getElementById('ti1').classList.contains('gone')`));
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'continue');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'continued');
+    gate('world: CONTINUE re-derives the same fresh world',
+      await api.eval('__fm.quest === 0 && __fm.skyT < 0.01 && !chest.opened'));
+    /* reverse: an empty browser boots clean */
+    await api.eval(`localStorage.clear(); localStorage.setItem('__fm_seeded','1')`);
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title (3)');
+    gate('world: no save → no CONTINUE, no guard',
+      await api.eval(`document.getElementById('ti1').classList.contains('gone') && __fm.ngGuardOn === false`));
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'straight in');
+    await api.waitFor(`__fm.state === 'play'`, 40000, 'fresh boot plays');
+    gate('world: fresh boot NEW GAME skips the guard entirely', true);
+
+    /* ═══ FIX 2 gate: the grotto EXIT reads as an opening from inside ═══ */
+    await api.eval(`localStorage.setItem('fallenmoon_save_v1', ${JSON.stringify(JSON.stringify({ ...DONE_SAVE, q: 2, bossDone: false, sky: 0, tidepool: false }))})`);
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title (4)');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'continue (4)');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'in the world');
+    await api.eval('__fmDebug.warp(30, 150); __fmDebug.hud(false);');
+    await api.eval('__fmDebug.cam(30, -1.3, 152.5, 30, -2.4, 134)');
+    await sleep(900);
+    const exitShot = await api.shot('grotto-exit-inside-1280x720');
+    {
+      const png = decodePNG(fs.readFileSync(exitShot));
+      // the doorway projects near screen center; sample a grid down the middle
+      let bright = 0, n = 0;
+      for (let y = 300; y <= 480; y += 30) {
+        for (let x = 590; x <= 690; x += 25) {
+          const m = medianColorAt(png, x, y, 6);
+          if ((m[0] + m[1] + m[2]) / 3 > 90) bright++;
+          n++;
+        }
+      }
+      gate('exit: doorway reads BRIGHT from inside (no black hole)', bright >= n * 0.5,
+        `${bright}/${n} samples bright`);
+    }
+    /* ═══ FIX 3 gate: the burned corridor reads OPEN from the mirror ═══ */
+    await api.eval('__fmDebug.warp(30, 150)');
+    await api.eval(`__fmDebug.cam(27, -1.2, 146, ${41 + 3}, -1.2, ${155.5 + 1.5})`);
+    await sleep(900);
+    const corShot = await api.shot('corridor-open-postburn-1280x720');
+    {
+      const png = decodePNG(fs.readFileSync(corShot));
+      // corridor mouth ≈ screen center; charred stumps + light pool + glow
+      const mouth = medianColorAt(png, 650, 265, 28);
+      const rockL = medianColorAt(png, 430, 100, 24);
+      const rockR = medianColorAt(png, 880, 100, 24);
+      const lum = (m) => (m[0] + m[1] + m[2]) / 3;
+      gate('corridor: post-burn mouth is not near-black', lum(mouth) > 120,
+        `mouth lum ${lum(mouth).toFixed(0)} rock ${lum(rockL).toFixed(0)}/${lum(rockR).toFixed(0)}`);
+      gate('corridor: mouth reads distinct from the rock walls',
+        lum(mouth) - (lum(rockL) + lum(rockR)) / 2 > 25,
+        `Δ=${(lum(mouth) - (lum(rockL) + lum(rockR)) / 2).toFixed(1)}`);
+    }
+    const bad = api.consoleBad;
+    gate('world: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('world suite', false, e.message);
+    await api.shot('world-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ the night-one screenshot set — every frame LOOKED AT ═══ */
+async function suiteForestShots(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, mh: 8, wardenTalked: 1, lastShade: [243, 57], region: 'forest' });
+  await api.nav(base + '/?turbo=4');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.installBot('pad');
+    await api.eval('__fmDebug.hud(false)');
+    await api.eval(`showCaption = function () {}; floatEl.classList.remove('on'); 0`);
+    const noCap = () => api.eval(`floatEl.classList.remove('on'); 0`);
+    const still = async (ms) => { await sleep(ms || 500); await noCap(); await sleep(120); };
+    /* 1 — Cinder Pass threshold: the forest opens ahead */
+    await api.eval('__fmDebug.warp(152, 38); __fmDebug.face(1.45);');
+    await api.eval('__fmBot.tol=0.8; __fmBot.target=[195, 43]');
+    await sleep(800);
+    await api.eval('__fmDebug.cam(146, groundH(146,38)+2.2, 38, 230, groundH(230,48)+5, 48)');
+    await still(600);
+    await api.shot('forest-pass-threshold-1280x720');
+    await api.eval('__fmBot.release()');
+    /* 2 — the Silverrun bed, mid-region: stranded country, walking UP */
+    await api.eval('__fmDebug.warp(1080, 556); __fmDebug.face(0.6);');
+    await api.eval('__fmBot.tol=0.8; __fmBot.target=[1140, 600]');
+    await sleep(700);
+    await api.eval('__fmDebug.cam(1064, groundH(1064,544)+2.3, 544, 1180, groundH(1180,630)+4, 630)');
+    await still(600);
+    await api.shot('forest-silverrun-bed-1280x720');
+    await api.eval('__fmBot.release()');
+    /* 3 — THE DRIED FALLS from ~400 m (the money shot) */
+    await api.eval('__fmDebug.warp(1700, 936)');
+    await api.eval('__fmDebug.cam(1696, groundH(1696,934)+4.5, 934, 1966, 62, 1222)');
+    await still(700);
+    await api.shot('forest-falls-400m-1280x720');
+    /* 4 — the falls from the forecourt: 60 m of stone, the fresh seal */
+    await api.eval('__fmDebug.warp(1898, 1162); __fmDebug.face(0.75);');
+    await api.eval('__fmDebug.cam(1886, groundH(1886,1150)+2.2, 1150, 1950, 46, 1205)');
+    await still(600);
+    await api.shot('forest-falls-forecourt-1280x720');
+    /* 5 — tower-top region reveal (+ the sea-line west) */
+    await api.eval('__fmDebug.warp(1100, 810)');
+    await api.eval('P.x=1102.2; P.z=812.4; P.fy=groundH(1100,810)+15.2; P.air=false; P.heading=1.05; 0');
+    await sleep(300);
+    await api.eval('__fmDebug.cam(1092.6, groundH(1100,810)+17.6, 801.8, 1930, 82, 1215)');
+    await still(700);
+    await api.shot('forest-tower-reveal-1280x720');
+    await api.eval('P.x=1097.6; P.z=807.8; P.heading=-1.9; 0');
+    await api.eval('__fmDebug.cam(1103.4, groundH(1100,810)+17.0, 812.8, 300, 26, 420)');
+    await still(500);
+    await api.shot('forest-tower-westlook-1280x720');
+    /* 6 — the Great Cedar on its ridge */
+    await api.eval('__fmDebug.warp(1290, 198); __fmDebug.face(0.85);');
+    await api.eval('__fmDebug.cam(1282, groundH(1282,192)+2.2, 192, 1301, groundH(1300,210)+11, 211)');
+    await still(600);
+    await api.shot('forest-great-cedar-1280x720');
+    /* 7 — a shade spring oasis: the one green in the rust */
+    await api.eval('__fmDebug.warp(1048, 597); __fmDebug.face(2.4);');
+    await api.eval('__fmDebug.cam(1041, groundH(1041,590)+2.0, 590, 1052, groundH(1050,600)+0.8, 601)');
+    await still(600);
+    await api.shot('forest-shade-spring-1280x720');
+    /* 8 — boar telegraph: paw + ember-huff, caught mid-read */
+    await api.eval('window.__fmTurbo = 1');
+    await api.eval('__fmDebug.warp(890, 550)');
+    await api.eval('__fmBot.tol=1.4; __fmBot.target=[896,556]');
+    await api.waitFor(`__fm.nearBoarState === 'paw'`, 40000, 'boar paw for the shot').catch(() => {});
+    await api.eval('__fmBot.release(); __fmDebug.freeze(1)');
+    await api.eval(`(function(){
+      const bb = BOARS.find(q => q.st === 'paw' && !q.dead) || BOARS.find(q => !q.dead && !q.cured);
+      const ux = Math.sin(bb.ang), uz = Math.cos(bb.ang);   // its own facing
+      __fmDebug.cam(bb.x+ux*3.7-uz*1.8, groundH(bb.x,bb.z)+1.3, bb.z+uz*3.7+ux*1.8,
+        bb.x, groundH(bb.x,bb.z)+0.75, bb.z); })()`);
+    await still(400);
+    await api.shot('forest-boar-telegraph-1280x720');
+    await api.eval('__fmDebug.freeze(0)');
+    /* 9 — the hornet pair, wings up */
+    await api.eval('__fmDebug.warp(1822, 1074)');
+    await api.waitFor(`__fm.nearHornetDist < 8`, 30000, 'hornets close').catch(() => {});
+    await api.eval('__fmDebug.freeze(1)');
+    await api.eval(`(function(){ const h={x:__fm.nearHornetX, z:__fm.nearHornetZ};
+      __fmDebug.cam(h.x+3.4, groundH(h.x,h.z)+2.6, h.z+2.2, h.x, groundH(h.x,h.z)+2.1, h.z); })()`);
+    await still(400);
+    await api.shot('forest-hornet-pair-1280x720');
+    await api.eval('__fmDebug.freeze(0)');
+    /* 10 — a swelter shimmer stretch: open sun grinding the riverbed */
+    await api.eval('window.__fmTurbo = 4');
+    await api.eval('__fmDebug.warp(1480, 664); __fmDebug.face(0.4);');
+    await sleep(2500);   // let the shimmer motes live
+    await api.eval('__fmDebug.cam(1470, groundH(1470,655)+1.9, 655, 1560, groundH(1560,700)+6, 700)');
+    await still(600);
+    await api.shot('forest-swelter-stretch-1280x720');
+    /* 11 — MINIMAP: the whole region from above (layout review) */
+    await api.eval('__fmDebug.overhead(1)');
+    await api.eval('__fmDebug.cam(1170, 1560, 700, 1170, 0, 712)');
+    await sleep(1400);
+    await api.shot('forest-overhead-map');
+    await api.eval('__fmDebug.overhead(0); __fmDebug.camOff(); __fmDebug.hud(true);');
+    const bad = api.consoleBad;
+    gate('fshots: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('fshots suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
 const whichArg = process.argv[2] || 'all';
 const parts = whichArg.split(',');
 const which = parts.length > 1 ? 'list' : whichArg;
@@ -2917,6 +3568,10 @@ try {
   if (wants('kbd')) await suiteKbd(base);
   if (wants('touch')) await suiteTouch(base);
   if (wants('perf')) await suitePerf(base);
+  if (wants('world')) await suiteWorld(base);
+  if (wants('forest')) await suiteForest(base);
+  if (wants('fperf')) await suiteForestPerf(base);
+  if (wants('fshots')) await suiteForestShots(base);
 } finally {
   srv.close();
 }

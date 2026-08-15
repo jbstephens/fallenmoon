@@ -796,17 +796,13 @@ const BOSS = {
 };
 function bossPhaseHp(ph) { return ph <= 1 ? BOSS_HP : ph === 2 ? 60 : 30; }
 function initBoss() {
+  // v6: BUILD only — every save-derived fact (defeated, cured eyes, resting
+  // spot) now lives in applyWorldState(), which runs at boot AND on every
+  // save transition. John's field bug: a completed save configured the boss
+  // at boot, then NEW GAME kept the cured boss — unfightable fresh game.
   BOSS.c = buildKingCrab();
   BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
   scene.add(BOSS.c.root);
-  if (SAVE && SAVE.bossDone) {
-    BOSS.defeated = true; BOSS.crescentGiven = true;
-    BOSS.hp = 0;
-    BOSS.c.crN.visible = false;
-    calmBossEyes(1);
-    BOSS.x = GROTTO_B.x - 8; BOSS.z = GROTTO_B.z + 8;
-    BOSS.st = 'rest';
-  }
 }
 /* ── the boss HP bar — standing convention for every boss to come ── */
 const bossBarEl = el('bossBar'), bossFillEl = el('bossFill'), bossNameEl = el('bossName');
@@ -1014,7 +1010,7 @@ function hitBossClaw() {
   const cp = B.st === 'stuck' ? B.slamPos : bossClawPos();
   burst(psSpark, cp[0], groundH(cp[0], cp[1]) + 0.8, cp[1], 12, 2.2, 1.8, 0.5);
   if (B.st === 'stuck' || B.st === 'dizzy') B.t = Math.min(B.t, 1.2);   // brief extra window
-  dealBossDamage(10);            // 5x — the telegraphed weakness pays off
+  dealBossDamage(12);            // 6x — the telegraphed weakness pays off decisively
 }
 /* v4: body hits ALWAYS chip — small but real, with FULL feedback. A kid
    who only ever slashes the shell still wins this fight. */

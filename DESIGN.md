@@ -571,3 +571,141 @@ in every room); chest/interaction state persists in the save; all
 interactions reachable pad-alone, keyboard-alone, touch. Cinematic
 beats principle applies at its smallest scale: interactions get a
 tiny camera acknowledgment, never a text dump.
+
+---
+
+# THE SAILING SPINE (decided with John, 2026-08-15 — his words:
+"this is the thing that makes this game amazing")
+
+CONFIRMED: restoring the Half Shield brings the tide home, and the
+returned sea becomes the game's traversal system. We bring the water
+back, then we USE it — regions beyond Brightharbor are reached by
+BOAT, as landfalls along a coastline that becomes the world map.
+
+- THE boat: the beached rowboat Wick wakes under at spawn — dead on
+  the mud since the game's first second — floats when the tide
+  returns. The shelter becomes the ship. (Non-negotiable beat.)
+- Sailing compounds with later phases: Gibbous Bell = sunset sails;
+  Full Mirror = nocturnal sea-life surfacing alongside; finale =
+  sailing home under the first moonlit sea.
+- Access model: barriers ARE the broken world; healing dissolves
+  them (tide = coastal regions; re-greened forest = inland paths;
+  cooled badlands = final region). Open question for John, parked:
+  hard-gated regions vs reachable-but-hostile early entry.
+- Pacing: ~one region per rev. Phase-2 rev = the Half Shield
+  (region + guardian + the flood transformation + first sailing).
+
+## REGION SCALE MANDATE (John, 8/15: sightlines AND square footage)
+Locked for the Parched Forest and every region after: playable area
+≥ 1.2km x 0.9km (roughly 25-30x Brightharbor's slice). A straight
+sprint across it should take 3+ minutes; a real exploration of it,
+an hour+. Sightline discipline on top: ridgelines/gorges/canopy
+block vision so no vantage shows more than ~a fifth of the region;
+2-3 far landmarks pull the player; deliberate quiet stretches
+between content clusters (emptiness with a visible destination is
+what "big" feels like). Density stays Zelda-sparse, not jam-packed:
+the region should hold ~a dozen content clusters (camps, shrines,
+secrets, the riverbed spine, the guardian's dungeon), not a prop
+every ten meters. Chunked terrain + distance culling per the
+Powder Peak recipe; budgets unchanged (≤80 calls / ≤120k tris per
+frame — the world is big, the FRAME never is).
+
+## SCALE MANDATE v2 (John pushed on the square law, 8/15 — he's
+right: 3-minute crossings read "crossable," and crossable kills big)
+Parched Forest target raised: **≥ 2.0km x 1.4km** (≈60-75x
+Brightharbor's slice). Straight-line sprint crossing ~7-8 minutes —
+but no crossing is straight: the winding riverbed spine, ridges,
+gorges and hostiles make the first real traverse 20-30+ minutes.
+Landmark spacing scales up with it (you should sometimes walk 2
+minutes toward a thing you can see). Content clusters ~15-18 for
+the bigger canvas, still Zelda-sparse. Frame budgets UNCHANGED —
+area is nearly free under chunked culling; only authoring and
+journey time grow, and journey time is the point.
+
+---
+
+# PHASE 2 — THE PARCHED FOREST & THE HALF SHIELD (locked 2026-08-15,
+John: "build it. LFG!") — TWO-NIGHT BUILD
+
+## Night one: THE REGION (this build)
+
+**THE PARCHED FOREST** — region east of Brightharbor, over Cinder
+Pass (a walkable saddle in the hills at the current map's east edge;
+one signpost, no gate: reachable-but-hostile from minute one).
+Scale per mandate v2: ≥2.0km x 1.4km, ~15-18 content clusters,
+sightline discipline (ridges, gorges, canopy), 3 far landmarks.
+
+**The land**: a great pine forest heat-stressed for a year — bleached
+trunks, rust needle-carpet, cracked clay clearings, no birdsong.
+**The spine: the SILVERRUN** — a dead river you walk UP: a winding
+dry bed ~2.5km from the pass to the region's crown, past stranded
+waterwheels, a beached ferry barge, fish-drying racks with nothing
+to dry. It ends at **THE DRIED FALLS** — a 60m stone lip with no
+water, the region's great landmark, visible from half the forest.
+Behind/under it: the plunge-pool basin where the Half Shield fell —
+**sealed by rockfall in night one** (one line: "The stones here
+fell recently. Something under there hums.") — night two opens it.
+
+**Landmarks**: the Dried Falls (crown), the FIRE-WATCH TOWER
+(climbable via stairs; from the top, the region reveals itself —
+and you can just see the sea-line beyond Brightharbor), the GREAT
+CEDAR (a colossal dead tree on the south ridge, hollow inside,
+secret chamber with a heart container).
+
+**Hostile tier (the survivable-brutal contract)**:
+- **SWELTER**: in this region's open-sun stretches hearts drain
+  slowly (1 heart / 20s, region-only). Canopy shade, rock shadow,
+  and SHADE SPRINGS (six tiny oases: a seep, ferns, one live green
+  tree each) are fully safe, heal, and act as respawn anchors +
+  save checkpoints. Sunstruck = wake at last spring, keep
+  everything. Shade-hopping IS the traversal puzzle.
+- **CINDER BOARS**: new enemy — big, charging, long telegraph
+  (paws the ground, huffs ember-smoke, then a straight rush).
+  3 hits to cure (they shake off the madness and trot away, per
+  the nothing-dies rule). Hit hard (2 hearts). Jump or sidestep
+  the charge; a charge into a tree stuns them (kid-discoverable).
+- **EMBER HORNETS**: fast imp-family fliers, dive in pairs, pop
+  satisfyingly. Cluster near the falls.
+  (Regular imps + a few crabs range the pass as the on-ramp.)
+
+**One NPC**: **the FIRE WARDEN** — a weathered woman who never left
+her tower ("Somebody has to watch for a fire. Everything is one.").
+≤2-line dialogues; sells nothing yet; hints the falls hum. She logs
+the swelter rule for the player in one line: "Walk shade to shade,
+kid. The sun doesn't blink out here."
+
+**Content clusters (~15)**: Cinder Pass camp (abandoned), waterwheel
+mill (chest), ferry barge (chest + hornets), drying-rack hamlet
+(salt seams), tower, Great Cedar (heart container), 3 boar glades,
+hornet hollow, 2 secret shade grottos, salt-crystal seams, the
+falls forecourt (sealed basin + the hum), scattered vista knolls.
+
+**Tech (extends, never replaces)**: second terrain zone in world
+space east of Brightharbor with continuous ground at the pass;
+chunked at Powder Peak scale; the region's chunks + creatures cull
+hard; budgets unchanged. Region id in save; shade-spring anchors in
+save; __fm gains region/swelter/springs telemetry; __fmDebug.warp
+works across zones for the harness.
+
+**Night-one gates (added to harness)**: pass traversal on foot both
+ways; scale asserts (bounding extent ≥ 2.0x1.4km, sprint-crossing
+tick-time in range); sightline gate (from 6 sampled vantages, ≤20%
+of cluster landmarks visible); swelter drain/refuge/sunstruck-at-
+spring; boar charge telegraph + jump-dodge + tree-stun + 3-hit cure
+via kid-bot; hornet pair fight; tower climb to top (jump/stairs);
+cedar heart container; all chests/persistence; falls-basin seal
+(unreachable interior, the hum line fires); Warden dialogues; perf
+worst-frames across 8 forest sample points + the pass; full
+Brightharbor regression (everything v4.5 stays green); zero console
+errors. Ships with the falls sealed — kids explore night one's
+region while night two builds.
+
+## Night two (next build): THE HALF SHIELD
+Falls-basin dungeon (behind the rockfall: a water-carved hollow,
+puzzle language = light through dry water-channels), the guardian
+(design TBD next session with John's kids' verdicts fresh), the
+Half Shield relic, carrying it home, the FLOOD (the tide returns:
+bay transforms — water, floating boats, submerged grotto path,
+cartographer's maps wrong), the wake-boat floats, FIRST SAIL
+tutorial, sailing system v1. Gets its own locked design before it
+runs.

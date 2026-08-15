@@ -17,7 +17,7 @@ const FOG_GROTTO = { col: col(0x2c3038), near: 10, far: 46 };
 scene.fog = new THREE.Fog(0xf3e6cf, FOG0.near, FOG0.far);
 scene.background = null;   // sky dome covers
 
-const camera = new THREE.PerspectiveCamera(66, VW / VH, 0.2, 700);   // v2: wider action FOV
+const camera = new THREE.PerspectiveCamera(66, VW / VH, 0.2, 2100);  // v2: wider action FOV (v5: far plane reaches the Dried Falls)
 
 /* only characters are lit; the world is baked (Powder Peak lesson) */
 const sunLight = new THREE.DirectionalLight(0xfff0d8, 0.92);
@@ -138,7 +138,7 @@ const POOLS = [
 ];
 function gauss(d2, s2) { return Math.exp(-d2 / s2); }
 function groundH(x, z) {
-  if (x > 300) return 0;                          // portrait stage plane
+  if (x > 300 && z < -30) return 0;               // off-world strip: rooms + portrait stage
   // land ↔ seabed blend
   const landT = smoothstep((14 - z) / 26);        // 1 on land (z < -12), 0 in bay (z > 14)
   const land = 1.7 + Math.max(0, -z - 12) * 0.045 + vnoise(x * 0.05, z * 0.05) * 0.5;
@@ -159,8 +159,16 @@ function groundH(x, z) {
     const t = smoothstep(1 - (Math.min(da - GROTTO_A.r, db - GROTTO_B.r)) / 4);
     h = lerp(h, -3.1, clamp(t, 0, 1));
   }
-  // rim rises wall the world — smooth dunes/headland, not spikes
-  const ex = Math.max(0, Math.abs(x) - 90) + Math.max(0, -z - 90) + Math.max(0, z - 176);
+  // rim rises wall the world — smooth dunes/headland, not spikes.
+  // v5 CINDER PASS: the EAST rim dips to a walkable saddle around z≈38 —
+  // the road into the Parched Forest. No gate, just a hard walk.
+  let xe = Math.max(0, Math.abs(x) - 90);
+  if (x > 90) {
+    const pk = smoothstep(1 - Math.abs(z - 38) / 26);    // 1 on the saddle centerline
+    xe *= 1 - 0.94 * pk;
+    h += smoothstep((x - 90) / 22) * 3.2 * pk;           // gentle hump up out of the bay
+  }
+  const ex = xe + Math.max(0, -z - 90) + Math.max(0, z - 176);
   h += Math.min(26, ex * ex * 0.045) * (0.85 + vnoise(x * 0.04, z * 0.04) * 0.15);
   return h;
 }
@@ -226,7 +234,10 @@ function collide(px, pz, pr, fy) {
   for (let i = 0; i < COLL.length; i++) {
     const c = COLL[i];
     if (c.off) continue;
-    if (c.top !== undefined && fy !== undefined && fy >= c.top - 0.18) continue;
+    if (c.plat) continue;   // v6: pure platforms (stair treads, decks) support, never wall
+    // v6: tops within a real STEP of the feet are walkable (the fire-watch
+    // tower's stairs); crates/barrels (0.6+) still ask for a jump
+    if (c.top !== undefined && fy !== undefined && fy >= c.top - 0.42) continue;
     const dx = x - c.x, dz = z - c.z;
     const d2 = dx * dx + dz * dz, rr = c.r + pr;
     if (d2 < rr * rr && d2 > 0.0001) {
@@ -234,7 +245,10 @@ function collide(px, pz, pr, fy) {
       x = c.x + dx / d * rr; z = c.z + dz / d * rr;
     }
   }
-  return [clamp(x, -98, 98), clamp(z, -98, 184)];
+  // v5: the world clamp is piecewise — Brightharbor keeps its old walls,
+  // the Parched Forest opens the east (its real walls are __forestSolid)
+  if (x > 100) return [clamp(x, 100, 2178), clamp(z, -38, 1398)];
+  return [clamp(x, -98, 102), clamp(z, -98, 184)];
 }
 /* standing height at (x,z) for feet currently at fy: terrain, or the top of
    a platform prop we're over (and not far beneath) */
@@ -300,12 +314,18 @@ function grottoSolidAt(x, z) {
   if (!massifAt(x, z)) return false;
   return !grottoOpenAt(x, z);
 }
+/* v5: ONE solid authority for every zone — the grotto massif plus the
+   Parched Forest's walls/trunks/seal (defined later; guarded until then) */
+function worldSolidAt(x, z) {
+  if (grottoSolidAt(x, z)) return true;
+  return x > 98 && !!window.__forestSolid && window.__forestSolid(x, z);
+}
 /* axis-split slide against the solid region: from a known-good (ox,oz),
    accept as much of the move to (nx,nz) as stays out of stone */
 function resolveSolid(ox, oz, nx, nz) {
-  if (!grottoSolidAt(nx, nz)) return [nx, nz];
-  if (!grottoSolidAt(nx, oz)) return [nx, oz];
-  if (!grottoSolidAt(ox, nz)) return [ox, nz];
+  if (!worldSolidAt(nx, nz)) return [nx, nz];
+  if (!worldSolidAt(nx, oz)) return [nx, oz];
+  if (!worldSolidAt(ox, nz)) return [ox, nz];
   return [ox, oz];
 }
 
@@ -332,9 +352,14 @@ function pathDist(x, z) {
 }
 const _gc = [0, 0, 0];
 function groundColor(x, z, y) {
-  if (x > 300) { _gc[0] = 0.58; _gc[1] = 0.56; _gc[2] = 0.53; return _gc; }   // portrait
+  if (x > 300 && z < -30) { _gc[0] = 0.58; _gc[1] = 0.56; _gc[2] = 0.53; return _gc; }   // off-world strip
   if (inGrottoAt(x, z)) {
     mix3(col(0x565048), C_POOLBED, 0.12 + vnoise(x * 0.3, z * 0.3) * 0.1, _gc);
+    // v6: the entrance walkway is SUN-STRUCK near the mouth — the way out
+    // reads bright from deep inside (no more black-hole doorway)
+    if (z < 140 && z > 118 && Math.abs(x - GROTTO_ENT.x) < 9) {
+      mix3(_gc, [0.9, 0.83, 0.66], smoothstep((139 - z) / 8) * 0.85, _gc);
+    }
     return _gc;
   }
   const n = vnoise(x * 0.16, z * 0.16);
@@ -869,16 +894,20 @@ function buildGrotto() {
   grottoCapMesh = mdMesh(mdCaps, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
   grottoCapMesh.matrixAutoUpdate = false; grottoCapMesh.updateMatrix();
   scene.add(grottoCapMesh);
-  // the MOUTH: a dark throat + portal stones so the entrance reads from the bay
+  // the MOUTH: portal stones frame it; the throat itself stays OPEN.
   (function mouth() {
     const md = chunkFor(GROTTO_ENT.x, GROTTO_ENT.z);
-    const dark = [0.09, 0.09, 0.11];
-    // black gullet plane just inside the opening (v3: widened + raised so no
-    // sky sliver ever reads around its edges from inside the chamber)
-    const gx = GROTTO_ENT.x, gz = 140;
-    md.p.push(gx - 8.5, -3.6, gz, gx + 8.5, -3.6, gz, gx + 8.5, 10.5, gz,
-              gx - 8.5, -3.6, gz, gx + 8.5, 10.5, gz, gx - 8.5, 10.5, gz);
-    for (let i = 0; i < 6; i++) md.c.push(dark[0], dark[1], dark[2]);
+    // v6 (John's photo: "the exit is a black hole"): the old black gullet
+    // plane stood ACROSS the walkway — walking out you faced a void wall.
+    // Gone. Through the doorway you now see the truth: sunlit sand and sky.
+    // Lit jamb walls flank the throat so the opening reads with depth from
+    // inside, and they still blot any raw-sky sliver around the door arc.
+    const gx = GROTTO_ENT.x;
+    const jamb = [0.86, 0.78, 0.6], jambD = [0.62, 0.56, 0.45];
+    for (const s of [-1, 1]) {
+      boxW(md, { x: gx + s * 3.55, y: -3.6, z: 133.9, w: 0.5, d: 1.7, h: 7.2, tw: 0.4, td: 1.2, ry: s * 0.12, col: jamb, colB: jambD });
+      boxW(md, { x: gx + s * 4.1, y: -3.6, z: 136.6, w: 0.6, d: 1.4, h: 5.4, tw: 0.45, td: 1.0, ry: s * 0.2, col: jambD });
+    }
     // portal stones + lintel
     for (const s of [-1, 1]) {
       latheW(md, [[2.0, -3.2], [1.7, 2.8], [0.8, 6.8]], { seg: 6, ex: 0.8, x: gx + s * 4.4, y: 0, z: 134, ry: s, col: C_ROCK, cols: [C_ROCK2, C_ROCK] });
@@ -1042,7 +1071,20 @@ function rebuildKelpPatch(patch) {
   const md = MD();
   let any = false;
   for (const s of patch.stalks) {
-    if (s.cut) continue;
+    if (s.cut) {
+      // v6 (John: "you just walk through walls"): the BURNED wall leaves
+      // charred stumps + scorch rings, so the corridor reads as an opened
+      // passage — not fog-of-rock you clip through
+      if (patch.tag === 'wall') {
+        any = true;
+        const y = groundH(s.x, s.z);
+        latheW(md, [[0.17, 0], [0.11, 0.24], [0.03, 0.34]],
+          { seg: 5, x: s.x, y, z: s.z, col: [0.17, 0.14, 0.12] });
+        latheW(md, [[0.34, 0.03], [0.05, 0.05]],
+          { seg: 6, flat: true, x: s.x, y, z: s.z, col: [0.11, 0.1, 0.09] });
+      }
+      continue;
+    }
     any = true;
     stalkGeom(md, s.x, groundH(s.x, s.z), s.z, s.h, (s.x * 57 + s.z * 131) | 0);
   }
@@ -1250,7 +1292,7 @@ function setSkyBlend(t) {
 }
 
 /* ── portrait stage (screenshot review only — inside the sky dome, own mesh) ── */
-const PSTAGE = { x: 330, z: 150 };
+const PSTAGE = { x: 330, z: -300 };   // v5: moved into the off-world strip (the forest owns the old spot)
 let pstageMesh = null;
 (function portraitStage() {
   const md = MD();
@@ -2543,6 +2585,49 @@ let beamDown = null, beamOut = null;
   beamOut.frustumCulled = false;
   beamOut.position.set(MIRROR_POS.x, groundH(MIRROR_POS.x, MIRROR_POS.z) + 0.15, MIRROR_POS.z);
   scene.add(beamOut);
+})();
+/* v6: light READS through the openings.
+   entGlow — daylight spilling through the entrance onto chamber A's floor.
+   corridorGlow — once the wall burns, warm light spills from both corridor
+   mouths and pools on the floor: a passage you can SEE, not walk-through rock. */
+let entGlow = null, corridorGlow = null;
+(function buildGrottoGlows() {
+  const gy = -3.05;
+  {
+    const md = MD();
+    const c = [1, 0.93, 0.72];
+    const gx = GROTTO_ENT.x;
+    // a soft fan from the doorway onto the chamber floor
+    pushQuad(md, [gx - 2.6, gy + 4.2, 136.2], [gx + 2.6, gy + 4.2, 136.2],
+      [gx + 4.6, gy + 0.05, 143.5], [gx - 4.6, gy + 0.05, 143.5], c);
+    lathe(md, [[0, gy + 0.08], [4.2, gy + 0.02]], { seg: 9, ex: 0.8, x: gx, y: 0, z: 141.5, col: c });
+    entGlow = mdMesh(md, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.26,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+    }), false);
+    entGlow.frustumCulled = false;
+    scene.add(entGlow);
+  }
+  {
+    const md = MD();
+    const c = [1, 0.85, 0.55];
+    for (const [ex, ez] of [[COR_WALK.ax, COR_WALK.az], [COR_WALK.bx, COR_WALK.bz]]) {
+      for (const off of [[1.7, 0.8], [-0.8, 1.7]]) {
+        pushQuad(md, [ex - off[0], gy, ez - off[1]], [ex + off[0], gy, ez + off[1]],
+          [ex + off[0], gy + 6.4, ez + off[1]], [ex - off[0], gy + 6.4, ez - off[1]], c);
+      }
+      lathe(md, [[0, gy + 0.09], [3.0, gy + 0.03]], { seg: 8, x: ex, y: 0, z: ez, col: c });
+    }
+    // a faint runner of light down the corridor itself
+    lathe(md, [[0, gy + 0.07], [2.2, gy + 0.02]], { seg: 7, x: (COR_WALK.ax + COR_WALK.bx) / 2, y: 0, z: (COR_WALK.az + COR_WALK.bz) / 2, col: c });
+    corridorGlow = mdMesh(md, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.2,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+    }), false);
+    corridorGlow.frustumCulled = false;
+    corridorGlow.visible = false;
+    scene.add(corridorGlow);
+  }
 })();
 
 /* ── interactable world items ── */

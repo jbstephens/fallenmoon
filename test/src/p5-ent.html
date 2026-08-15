@@ -215,7 +215,7 @@ function updateCamera(dtv) {
   for (let s = 0.2; s <= 1.0; s += 0.1) {
     const sx2 = tx + dx * dist * s, sz2 = tz + dz * dist * s;
     const sy2 = ty + dyv * dist * s;
-    if (groundH(sx2, sz2) + 0.42 > sy2 || grottoSolidAt(sx2, sz2) || outsideRoom(sx2, sz2)) {
+    if (groundH(sx2, sz2) + 0.42 > sy2 || worldSolidAt(sx2, sz2) || outsideRoom(sx2, sz2)) {
       dist = Math.max(0.9, dist * (s - 0.1)); break;
     }
   }
@@ -508,14 +508,17 @@ function poseHumanoid(c, st, t, speed, opts) {
   if (loco > 0) {
     /* v3 walk rev: heel-toe weight, counter-rotating shoulders over swaying
        hips, a subtle head bob. Sprint deepens everything and leans in. */
-    const f = w * (7.2 + speed * 1.1 + spr * 2.4);
-    legA = Math.sin(f) * (0.62 + spr * 0.22) * loco;
-    armA = -Math.sin(f) * (0.42 + spr * 0.3) * loco;
-    bob = Math.abs(Math.cos(f)) * (0.05 + spr * 0.02) * loco;
-    lean = (0.1 + spr * 0.42) * loco;              // sprint: crouched lean-in
-    sway = Math.sin(f) * (0.05 + spr * 0.015) * loco;     // hip sway
-    twist = Math.sin(f) * (0.09 + spr * 0.05) * loco;     // shoulder counter-rotation
-    headBob = Math.sin(f * 2) * 0.025 * loco;
+    /* v5 sprint feel: POWER, not patter — longer stride at lower cadence,
+       hip sway nearly killed (sway reads sashay at speed), harder lean,
+       bigger arm drive, steadier head. */
+    const f = w * (7.2 + speed * 1.1 + spr * 1.3);
+    legA = Math.sin(f) * (0.62 + spr * 0.36) * loco;
+    armA = -Math.sin(f) * (0.42 + spr * 0.46) * loco;
+    bob = Math.abs(Math.cos(f)) * (0.05 + spr * 0.035) * loco;
+    lean = (0.1 + spr * 0.5) * loco;               // sprint: driving lean-in
+    sway = Math.sin(f) * (0.05 - spr * 0.032) * loco;     // hip sway (walk only)
+    twist = Math.sin(f) * (0.09 + spr * 0.08) * loco;     // shoulder counter-rotation
+    headBob = Math.sin(f * 2) * 0.025 * (1 - spr * 0.6) * loco;
   }
   c.hipL.rotation.x = legA; c.hipR.rotation.x = -legA;
   // heel-toe: the knee stays straight into heel-strike, folds through
@@ -588,14 +591,17 @@ function poseAttack(c, n, ph) {
   c.shL.rotation.z = 0.35;
 }
 function poseAir(c, jvy) {
-  // v3 jump: knees tuck on the rise, legs reach on the fall, arms out
+  /* v5 jump: athletic, not prayerful — arms flung WIDE and nearly
+     straight for balance (lead arm higher, never symmetric), one knee
+     driving, legs reaching into the landing. */
   const up = clamp(jvy / 6.6, -1, 1);
-  c.kneeL.rotation.x = 0.9 + up * 0.6; c.kneeR.rotation.x = 0.7 + up * 0.5;
-  c.hipL.rotation.x = -0.5 - up * 0.3; c.hipR.rotation.x = -0.25 - up * 0.2;
-  c.shL.rotation.x = -0.4; c.shR.rotation.x = -0.4;
-  c.shL.rotation.z = 0.55; c.shR.rotation.z = -0.55;
-  c.elL.rotation.x = -0.4; c.elR.rotation.x = -0.4;
-  c.torso.rotation.x = 0.12 - up * 0.1;
+  c.kneeL.rotation.x = 0.95 + up * 0.6; c.kneeR.rotation.x = 0.45 + up * 0.35;
+  c.hipL.rotation.x = -0.6 - up * 0.35; c.hipR.rotation.x = -0.15 - up * 0.12;
+  c.shL.rotation.x = -0.55 - Math.max(0, -up) * 0.3;   // lead arm, rises into the fall
+  c.shR.rotation.x = -0.3 - Math.max(0, -up) * 0.2;
+  c.shL.rotation.z = 1.05; c.shR.rotation.z = -0.9;    // flung out, asymmetric
+  c.elL.rotation.x = -0.12; c.elR.rotation.x = -0.18;  // nearly straight
+  c.torso.rotation.x = 0.16 - up * 0.12;
 }
 function poseItemGet(c, ph) {
   const up = smoothstep(clamp(ph * 2.4, 0, 1));

@@ -11,7 +11,8 @@ OUT="$DIR/index.html"
   cat "$DIR/three.min.js"
   printf '\n</script>\n'
   cat "$SRC/p2-core.html" "$SRC/p3-art.html" "$SRC/p4-world.html" \
-      "$SRC/p5-ent.html" "$SRC/p6-game.html" "$SRC/p7-flow.html"
+      "$SRC/p5-ent.html" "$SRC/p6-game.html" "$SRC/p6b-forest.html" \
+      "$SRC/p7-flow.html"
 } > "$OUT"
 echo "built $OUT ($(wc -c < "$OUT") bytes)"
 
