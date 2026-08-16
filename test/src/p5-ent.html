@@ -417,9 +417,15 @@ function tickPlayer() {
 
   if (P.st === 'hit') {
     P.hitT -= DT;
+    // v8: a swing pressed during the stun BUFFERS instead of vanishing —
+    // hornet pressure was eating honest button presses (kid-hostile)
+    if (IN.atk && P.sword) P.queued = true;
     moveWithCollision(P.x + P.vx * DT, P.z + P.vz * DT);
     P.vx *= 0.86; P.vz *= 0.86;
-    if (P.hitT <= 0) P.st = 'idle';
+    if (P.hitT <= 0) {
+      P.st = 'idle';
+      if (P.queued && P.sword) { P.queued = false; startAttack(1); }
+    }
     return;
   }
   if (P.st === 'atk') {

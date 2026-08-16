@@ -2578,19 +2578,19 @@ async function suiteWalls(base) {
     await api.eval('__fmDebug.warp(30, 150)');    // player inside → culling follows
     const interior = [
       // [tag, cx, cz, eyeY, lookR, azimuths]
-      ['grotto-A', 30, 150, -1.4, 9, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)
+      ['grotto-A', 30, 150, 2.35, 9, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)
         .filter(a => {
           const d = ((a - 4.712 + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-          return Math.abs(d) > 0.85;         // skip the daylight mouth sector
+          return Math.abs(d) > 1.2;          // skip the daylight mouth sector (v8: taller door, wider FOV graze)
         })],
-      ['grotto-B', 62, 166, -1.4, 8, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)],
-      ['corridor', 47, 158.5, -1.4, 5, [0.46, 0.46 + Math.PI / 2, 0.46 + Math.PI, 0.46 + Math.PI * 1.5]],
+      ['grotto-B', 62, 166, 2.35, 8, Array.from({ length: 12 }, (_, i) => i / 12 * Math.PI * 2)],
+      ['corridor', 47, 158.5, 2.35, 5, [0.46, 0.46 + Math.PI / 2, 0.46 + Math.PI, 0.46 + Math.PI * 1.5]],
     ];
     for (const [tag, cx, cz, eyeY, lookR, azs] of interior) {
       if (tag === 'grotto-B' || tag === 'corridor') await api.eval(`__fmDebug.warp(${tag === 'corridor' ? '47, 158.5' : '62, 166'})`);
       let worst = 0, worstAt = '';
       for (const a of azs) {
-        for (const [ptag, ly] of [['level', 0.6], ['up', 5.2]]) {
+        for (const [ptag, ly] of [['level', 4.35], ['up', 8.95]]) {
           const lx = cx + Math.cos(a) * lookR, lz = cz + Math.sin(a) * lookR;
           await api.eval(`__fmDebug.cam(${cx}, ${eyeY}, ${cz}, ${lx.toFixed(1)}, ${ly}, ${lz.toFixed(1)}); 0`);
           await sleep(90);
@@ -2921,6 +2921,89 @@ const FOREST_SAVE = {
   compassSeen: true, forestSeen: true, swelterSeen: false,
   region: 'bay', lastSpring: -1, lastShade: [60, 20],
 };
+/* ═══ the TREE-STUN trial rig ═══
+   v8.1: the old gate turned the kid-bot loose at the treeline and hoped a
+   sidestepped rush would happen to end in a trunk — it passed some runs and
+   failed others. Nothing about the MECHANIC was flaky; the trial geometry was.
+   This stages it the way the v4 claw-race was pinned: one named boar, one
+   named hash-grid pine, and a lane through that pine whose only obstacle IS
+   that pine. The state machine then runs for real — graze → alert → paw →
+   charge → trunk — and the gate asserts the stun happened AND that the boar's
+   snout is on the pine (not on a prop or a solid). */
+const STUN_STAGE = `(function(){
+  window.__stageStun = function(){
+    /* 1. THE PINE — the same glade-edge trunk the suite already resolves */
+    const c = { x: 900, z: 560 };
+    let T = null;
+    for (let ix = Math.floor((c.x - 45) / 9); ix <= Math.floor((c.x + 45) / 9); ix++)
+      for (let iz = Math.floor((c.z - 45) / 9); iz <= Math.floor((c.z + 45) / 9); iz++) {
+        const t = treeInfo(ix, iz); if (!t) continue;
+        const d = Math.hypot(t.x - c.x, t.z - c.z);
+        if (d > 26 && d < 40 && (!T || d < T.d)) T = { x: t.x, z: t.z, r: t.r, d };
+      }
+    if (!T) return { ok: false, why: 'no glade-edge pine' };
+    /* 2. THE LANE — boar behind the pine, player beyond it, nothing else on it */
+    const DB = 6.0, DP = 4.5;
+    const clearRun = (ax, az, bx, bz) => {
+      for (let i = 0; i <= 24; i++) {
+        const t = i / 24, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+        if (Math.hypot(x - T.x, z - T.z) < T.r + 1.3) continue;   // the pine is the target
+        if (treeTrunkAt(x, z, 0.55) || chargeProp(x, z) || window.__forestSolid(x, z)) return false;
+      }
+      return true;
+    };
+    let lane = null;
+    for (let a = 0; a < 72 && !lane; a++) {
+      const ang = a / 72 * Math.PI * 2;
+      const ux = Math.cos(ang), uz = Math.sin(ang);
+      const bx = T.x - ux * DB, bz = T.z - uz * DB, px = T.x + ux * DP, pz = T.z + uz * DP;
+      if (window.__forestSolid(bx, bz) || window.__forestSolid(px, pz)) continue;
+      if (treeTrunkAt(bx, bz, 0.9) || treeTrunkAt(px, pz, 0.9)) continue;
+      if (!clearRun(bx, bz, px, pz)) continue;
+      lane = { ang, ux, uz, bx, bz, px, pz };
+    }
+    if (!lane) return { ok: false, why: 'no clear lane through the pine' };
+    /* 3. THE CAST — one boar on the lane; every other boar parked and calmed
+       so it can neither wander into the lane nor supply a false stun */
+    const k = 0, b = BOARS[k];
+    for (let i = 0; i < BOARS.length; i++) {
+      if (i === k) continue;
+      const o = BOARS[i];
+      o.st = 'graze'; o.t = 0; o.cd = 1e9; o.x = o.sx; o.z = o.sz;
+    }
+    b.dead = false; b.cured = false; b.hp = 3; b.flash = 0; b.cd = 0; b.jumpCredit = false;
+    b.hitDone = false;
+    b.x = b.sx = lane.bx; b.z = b.sz = lane.bz;
+    b.ang = Math.atan2(lane.ux, lane.uz);
+    b.st = 'graze'; b.t = 0;                 // the REAL machine takes it from here
+    /* 4. THE PLAYER — on the far side of the pine, in the boar's sight line */
+    __fmDebug.warp(lane.px, lane.pz);
+    P.hearts = P.maxHearts; swelterT = 0;
+    window.__stunTrial = { T, lane, k };
+    /* 5. THE WATCHER — this boar only, with the proof of WHAT stopped it */
+    window.__stunProof = null;
+    (function w() {
+      if (window.__stunProof) return;
+      const bb = BOARS[k];
+      if (bb.st === 'stun') {
+        const hx = bb.x + Math.sin(bb.ang) * 1.05, hz = bb.z + Math.cos(bb.ang) * 1.05;
+        const dT = Math.hypot(hx - T.x, hz - T.z);
+        window.__stunProof = {
+          stunned: true, headToTrunk: +dT.toFixed(2), trunkR: +T.r.toFixed(2),
+          onTrunk: dT < T.r + 0.6, prop: !!chargeProp(hx, hz),
+          bx: +bb.x.toFixed(2), bz: +bb.z.toFixed(2),
+        };
+        return;
+      }
+      requestAnimationFrame(w);
+    })();
+    return { ok: true, trunk: { x: +T.x.toFixed(2), z: +T.z.toFixed(2), r: +T.r.toFixed(2) },
+      boar: { x: +lane.bx.toFixed(2), z: +lane.bz.toFixed(2) },
+      player: { x: +lane.px.toFixed(2), z: +lane.pz.toFixed(2) },
+      laneDeg: +(lane.ang * 180 / Math.PI).toFixed(1) };
+  };
+})();`;
+
 const RIVER_WAY = [
   [235, 55], [380, 110], [500, 270], [650, 380], [820, 300], [980, 380],
   [1080, 560], [1220, 660], [1340, 560], [1480, 660], [1580, 840],
@@ -3095,16 +3178,37 @@ async function suiteForest(base) {
       await api.botRelease();
       g('kid-bot CURES a boar in 3 hits (it trots away)', true,
         'cured=' + await api.eval('__fm.boarsCured'));
+      await api.eval('window.__stunSeen = undefined');   // stop the loose watcher
       if (mode === 'pad') {
-        if (!(await api.eval('window.__stunSeen'))) {
-          // keep fighting until a rush ends in a trunk
-          await api.eval('__fmDebug.warp(915, 552)');
-          await api.bot({ forest: true });
-          await api.waitFor('window.__stunSeen === true', 120000, 'tree stun').catch(() => {});
-          await api.botRelease();
+        /* THE TREE-STUN TRIAL — staged, not hoped for. One named boar, one
+           named pine, a lane whose only obstacle is that pine; the boar's own
+           state machine does the rest and a REAL sidestep clears the line. */
+        await api.eval('window.__fmTurbo = 2');
+        await api.eval(STUN_STAGE);
+        const stage = await api.eval('__stageStun()');
+        g('tree-stun trial staged (boar → pine → player, lane clear)', !!stage && stage.ok,
+          JSON.stringify(stage));
+        if (stage && stage.ok) {
+          const spump = setInterval(() => { api.eval('P.hearts = P.maxHearts; swelterT = 0; 0').catch(() => {}); }, 3000);
+          try {
+            await api.waitFor(`BOARS[__stunTrial.k].st === 'paw'`, 30000, 'staged boar paws');
+            await api.waitFor(`BOARS[__stunTrial.k].st === 'charge'`, 20000, 'staged boar charges');
+            // REAL input: the bot drives pad-0 sideways out of the locked rush
+            await api.eval(`__fmBot.tol = 0.5; __fmBot.target =
+              [__stunTrial.lane.px - __stunTrial.lane.uz * 5,
+               __stunTrial.lane.pz + __stunTrial.lane.ux * 5]`);
+            await api.waitFor('!!window.__stunProof', 20000, 'the pine stops the charge');
+            await api.eval('__fmBot.target = null');
+          } catch (e) { /* the assertions below report it */ }
+          finally { clearInterval(spump); await api.eval('__fmBot.target = null').catch(() => {}); }
         }
-        g('charge into a tree STUNS the boar', await api.eval('window.__stunSeen === true'));
-        await api.eval('window.__stunSeen = undefined');
+        const proof = await api.eval('window.__stunProof');
+        g('charge into a tree STUNS the boar', !!proof && proof.stunned === true,
+          JSON.stringify(proof));
+        g('the stun came from the PINE (snout on the trunk, no prop)',
+          !!proof && proof.onTrunk === true && proof.prop === false,
+          JSON.stringify(proof));
+        await api.eval('window.__stunProof = { done: 1 }');   // stop the watcher
       }
 
       /* ── 8. EMBER HORNETS: they dive in pairs, they pop ── */
@@ -3296,6 +3400,17 @@ async function suiteForestPerf(base) {
       await sleep(2600);
       await api.eval('__fakePad.press()');
       await api.eval('__fmBot.target=null');
+      /* v8.1: the free orbit is stick-speed dependent, so it can skate past a
+         bad azimuth between samples — the hollow's worst frame hid there.
+         Park the camera at 12 discrete azimuths × 2 pitches and hold each one
+         long enough to render, on foot and standing still. */
+      for (let a = 0; a < 12; a++) {
+        const yaw = (a / 12) * TAU2 - Math.PI;
+        for (const pitch of [-0.05, 0.34]) {
+          await api.eval(`__fmDebug.camYaw(${yaw.toFixed(4)}); __fmDebug.camPitch(${pitch}); 0`);
+          await sleep(180);
+        }
+      }
       const p = await api.perfRead();
       gate(`fperf ${tag}: draw calls ≤ 80`, p.calls <= 80, 'max ' + p.calls + ' @ ' + p.at);
       gate(`fperf ${tag}: triangles ≤ 120k`, p.tris <= 120000, 'max ' + p.tris);
@@ -3679,6 +3794,7 @@ try {
   for (const [x, z] of pts) {
     ptIdx++;
     if (isForest(x, z) ? window.__forestSolid(x, z) : worldSolidAt(x, z)) continue;
+    if (window.__hollowAt && window.__hollowAt(x, z)) continue;   // the Falls Hollow has its own sweep
     if (typeof roomAt === 'function' && roomAt(x, z)) continue;
     __fmDebug.warp(x, z);
     P.hearts = P.maxHearts; swelterT = 0; P.iframes = 300;
@@ -4055,11 +4171,15 @@ async function suiteDmgVis(base) {
       }
       const H = FCLUSTERS.find(q => q.id === 'hollow'), F = FCLUSTERS.find(q => q.id === 'ferry');
       for (const h of HORNETS) {
-        if (Math.hypot(h.sx - H.x, h.sz - H.z) < H.r + 14 || Math.hypot(h.sx - F.x, h.sz - F.z) < F.r + 14) out.hornetHomes++;
+        if (h.area === 'hollow') {
+          // the Falls Hollow nests: gallery + vault
+          if (Math.hypot(h.sx - 1978, h.sz - 1243) < 12 || Math.hypot(h.sx - 2018, h.sz - 1265) < 12) out.hornetHomes++;
+        } else if (Math.hypot(h.sx - H.x, h.sz - H.z) < H.r + 14 || Math.hypot(h.sx - F.x, h.sz - F.z) < F.r + 14) out.hornetHomes++;
       }
       return out; })()`);
     gate('creatures: 6 boars spawned, all homed to their glades', census.boars === 6 && census.boarHomes === 6, JSON.stringify(census));
-    gate('creatures: 6 hornets spawned at hollow + ferry', census.hornets === 6 && census.hornetHomes === 6);
+    gate('creatures: 10 hornets spawned — forest hollow + ferry + the Falls Hollow nests',
+      census.hornets === 10 && census.hornetHomes === 10, JSON.stringify({ h: census.hornets, homes: census.hornetHomes }));
     gate('creatures: pass on-ramp crabs + imps present', census.passCrabs === 2 && census.passImps === 3);
     // they PATROL (graze/drift movement over real time)
     const m0 = await api.eval('BOARS.map(b => [b.x, b.z]).flat().concat(HORNETS.map(h => [h.x, h.z]).flat())');
@@ -4131,6 +4251,1170 @@ async function suiteDmgVis(base) {
   c.close(); proc.kill();
 }
 
+/* ═══════════════════ PHASE 2 NIGHT TWO SUITES ═══════════════════
+   The Falls Hollow, the Silt Wyrm, the Tide's Return, Sailing v1. */
+
+const FAMILY_Q4 = JSON.parse(fs.readFileSync(path.join(DIR, 'test', 'fixtures', 'family-q4-save.json'), 'utf8'));
+const N2_HOLLOW_OPEN = { ...FAMILY_Q4, basinOpen: true, lastShade: [1908, 1170] };
+const N2_WYRM_READY = { ...FAMILY_Q4, basinOpen: true, glyph1: true, glyph2: true, lastShade: [1958, 1216] };
+const N2_CARRY = { ...FAMILY_Q4, basinOpen: true, glyph1: true, glyph2: true, wyrmDone: true, q: 5, lastShade: [1921, 1176] };
+const N2_FLOODED = {
+  ...FAMILY_Q4, basinOpen: true, glyph1: true, glyph2: true, wyrmDone: true,
+  q: 6, ph: 2, sky: 2, floodSeen: true, voyageDone: true, sailedOnce: true,
+  region: 'bay', lastShade: [4, -2],
+};
+
+/* exposed-forest walks: top hearts + reset swelter first (CDP time is slow
+   real time — the sun must not sunstruck the harness mid-journey) */
+async function n2Walk(api, x, z, tol, timeout) {
+  await api.eval('P.hearts = P.maxHearts; if (typeof swelterT !== "undefined") swelterT = 0; 0');
+  await api.walkTo(x, z, tol, timeout);
+}
+async function n2ContinueIn(api, turbo = 6) {
+  await api.waitFor(`__fm.state === 'title'`, 30000, 'title');
+  await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+  await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+  await api.waitFor(`__fm.state === 'play'`, 30000, 'playing');
+  await api.waitTicks(20);
+}
+
+/* ═══ THE FALLS HOLLOW: seal → resonance → descent → puzzles → Ben bait ═══ */
+async function suiteHollow(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  try {
+    /* ── the family q4 save continues SEAMLESSLY into all of this ── */
+    await api.seedSave(FAMILY_Q4);
+    await api.nav(base + '/?turbo=8');
+    await n2ContinueIn(api);
+    gate('hollow: family q4 fixture continues seamlessly',
+      (await api.eval('__fm.quest')) === 4 && (await api.eval('__fm.skyStep')) === 1 &&
+      (await api.eval('__fm.maxHearts')) === 8 && (await api.eval('__fm.tidepool')) === true,
+      `q=${await api.eval('__fm.quest')} sky=${await api.eval('__fm.skyStep')}`);
+    gate('hollow: q4 compass pulls toward the falls (the open-loop thread)',
+      (await api.eval('__fm.objDist')) !== null);
+    await api.installBot('pad');
+    const D = driver(api, 'pad');
+
+    /* ── pre-q2 saves still see the falls SEALED ── */
+    await api.seedSave({ ...FOREST_SAVE, q: 0, finnHeart: false, lastShade: [1908, 1170] });
+    await api.nav(base + '/?turbo=8');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    await api.eval('__fmDebug.warp(1908, 1170)');
+    await api.waitTicks(300);
+    gate('hollow: pre-q2 save — basin stays SEALED (no resonance, solid rock)',
+      (await api.eval('__fm.basinOpen')) === false &&
+      (await api.eval('window.__forestSolid(1938, 1192)')) === true &&
+      (await api.eval(`__fm.state === 'play'`)));
+
+    /* ── q4 approach: the moon compass resonates the stones apart ── */
+    await api.seedSave(FAMILY_Q4);
+    await api.nav(base + '/?turbo=8');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    await api.eval('__fmDebug.warp(1902, 1164)');
+    await api.eval('P.hearts = P.maxHearts; swelterT = 0; 0');
+    await n2Walk(api, 1912, 1172, 1.6, 20000).catch(() => {});   // the beat may interrupt the walk
+    if (!(await api.eval('__fm.basinOpen'))) {
+      // belt and braces: stand at the hum spot itself
+      await api.eval('__fmDebug.warp(1912, 1172)');
+    }
+    await api.waitFor(`__fm.basinOpen === true`, 25000, 'the stones part');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'beat ends');
+    gate('hollow: resonance beat fires at the forecourt with q≥2 and OPENS the basin',
+      (await api.eval('window.__forestSolid(1931, 1186)')) === false &&
+      (await api.eval('window.__forestSolid(1938, 1192)')) === false);
+
+    /* ── reachability: the corridors are the ONLY path; doors gate the descent ── */
+    const fill = await api.eval(`(function(){
+      const seen = new Set(), q = [[1955, 1212]];
+      const key = (x, z) => (x | 0) + ':' + (z | 0);
+      let reachH1 = false, reachH3 = false, n = 0;
+      while (q.length && n < 60000) {
+        const [x, z] = q.pop(); n++;
+        const k = key(x, z);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (x < 1918 || x > 2078 || z < 1180 || z > 1338) continue;
+        if (window.__forestSolid(x, z)) continue;
+        if (Math.hypot(x - 1972, z - 1236) < 3) reachH1 = true;
+        if (Math.hypot(x - 2046, z - 1306) < 3) reachH3 = true;
+        q.push([x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]);
+      }
+      return { reachH1, reachH3, n };
+    })()`);
+    gate('hollow: flood-fill — gallery reachable, the LAST BASIN sealed behind both glyph doors',
+      fill.reachH1 === true && fill.reachH3 === false, JSON.stringify(fill));
+
+    /* ── the walked descent: basin mouth → throat → gallery ── */
+    await n2Walk(api, 1922, 1178, 1.6, 30000);
+    await n2Walk(api, 1934, 1189, 1.6, 30000);
+    await n2Walk(api, 1948, 1203, 1.6, 30000);
+    await n2Walk(api, 1958, 1216, 1.4, 30000);
+    await n2Walk(api, 1968, 1230, 1.4, 30000);
+    gate('hollow: walked the throat into the gallery (region reads, all shade)',
+      (await api.eval('__fm.inHollow')) === true && (await api.eval('__fm.shade')) === true &&
+      (await api.eval('__fm.swelterOn')) === false);
+
+    /* ── hornet nest one: a real fight ── */
+    const pops0 = await api.eval('__fm.hornetsPopped');
+    await api.walkTo(1974, 1240, 2.0, 30000);
+    for (let i = 0; i < 70; i++) {
+      await api.eval('P.hearts = P.maxHearts; 0');
+      if ((await api.eval('__fm.hornetsPopped')) >= pops0 + 2 ||
+          (await api.eval('__fm.nearHornetDist')) > 60) break;
+      const hd = await api.eval('__fm.nearHornetDist');
+      if (hd < 2.6) {
+        await api.eval('__fmDebug.face(Math.atan2(__fm.nearHornetX - __fm.x, __fm.nearHornetZ - __fm.z))');
+        await D.confirm();
+      } else {
+        const hx = await api.eval('__fm.nearHornetX'), hz = await api.eval('__fm.nearHornetZ');
+        if (hd < 90) await api.walkTo(hx, hz, 1.6, 9000).catch(() => {});
+      }
+      await sleep(300);
+    }
+    gate('hollow: gallery hornet nest — the pair dives, real swings pop them',
+      (await api.eval('__fm.hornetsPopped')) >= pops0 + 2,
+      'popped=' + ((await api.eval('__fm.hornetsPopped')) - pops0));
+
+    /* ── puzzle one: light through the dry channel (held rotate, real input) ── */
+    await api.eval('window.__fmTurbo = 2');
+    for (let tries = 0; tries < 5 && !(await api.eval('__fm.glyph1')); tries++) {
+      await api.eval('P.hearts = P.maxHearts; 0');
+      await api.walkTo(1969.6, 1232.2, 0.8, 30000).catch(() => {});
+      if ((await api.eval('__fm.prompt')) !== 'hmirror1') continue;
+      await D.holdAtk(true);
+      await api.waitFor('Math.abs(__fm.hm1Delta) < 0.35 || __fm.pst === "hit"', 30000, 'shell near the mark').catch(() => {});
+      await D.holdAtk(false);
+      await api.waitFor('__fm.glyph1 === true', 12000, 'glyph one re-lights').catch(() => {});
+    }
+    await api.waitFor('__fm.glyph1 === true', 8000, 'glyph one re-lights');
+    await api.eval('window.__fmTurbo = undefined');
+    gate('hollow: puzzle one — held rotate re-lights the water-glyph, door sinks',
+      (await api.eval('window.__forestSolid(1992, 1253)')) === false);
+    await api.walkTo(1992, 1253, 1.4, 30000);
+    await api.walkTo(2004, 1262, 1.6, 30000);
+    await api.walkTo(2012, 1270, 2.0, 30000);
+    gate('hollow: walked THROUGH the opened door into the Chandelier Vault', true);
+
+    /* ── nest two + puzzle two (the language, grown up: shell → relay → glyph) ── */
+    const pops1 = await api.eval('__fm.hornetsPopped');
+    for (let i = 0; i < 70; i++) {
+      await api.eval('P.hearts = P.maxHearts; 0');
+      if ((await api.eval('__fm.hornetsPopped')) >= pops1 + 2 ||
+          (await api.eval('__fm.nearHornetDist')) > 60) break;
+      const hd = await api.eval('__fm.nearHornetDist');
+      if (hd < 2.6) {
+        await api.eval('__fmDebug.face(Math.atan2(__fm.nearHornetX - __fm.x, __fm.nearHornetZ - __fm.z))');
+        await D.confirm();
+      } else {
+        const hx = await api.eval('__fm.nearHornetX'), hz = await api.eval('__fm.nearHornetZ');
+        if (hd < 90) await api.walkTo(hx, hz, 1.6, 9000).catch(() => {});
+      }
+      await sleep(300);
+    }
+    gate('hollow: vault hornets popped', (await api.eval('__fm.hornetsPopped')) >= pops1 + 2,
+      'popped=' + ((await api.eval('__fm.hornetsPopped')) - pops1));
+    await api.eval('window.__fmTurbo = 2');
+    for (let tries = 0; tries < 5 && !(await api.eval('__fm.glyph2')); tries++) {
+      await api.eval('P.hearts = P.maxHearts; 0');
+      await api.walkTo(2009.6, 1266.2, 0.8, 30000).catch(() => {});
+      if ((await api.eval('__fm.prompt')) !== 'hmirror2') continue;
+      await D.holdAtk(true);
+      await api.waitFor('Math.abs(__fm.hm2Delta) < 0.35 || __fm.pst === "hit"', 30000, 'shell two near the mark').catch(() => {});
+      await D.holdAtk(false);
+      await api.waitFor('__fm.glyph2 === true', 12000, 'glyph two re-lights').catch(() => {});
+    }
+    await api.waitFor('__fm.glyph2 === true', 8000, 'glyph two re-lights');
+    await api.eval('window.__fmTurbo = undefined');
+    gate('hollow: puzzle two — the relayed beam opens the last door',
+      (await api.eval('window.__forestSolid(2029, 1287.5)')) === false);
+
+    /* ── the Ben-bait side chamber: fossil, hoard chest, salt ── */
+    const salt0 = await api.eval('__fm.salt');
+    await api.walkTo(2003, 1277, 1.4, 30000);
+    await api.walkTo(1996, 1283, 1.4, 30000);
+    await api.walkTo(1990.8, 1287.6, 1.0, 30000);
+    await api.waitFor(`__fm.prompt === 'fossil'`, 10000, 'fossil prompt');
+    await D.confirm();
+    await api.waitFor(`__fm.hFossil === true`, 12000, 'fossil seen');
+    await api.waitFor(`__fm.state === 'play'`, 12000, 'micro beat done');
+    gate('hollow: the moonfish fossil (Ben bait) — looked at, remembered', true);
+    await api.walkTo(1992.6, 1285.4, 1.1, 30000);
+    await tapUntil(api, () => D.confirm(), '__fm.hChest === true', 10, 'hoard chest');
+    await api.waitTicks(120);
+    gate('hollow: the salt hoard chest pays out',
+      (await api.eval('__fm.salt')) >= salt0 + 6, `salt ${salt0} → ${await api.eval('__fm.salt')}`);
+
+    /* ── ground authority: rendered floor == physics, walked wall fuzz ── */
+    const ga = await api.eval(`(function(){
+      const rc = new THREE.Raycaster();
+      const V = THREE.Vector3;
+      let pts = 0, worst = 0, fails = 0, encl = 0;
+      const fv = __farTiles.filter(t => t.mesh.visible).map(t => t.mesh);
+      for (let x = 1932; x < 2076; x += 2) {
+        for (let z = 1188; z < 1336; z += 2) {
+          if (window.__forestSolid(x, z)) continue;
+          if (!inHollowAt(x, z)) continue;
+          pts++;
+          const gy = groundH(x, z);
+          rc.set(new V(x, gy + 2.2, z), new V(0, -1, 0));
+          const hits = rc.intersectObject(hollowFloorMesh, false);
+          if (!hits.length) { fails++; continue; }
+          const dh = Math.abs((gy + 2.2 - hits[0].distance) - gy);
+          if (dh > worst) worst = dh;
+          if (dh > 0.05) fails++;
+          rc.set(new V(x, gy + 0.3, z), new V(0, 1, 0));
+          if (fv.length && rc.intersectObjects(fv, false).length) encl++;
+        }
+      }
+      return { pts, worst: +worst.toFixed(4), fails, encl };
+    })()`);
+    gate('hollow: dense grid — rendered floor IS the physics floor (<0.05 m)',
+      ga.pts > 600 && ga.fails === 0, JSON.stringify(ga));
+    gate('hollow: never enclosed by far-tier geometry', ga.encl === 0, 'encl=' + ga.encl);
+    /* walked wall fuzz: shove outward on 8 headings in each chamber */
+    let fuzzBad = 0;
+    for (const [fx, fz] of [[1972, 1236], [2012, 1270], [1994, 1284], [1958, 1216]]) {
+      await api.eval(`__fmDebug.warp(${fx}, ${fz})`);
+      for (let hIdx = 0; hIdx < 8; hIdx++) {
+        const a = hIdx / 8 * Math.PI * 2;
+        await api.eval(`__fakePad.axes(${Math.cos(a).toFixed(3)}, ${Math.sin(a).toFixed(3)})`);
+        await api.press(1);           // sprint into the wall
+        await api.waitTicks(100);
+        const solidHere = await api.eval('__fm.fSolidHere');
+        const still = await api.eval('__fm.inHollow');
+        if (solidHere || !still) fuzzBad++;
+        await api.eval(`__fmDebug.warp(${fx}, ${fz})`);
+      }
+      await api.press(); await api.axes(0, 0);
+    }
+    gate('hollow: sprint wall-fuzz — zero penetrations, never out of the open region', fuzzBad === 0, 'bad=' + fuzzBad);
+
+    gate('hollow: family quest state undisturbed by the descent', (await api.eval('__fm.quest')) === 4);
+    const bad = api.consoleBad;
+    gate('hollow: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('hollow suite', false, e.message);
+    await api.shot('hollow-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+
+  /* ── keyboard-only: the descent + puzzle one, real J-held rotate ── */
+  {
+    const { proc: p2, port: pt2 } = await launchChrome();
+    const c2 = await pageSession(pt2);
+    const api2 = makeApi(c2);
+    await api2.init(); await api2.stubPad();
+    try {
+      await api2.seedSave(N2_HOLLOW_OPEN);
+      await api2.nav(base + '/?turbo=8');
+      await api2.waitFor(`__fm.state === 'title'`, 30000, 'title');
+      await api2.tapKey('s', 'KeyS');
+      await api2.waitFor('__fm.titleFocus === 1', 8000, 'focus CONTINUE (kbd)');
+      await api2.tapKey('j', 'KeyJ');
+      await api2.waitFor(`__fm.state === 'play'`, 30000, 'playing (kbd)');
+      await api2.installBot('kbd');
+      const D2 = driver(api2, 'kbd');
+      await api2.eval('__fmDebug.warp(1926, 1181)');
+      await n2Walk(api2, 1948, 1203, 1.8, 40000);
+      await n2Walk(api2, 1962, 1221, 1.6, 40000);
+      /* clear the gallery pair first — held-rotate needs a quiet chamber */
+      await n2Walk(api2, 1974, 1240, 2.0, 40000).catch(() => {});
+      for (let i = 0; i < 60; i++) {
+        await api2.eval('P.hearts = P.maxHearts; 0');
+        const hd2 = await api2.eval('__fm.nearHornetDist');
+        if (hd2 > 60) break;
+        if (hd2 < 2.6) {
+          await api2.eval('__fmDebug.face(Math.atan2(__fm.nearHornetX - __fm.x, __fm.nearHornetZ - __fm.z))');
+          await D2.confirm();
+        } else {
+          const hx2 = await api2.eval('__fm.nearHornetX'), hz2 = await api2.eval('__fm.nearHornetZ');
+          await api2.walkTo(hx2, hz2, 1.6, 9000).catch(() => {});
+        }
+        await sleep(300);
+      }
+      await n2Walk(api2, 1969.6, 1232.2, 0.8, 40000);
+      await api2.eval('window.__fmTurbo = 2');
+      for (let tries = 0; tries < 5 && !(await api2.eval('__fm.glyph1')); tries++) {
+        await api2.eval('P.hearts = P.maxHearts; 0');
+        await api2.walkTo(1969.6, 1232.2, 0.8, 30000).catch(() => {});
+        if ((await api2.eval('__fm.prompt')) !== 'hmirror1') continue;
+        await D2.holdAtk(true);
+        await api2.waitFor('Math.abs(__fm.hm1Delta) < 0.35 || __fm.pst === "hit"', 30000, 'held J rotates the shell').catch(() => {});
+        await D2.holdAtk(false);
+        await api2.waitFor('__fm.glyph1 === true', 12000, 'glyph via keyboard').catch(() => {});
+      }
+      await api2.waitFor('__fm.glyph1 === true', 8000, 'glyph via keyboard');
+      await api2.eval('window.__fmTurbo = undefined');
+      gate('hollow(kbd): descent walked + puzzle solved keyboard-only', true);
+      const bad2 = api2.consoleBad;
+      gate('hollow(kbd): zero console errors', bad2.length === 0, bad2.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('hollow(kbd) suite', false, e.message);
+      await api2.shot('hollow-kbd-FAIL').catch(() => {});
+    }
+    c2.close(); p2.kill();
+  }
+}
+
+/* ═══ THE SILT WYRM: wake, the wake-contract, kid-bot, slabs, the cure ═══ */
+async function suiteWyrm(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  try {
+    await api.seedSave(N2_WYRM_READY);
+    await api.nav(base + '/?turbo=8');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    const D = driver(api, 'pad');
+    /* the invariant monitor: if it can strike from under the silt, its wake
+       is ON SCREEN (no-invisible-damage) */
+    await api.eval(`window.__wakeViol = 0; window.__wakeChecks = 0;(function m(){
+      if (window.__wakeViol === undefined) return;
+      const T = __fm;
+      if (T.state === 'play' && T.wyrmActive && T.wyrmSt === 'swim' &&
+          Math.hypot(T.wyrmX - T.x, T.wyrmZ - T.z) < 4.5) {
+        window.__wakeChecks++;
+        if (!T.wyrmWakeVis) window.__wakeViol++;
+      }
+      requestAnimationFrame(m); })()`);
+    await api.eval('__fmDebug.warp(2035, 1294)');
+    await api.walkTo(2044, 1303, 2.2, 30000);
+    await api.waitFor('__fm.wyrmActive === true', 15000, 'the Wyrm wakes');
+    gate('wyrm: proximity ALWAYS wakes the guardian', true);
+    gate('wyrm: HP bar up with its name', await api.eval(
+      `document.getElementById('bossBar').classList.contains('on') && document.getElementById('bossName').textContent === 'THE SILT WYRM'`));
+
+    /* KID BOT: only ever slashes whatever is near — body chips must win */
+    const phasesSeen = new Set();
+    const phaseHp = {};
+    let cureStart = 0;
+    for (let i = 0; i < 400; i++) {
+      const st = await api.eval('__fm.state');
+      if (st === 'cine') { cureStart = await api.eval('__fm.tick'); break; }
+      const ph = await api.eval('__fm.wyrmPhase');
+      phasesSeen.add(ph);
+      const hp = await api.eval('__fm.wyrmHp');
+      if (!(ph in phaseHp)) phaseHp[ph] = { max: hp, min: hp };
+      phaseHp[ph].min = Math.min(phaseHp[ph].min, hp);
+      const wx = await api.eval('__fm.wyrmX'), wz = await api.eval('__fm.wyrmZ');
+      const d = Math.hypot((await api.eval('__fm.x')) - wx, (await api.eval('__fm.z')) - wz);
+      if (d > 2.6) await api.walkTo(wx, wz, 2.2, 5000).catch(() => {});
+      await D.confirm();
+      await D.confirm();
+      await api.eval('P.hearts = P.maxHearts; 0');   // the kid-fair stand-in: shade heals anyway
+      await sleep(180);
+    }
+    gate('wyrm: kid-bot walked it through ALL THREE phases',
+      phasesSeen.has(1) && phasesSeen.has(2) && phasesSeen.has(3), [...phasesSeen].join(','));
+    gate('wyrm: damage landed in every phase (chips are real)',
+      Object.entries(phaseHp).every(([p, v]) => p === '0' || v.min < v.max),
+      JSON.stringify(phaseHp));
+    gate('wyrm: body chips carried the fight', (await api.eval('__fm.wyrmBody')) > 12,
+      'body=' + await api.eval('__fm.wyrmBody') + ' brow=' + await api.eval('__fm.wyrmBrow'));
+    gate('wyrm: the wake contract held — visible whenever it hunted in range',
+      (await api.eval('window.__wakeViol')) === 0,
+      `viol=${await api.eval('window.__wakeViol')}/${await api.eval('window.__wakeChecks')} checks`);
+
+    /* THE CURE: it dissolves into water, bows, leaves the Shield floating */
+    await api.eval('window.__fmTurbo = 2');
+    await api.waitFor(`__fm.state === 'play'`, 40000, 'cure cinematic ends');
+    await api.eval('window.__fmTurbo = undefined');
+    const cureTicks = (await api.eval('__fm.tick')) - cureStart;
+    gate('wyrm: cure cinematic ≤ 12 s and shows the water', cureTicks / 60 <= 12.8, (cureTicks / 60).toFixed(1) + 's');
+    gate('wyrm: the pool is WET and the Half Shield floats on it',
+      (await api.eval('__fm.poolWet')) === true && (await api.eval('__fm.wyrmDone')) === true);
+    await api.walkTo(2049.4, 1301.4, 1.0, 30000).catch(() => {});
+    await api.waitFor(`__fm.prompt === 'shield'`, 12000, 'shield prompt');
+    await D.confirm();
+    await api.waitFor('__fm.carryShield === true', 12000, 'the Shield is taken');
+    gate('wyrm: HALF SHIELD recovered → quest 5, carried home on the back',
+      (await api.eval('__fm.quest')) === 5);
+    /* the mural — deliberately ambiguous, and only now approachable calmly */
+    await api.walkTo(2056.4, 1310, 1.2, 30000);
+    await api.waitFor(`__fm.prompt === 'mural'`, 12000, 'mural prompt');
+    await D.confirm();
+    await api.waitFor('__fm.hMural === true', 12000, 'mural seen');
+    gate('wyrm: the chain mural — seen, unanswered', true);
+    const bad = api.consoleBad;
+    gate('wyrm: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('wyrm suite', false, e.message);
+    await api.shot('wyrm-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+
+  /* ── the SLAB-DODGE bot: terrain reading beats the swim ── */
+  {
+    const { proc: p2, port: pt2 } = await launchChrome();
+    const c2 = await pageSession(pt2);
+    const api2 = makeApi(c2);
+    await api2.init(); await api2.stubPad();
+    try {
+      await api2.seedSave(N2_WYRM_READY);
+      await api2.nav(base + '/?turbo=8');
+      await n2ContinueIn(api2);
+      await api2.installBot('pad');
+      const D2 = driver(api2, 'pad');
+      /* sunstruck FIRST (the probe-verified sequence): pinned hearts on the
+         silt, the eruption lands, the checkpoint carries the phase */
+      await api2.eval('__fmDebug.warp(2046, 1306)');
+      await api2.waitFor('__fm.wyrmActive === true', 15000, 'wyrm wakes');
+      for (let i = 0; i < 200 && (await api2.eval('__fm.sunstruck')) < 1; i++) {
+        await api2.eval(`if (state === 'play' && P.hearts > 1) P.hearts = 1; 0`);
+        await sleep(250);
+      }
+      await api2.waitFor(`__fm.sunstruck >= 1`, 10000, 'sunstruck by the fight');
+      await api2.waitFor(`__fm.state === 'play'`, 25000, 'woke again');
+      const wakeX = await api2.eval('__fm.x'), wakeZ = await api2.eval('__fm.z');
+      gate('wyrm(slab): sunstruck wakes at the hollow anchor, everything kept',
+        Math.hypot(wakeX - 1958, wakeZ - 1216) < 8 && (await api2.eval('__fm.wyrmActive')) === false,
+        `woke at ${wakeX.toFixed(0)},${wakeZ.toFixed(0)}`);
+      const phBefore = await api2.eval('__fm.wyrmPhase');
+      await api2.eval('P.hearts = P.maxHearts; 0');
+      /* back in: re-arm, then STAND THE STONE */
+      await api2.eval('__fmDebug.warp(2036, 1295)');
+      await api2.walkTo(2040, 1298, 0.9, 30000);      // slab one, dead center
+      await api2.waitFor('__fm.wyrmActive === true', 15000, 'wyrm re-wakes (slab)');
+      gate('wyrm(slab): re-entry re-arms the SAME phase (checkpoint)',
+        (await api2.eval('__fm.wyrmPhase')) === phBefore,
+        `phase ${phBefore} → ${await api2.eval('__fm.wyrmPhase')}`);
+      await api2.waitFor(`__fm.onSlab === true`, 10000, 'standing the stone');
+      const hearts0 = await api2.eval('__fm.hearts');
+      // hold the stone through its hunting — it cannot swim through stone
+      await api2.waitFor(`__fm.wyrmSt === 'slamRock' || __fm.wyrmSt === 'daze'`, 60000, 'it strikes the stone');
+      gate('wyrm(slab): the swim breaks on the slab — it reels', true,
+        'st=' + await api2.eval('__fm.wyrmSt'));
+      gate('wyrm(slab): NOT ONE heart lost while standing the stone',
+        (await api2.eval('__fm.hearts')) === hearts0,
+        `${hearts0} → ${await api2.eval('__fm.hearts')}`);
+      // the daze window: hit the moonglass brow (real time — it lasts 2.9 s)
+      await api2.eval('window.__fmTurbo = 1');
+      await api2.waitFor(`__fm.wyrmSt === 'daze'`, 45000, 'daze window');
+      const wx = await api2.eval('__fm.wyrmX'), wz = await api2.eval('__fm.wyrmZ');
+      await api2.walkTo(wx, wz, 2.4, 15000).catch(() => {});
+      await api2.eval('__fmBot.target = null; 0');
+      for (let i = 0; i < 10 && (await api2.eval('__fm.wyrmBrow')) === 0; i++) {
+        await api2.eval('__fmDebug.face(Math.atan2(__fm.wyrmX - __fm.x, __fm.wyrmZ - __fm.z))');
+        await D2.confirm();
+        await sleep(220);
+      }
+      gate('wyrm(slab): brow-plate hit pays 6x through the daze',
+        (await api2.eval('__fm.wyrmBrow')) >= 1, 'brow=' + await api2.eval('__fm.wyrmBrow'));
+      await api2.eval('window.__fmTurbo = undefined');
+      const bad2 = api2.consoleBad;
+      gate('wyrm(slab): zero console errors', bad2.length === 0, bad2.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('wyrm slab suite', false, e.message);
+      await api2.shot('wyrm-slab-FAIL').catch(() => {});
+    }
+    c2.close(); p2.kill();
+  }
+}
+
+/* ═══ THE TIDE COMES HOME: carry-home, the seamless flood, the matrix ═══ */
+async function suiteFlood(base) {
+  let noInputHandoffTicks = -1;
+  /* S1 — the full beat, NO input: discovery path */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(N2_CARRY, true);   // later navs keep the LIVE save (matrix gates)
+      await api.nav(base + '/?turbo=10');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      const D = driver(api, 'pad');
+      gate('flood: q5 save carries the Shield (compass sings home)',
+        (await api.eval('__fm.carryShield')) === true &&
+        Math.abs((await api.eval('__fm.objDist')) - Math.hypot(1921 - (-38), 1176 - (-78))) < 400);
+      /* the carry-home journey: down the Silverrun, over the pass, up the hill */
+      const wps = [[1900, 1160], [1800, 1050], [1700, 930], [1580, 840], [1480, 660], [1340, 560],
+        [1220, 660], [1080, 560], [980, 380], [820, 300], [650, 380], [500, 270], [380, 110],
+        [235, 55], [160, 38], [90, 30], [30, -10], [-10, -34], [-30, -60], [-36, -72]];
+      for (const [x, z] of wps) await n2Walk(api, x, z, 3.2, 120000);
+      gate('flood: the Half Shield walked HOME — basin to Moonwheel, real input', true);
+      for (let tries = 0; tries < 6 && (await api.eval('__fm.prompt')) !== 'wheel2'; tries++) {
+        await api.waitFor(`__fm.state === 'play'`, 30000, 'control back (wheel)').catch(() => {});
+        await api.eval('P.hearts = P.maxHearts; 0');
+        await api.walkTo(-37, -74.5, 1.4, 30000).catch(() => {});
+        await sleep(400);
+      }
+      await api.waitFor(`__fm.prompt === 'wheel2'`, 12000, 'PLACE THE HALF SHIELD');
+      /* sky sample BEFORE */
+      await api.eval('window.__fmTurbo = 1');
+      await sleep(300);
+      const shot0 = await api.shot('flood-sky-before');
+      /* continuity monitor at REAL time (per-frame camera step) */
+      await api.axes(0, 0);
+      await sleep(300);
+      await api.eval(
+        `window.__pearlCap = false;(function m(){ if (window.__pearlCap === true) return;
+        const c2 = __fm.caption; if (c2 && c2.indexOf('came BACK') >= 0) { window.__pearlCap = true; return; }
+        requestAnimationFrame(m); })(); 0`);
+      await api.eval(`window.__camMon = { max: 0, jumps: 0, at: '' };(function m(){
+        if (!window.__camMon) return;
+        const s = __fm.camStep || 0;
+        if (__fm.state !== 'title') {
+          if (s > __camMon.max) { __camMon.max = s; __camMon.at = __fm.tick + ':' + __fm.state + ' cine=' + __fm.floodCine + ' k=' + __fm.handoffK; }
+          if (s > 3) __camMon.jumps++;
+        }
+        requestAnimationFrame(m); })()`);
+      const wall0 = Date.now();
+      await D.confirm();
+      await api.waitFor(`__fm.floodCine !== null`, 12000, 'the flood begins');
+      gate('flood: letterbox bars up for the cinematic', await api.eval('__fm.barsOn'));
+      await api.waitFor(`__fm.autorun === true`, 25000, 'the authored run begins');
+      const runStart = await api.eval('__fm.handoffStartTick');
+      gate('flood: input goes LIVE inside 12 s of the slot (real time)',
+        Date.now() - wall0 <= 12500, ((Date.now() - wall0) / 1000).toFixed(1) + 's');
+      /* NO INPUT: the camera dives, the run continues, eases to a stop */
+      await api.waitFor(`__fm.handoffRumbles === 1`, 20000, 'the one soft pulse — you have the wheel');
+      noInputHandoffTicks = (await api.eval('__fm.handoffDoneTick')) - runStart;
+      gate('flood: bars slide OFF exactly at control-live', (await api.eval('__fm.barsOn')) === false);
+      gate('flood: exactly ONE handoff rumble', (await api.eval('__fm.handoffRumbles')) === 1);
+      await api.waitFor(`__fm.autorun === false`, 30000, 'the run eases out');
+      await sleep(900);
+      const px = await api.eval('__fm.x'), pz = await api.eval('__fm.z');
+      const spd = await api.eval('Math.hypot(P.vx, P.vz)');
+      gate('flood: untouched, Wick jogs to the waterline and eases to a stop',
+        pz > -18 && spd < 0.6 && (await api.eval('__fm.state')) === 'play',
+        `at ${px.toFixed(0)},${pz.toFixed(0)} spd=${spd.toFixed(2)}`);
+      const mon = await api.eval('window.__camMon');
+      gate('flood: ONE CONTINUOUS CAMERA — no cuts, no teleports, ever',
+        mon.jumps === 0 && mon.max < 3.0, JSON.stringify(mon));
+      /* control latency after handoff: the stick must answer at once
+         (the walk-bot idles the stick every frame — hand it back first) */
+      await api.botRelease().catch(() => {});
+      let moved = 0;
+      for (const [kk, cc] of [['s', 'KeyS'], ['d', 'KeyD'], ['w', 'KeyW'], ['a', 'KeyA']]) {
+        const cp0v = JSON.parse(await api.eval('JSON.stringify([__fm.x, __fm.z])'));
+        await api.key(kk, cc, true);
+        await sleep(400);
+        await api.key(kk, cc, false);
+        const cp1 = JSON.parse(await api.eval('JSON.stringify([__fm.x, __fm.z])'));
+        moved = Math.max(moved, Math.hypot(cp1[0] - cp0v[0], cp1[1] - cp0v[1]));
+        if (moved > 0.3) break;
+      }
+      gate('flood: stick answers instantly after the handoff', moved > 0.3,
+        'moved ' + moved.toFixed(2) + 'm  diag=' + await api.eval(`JSON.stringify({
+          st: state, pst: P.st, sail: P.sailing, auto: AUTORUN.active, pl: AUTORUN.player,
+          d: +waterDepthAt(P.x, P.z).toFixed(2), fps: +__fm.fps.toFixed(1),
+          turbo: window.__fmTurbo, hs: P.hearts, mx: IN.mx, my: IN.my,
+          pad: (function(){ const g = navigator.getGamepads()[0]; return g ? g.axes.join(',') : 'none'; })(),
+          camMode: CAM.mode })`));
+      /* the three visible changes */
+      gate('flood: sky stepped to 2, SECOND star burning, flood state live',
+        (await api.eval('__fm.skyStep')) === 2 && (await api.eval('__fm.star2On')) === true &&
+        (await api.eval('__fm.flood')) === true && (await api.eval('__fm.phases')) === 2);
+      const shot1 = await api.shot('flood-sky-after');
+      const png0 = decodePNG(fs.readFileSync(shot0)), png1 = decodePNG(fs.readFileSync(shot1));
+      let delta = 0;
+      for (const [sx, sy] of [[640, 60], [320, 80], [960, 90]]) {
+        const a = medianColorAt(png0, sx, sy, 6), b = medianColorAt(png1, sx, sy, 6);
+        delta = Math.max(delta, Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]));
+      }
+      gate('flood: the sky dim is REAL in pixels', delta >= 20, 'ΔRGB=' + delta.toFixed(0));
+      /* the joy-beat: the wake-boat lifts, Pearl arrives breathless */
+      await api.installBot('pad');
+      await api.eval('window.__fmTurbo = undefined');
+      await api.walkTo(4, -2, 2.0, 60000);
+      await api.waitFor('__fm.boatFloating === true', 40000, 'the wake-boat rights itself');
+      gate('flood: THE WAKE-BOAT — shelter since frame one — floats', true);
+      await api.walkTo(3.4, -1.6, 1.6, 30000).catch(() => {});
+      await api.waitFor('window.__pearlCap === true', 15000, 'Pearl speaks').catch(() => {});
+      gate('flood: Pearl, breathless, at the water', await api.eval('window.__pearlCap === true'));
+      gate('flood: the tidepool is subsumed by the real sea',
+        await api.eval('tidewater.visible === false && tidepoolFilled === true'));
+      await api.eval('__fmDebug.warp(330, -219.5)');
+      await sleep(700);
+      gate('flood: the cartographer\u2019s map wears its NEW blue line',
+        await api.eval('cartNewLine.visible === true'));
+      await api.eval('__fmDebug.warp(4, -2)');
+      /* matrix (c): CONTINUE a flooded save → still flooded */
+      await api.nav(base + '/?turbo=8');
+      await n2ContinueIn(api);
+      gate('flood matrix: CONTINUE flooded save → flooded world',
+        (await api.eval('__fm.flood')) === true && (await api.eval('__fm.boatFloating')) === true &&
+        (await api.eval('__fm.wakeWreckVis')) === false && (await api.eval('__fm.skyStep')) === 2);
+      /* matrix (b): NEW GAME fully un-floods (the John sequence, extended) */
+      await api.nav(base + '/?turbo=8');
+      await api.waitFor(`__fm.state === 'title'`, 25000, 'title (NG)');
+      await tapUntil(api, () => api.tap(0), '__fm.ngGuardOn === true', 8, 'guard');
+      await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 8, 'fresh start');
+      await api.waitFor(`__fm.state === 'play'`, 40000, 'fresh adventure');
+      gate('flood matrix: NEW GAME → the world is fully UN-flooded',
+        (await api.eval('__fm.flood')) === false && (await api.eval('__fm.skyStep')) === 0 &&
+        (await api.eval('__fm.wakeWreckVis')) === true &&
+        (await api.eval('bayWaterMesh.visible === false')) &&
+        (await api.eval('__fm.basinOpen')) === false &&
+        (await api.eval('window.__forestSolid(1938, 1192) === true')) &&
+        (await api.eval('crabs[0].sx === crabs[0].osx && pearl.x === ' + '(-21.9)')));
+      const bad = api.consoleBad;
+      gate('flood: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('flood suite', false, e.message);
+      await api.shot('flood-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* S2 — input DURING the swing takes over immediately and shortens it */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({ ...N2_CARRY, lastShade: [-33, -72] });
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      const D = driver(api, 'pad');
+      await api.walkTo(-37, -74.5, 1.6, 40000);
+      await api.waitFor(`__fm.prompt === 'wheel2'`, 12000, 'wheel prompt (S2)');
+      await api.eval('window.__fmTurbo = 1');
+      await api.axes(0, 0);
+      await sleep(200);
+      await D.confirm();
+      await api.waitFor(`__fm.autorun === true`, 30000, 'swing begins (S2)');
+      const t0 = await api.eval('__fm.handoffStartTick');
+      await api.axes(0, -1);          // the player grabs the stick mid-swing
+      await api.waitFor(`__fm.autorunPlayer === true`, 5000, 'player takes over');
+      await api.waitFor(`__fm.handoffRumbles === 1`, 12000, 'accelerated handoff');
+      const took = (await api.eval('__fm.handoffDoneTick')) - t0;
+      await api.axes(0, 0);
+      gate('flood(S2): stick input mid-swing takes over INSTANTLY and shortens the blend',
+        (await api.eval('__fm.autorun')) === false && took > 0 &&
+        (noInputHandoffTicks < 0 || took < noInputHandoffTicks),
+        `input=${took} ticks vs hands-off=${noInputHandoffTicks}`);
+      const bad = api.consoleBad;
+      gate('flood(S2): zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('flood S2 suite', false, e.message);
+      await api.shot('flood-S2-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* S3 — nothing previously completable is broken (boat where needed) */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({
+        ...N2_FLOODED, mh: 5, wreckChest: false, bossDone: false, wallBurned: false,
+        kelpDoor: false, houseChest: false, salt: 0,
+      });
+      await api.nav(base + '/?turbo=8');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      const D = driver(api, 'pad');
+      /* the village lives on dry land */
+      await api.walkTo(36, -15, 1.4, 40000);
+      await api.walkTo(39.7, -14.1, 0.6, 20000);
+      await api.waitFor(`__fm.prompt === 'talk'`, 10000, 'Finn still reachable');
+      gate('flood(S3): NPCs on dry land, talkable', true);
+      /* the grotto: dry behind its causeway — SAIL to its toe, wade up */
+      await api.walkTo(7.4, 3.8, 1.0, 40000);
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board for the causeway');
+      await D.confirm();
+      await api.waitFor('__fm.sailing === true', 12000, 'under way (causeway)');
+      await api.walkTo(30, 103, 3.2, 120000);
+      await api.axes(0, 0);
+      await api.waitFor('__fm.boatSpd < 2.0', 15000, 'way off (causeway)');
+      await api.waitFor(`__fm.prompt === 'ashore'`, 20000, 'ashore at the causeway toe');
+      await tapUntil(api, () => D.confirm(), '__fm.sailing === false', 10, 'landed');
+      await api.walkTo(30, 116, 2.0, 40000);
+      await api.walkTo(30, 133, 1.4, 30000);
+      await api.walkTo(30, 141, 1.4, 30000);
+      gate('flood(S3): the causeway walks you into a DRY grotto',
+        (await api.eval('__fm.inGrotto')) === true && (await api.eval('__fm.waterDepthHere')) === 0);
+      await api.walkTo(26.9, 147.0, 0.8, 30000);
+      await api.waitFor(`__fm.prompt === 'mirror'`, 10000, 'mirror still waits');
+      gate('flood(S3): the mirror-shell puzzle is still there to solve', true);
+      /* the King-Crab still fights */
+      await api.eval('__fmDebug.warp(62, 166)');
+      await api.waitFor('__fm.bossActive === true', 15000, 'boss wakes post-flood');
+      const bhp0 = await api.eval('__fm.bossHp');
+      for (let i = 0; i < 14 && (await api.eval('__fm.bossHp')) >= bhp0; i++) {
+        const bx = await api.eval('__fm.bossX'), bz = await api.eval('__fm.bossZ');
+        await api.walkTo(bx, bz, 3.4, 6000).catch(() => {});
+        await D.confirm();
+        await sleep(220);
+      }
+      gate('flood(S3): the King-Crab wakes and takes damage post-flood',
+        (await api.eval('__fm.bossHp')) < bhp0);
+      /* the wreck chest: BOAT WHERE NEEDED — she waits where we moored her */
+      await api.eval('P.hearts = P.maxHearts; __fmDebug.warp(30, 112); 0');
+      const mbx = await api.eval('__fm.boatX'), mbz = await api.eval('__fm.boatZ');
+      await api.walkTo(mbx, mbz + 2.2, 1.0, 40000).catch(() => {});
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board prompt');
+      await D.confirm();
+      await api.waitFor('__fm.sailing === true', 12000, 'under way');
+      await api.walkTo(-40, 88, 4.0, 120000);
+      await api.walkTo(WRECK_X + 3.4, WRECK_Z + 1, 3.4, 60000);
+      await api.waitFor(`__fm.prompt === 'ashore'`, 20000, 'ashore at the wreck');
+      await tapUntil(api, () => D.confirm(), '__fm.sailing === false', 10, 'on the deck');
+      gate('flood(S3): sailed to the wreck, disembarked ONTO its deck',
+        (await api.eval('__fm.fy > -0.6')) === true);
+      await api.walkTo(WRECK_X + 0.6, WRECK_Z + 0.4, 1.4, 30000);
+      await tapUntil(api, () => D.confirm(), '__fm.chestOpened === true', 10, 'wreck chest');
+      await api.waitFor('__fm.heartContainers >= 1', 15000, 'heart container');
+      gate('flood(S3): the drowned wreck chest still pays its heart container', true);
+      /* relocated salt is all on dry ground */
+      gate('flood(S3): every shoreline salt crystal sits on dry ground',
+        await api.eval(`saltPickups.every(s => _n1GroundH(s.x, s.z) > ${'-0.55'} + 0.1)`));
+      const bad = api.consoleBad;
+      gate('flood(S3): zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('flood S3 suite', false, e.message);
+      await api.shot('flood-S3-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+}
+const WRECK_X = -45, WRECK_Z = 95;
+
+/* ═══ SAILING v1: board/steer/full-sail/boundary/disembark — pad, kbd, touch ═══ */
+async function suiteSail(base) {
+  /* pad — the full system */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(N2_FLOODED, true);   // mooring persistence rides the live save
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      const D = driver(api, 'pad');
+      /* grounding monitor: the hull must never cross onto land */
+      await api.eval(`window.__aground = 0;(function m(){
+        if (window.__aground === undefined) return;
+        if (__fm.sailing && __fm.boatSpd > 0.4 && waterDepthAt(__fm.boatX, __fm.boatZ) < 0.12) window.__aground++;
+        requestAnimationFrame(m); })()`);
+      await api.walkTo(7.4, 3.8, 1.0, 40000);
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board prompt');
+      await D.confirm();
+      await api.waitFor('__fm.sailing === true', 12000, 'aboard');
+      gate('sail(pad): ✕ at the boat boards it', true);
+      /* stick steers (the walk-bot IS the stick: real pad axes every frame) */
+      const a0 = await api.eval('__fm.boatAng');
+      await api.eval('__fmBot.tol = 2.5; __fmBot.target = [-20, 40]');
+      await api.waitFor('__fm.boatSpd > 1.2', 20000, 'under way by stick');
+      await api.waitTicks(200);
+      const a1 = await api.eval('__fm.boatAng');
+      gate('sail(pad): the stick steers (heading follows)',
+        Math.abs(a1 - a0) > 0.2 && (await api.eval('__fm.boatSpd')) > 1.2,
+        `Δang=${(a1 - a0).toFixed(2)} spd=${(await api.eval('__fm.boatSpd')).toFixed(1)}`);
+      /* ○ held = FULL SAIL */
+      await api.eval('__fmBot.sprint(true); __fmBot.target = [-30, 90]');
+      await api.waitFor('__fm.boatSpd > 6.4', 25000, 'full sail');
+      gate('sail(pad): ○ held raises FULL SAIL (the sprint of the sea)',
+        (await api.eval('__fm.sailK')) > 0.7, 'spd=' + (await api.eval('__fm.boatSpd')).toFixed(1));
+      await api.eval('__fmBot.sprint(false); __fmBot.target = null; 0');
+      /* the soft boundary + its line */
+      await api.walkTo(-20, 150, 5.0, 90000).catch(() => {});
+      let edgeCap = false;
+      for (let i = 0; i < 24; i++) {
+        await api.walkTo(-30, 170, 4.0, 8000).catch(() => {});
+        const cap = await api.eval('__fm.caption');
+        if ((cap && cap.includes('better keel')) || (await api.eval('__fm.seaEdgeHits')) > 0) { edgeCap = true; break; }
+      }
+      gate('sail(pad): the open sea turns you back, with its line',
+        edgeCap && (await api.eval(`Math.hypot(__fm.boatX - 0, __fm.boatZ - 40) < 116`)),
+        `hits=${await api.eval('__fm.seaEdgeHits')} d=${(await api.eval('Math.hypot(__fm.boatX, __fm.boatZ - 40)')).toFixed(0)}`);
+      gate('sail(pad): the swell-line renders on the water', await api.eval('swellLineMesh.visible === true'));
+      /* wisps fizz over open water */
+      const wa0 = await api.eval('__fm.wispsAlive');
+      await api.walkTo(-52, 12, 3.0, 60000);
+      await sleep(1200);
+      await api.walkTo(-30, 45, 3.5, 60000);
+      await sleep(1500);
+      const wa1 = await api.eval('__fm.wispsAlive');
+      gate('sail(pad): wisps chase, hit deep water, and FIZZ — the sea is yours',
+        wa1 < wa0, `${wa0} → ${wa1}`);
+      /* perf at full clip */
+      await api.perfReset();
+      await api.eval('__fakePad.press(1);');
+      for (const [x, z] of [[0, 30], [-30, 80], [10, 110], [35, 60], [8, 12]]) {
+        await api.walkTo(x, z, 4.0, 60000).catch(() => {});
+      }
+      await api.press();
+      const pf = await api.perfRead();
+      gate('sail(pad): FULL-SAIL frame budget holds (≤80 calls / ≤120k tris)',
+        pf.calls <= 80 && pf.tris <= 120000, `calls=${pf.calls} tris=${pf.tris} @${pf.at}`);
+      gate('sail(pad): the hull never crossed onto land', (await api.eval('window.__aground')) === 0,
+        'aground=' + await api.eval('window.__aground'));
+      /* disembark + persistence */
+      await api.walkTo(8, 5, 2.5, 60000);
+      await api.axes(0, 0);
+      await api.waitFor('__fm.boatSpd < 2.0', 15000, 'way off');
+      await api.waitFor(`__fm.prompt === 'ashore'`, 15000, 'ashore prompt');
+      await tapUntil(api, () => D.confirm(), '__fm.sailing === false', 10, 'ashore');
+      gate('sail(pad): came ashore on dry footing',
+        (await api.eval('__fm.waterDepthHere')) < 0.63);
+      const bx = await api.eval('__fm.boatX'), bz = await api.eval('__fm.boatZ');
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      gate('sail(pad): the boat waits where you moored her (persisted)',
+        Math.hypot((await api.eval('__fm.boatX')) - bx, (await api.eval('__fm.boatZ')) - bz) < 2.5,
+        `moored ${bx.toFixed(0)},${bz.toFixed(0)} → ${(await api.eval('__fm.boatX')).toFixed(0)},${(await api.eval('__fm.boatZ')).toFixed(0)}`);
+      const bad = api.consoleBad;
+      gate('sail(pad): zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('sail pad suite', false, e.message);
+      await api.shot('sail-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* kbd — board/steer/full-sail/disembark */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(N2_FLOODED);
+      await api.nav(base + '/?turbo=6');
+      await api.waitFor(`__fm.state === 'title'`, 30000, 'title');
+      await api.tapKey('s', 'KeyS');
+      await api.waitFor('__fm.titleFocus === 1', 8000, 'CONTINUE focus');
+      await api.tapKey('j', 'KeyJ');
+      await api.waitFor(`__fm.state === 'play'`, 30000, 'playing');
+      await api.installBot('kbd');
+      await api.walkTo(7.4, 3.8, 1.0, 40000);
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board prompt (kbd)');
+      await api.tapKey('j', 'KeyJ');
+      await api.waitFor('__fm.sailing === true', 12000, 'aboard (kbd)');
+      await api.key('w', 'KeyW', true);
+      await api.key('Shift', 'ShiftLeft', true);
+      await api.waitFor('__fm.boatSpd > 6.0', 25000, 'full sail (kbd)');
+      await api.key('Shift', 'ShiftLeft', false);
+      await api.key('w', 'KeyW', false);
+      gate('sail(kbd): W steers, Shift raises full sail', true,
+        'spd=' + (await api.eval('__fm.boatSpd')).toFixed(1));
+      await api.walkTo(8, 5, 2.5, 90000);
+      await api.waitFor('__fm.boatSpd < 2.0', 15000, 'way off (kbd)');
+      await api.waitFor(`__fm.prompt === 'ashore'`, 15000, 'ashore prompt (kbd)');
+      await tapUntil(api, () => api.tapKey('j', 'KeyJ'), '__fm.sailing === false', 10, 'ashore (kbd)');
+      gate('sail(kbd): keyboard-only board → sail → disembark', true);
+      const bad = api.consoleBad;
+      gate('sail(kbd): zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('sail kbd suite', false, e.message);
+      await api.shot('sail-kbd-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* touch — touchpad-v1 drives the helm */
+  {
+    const { proc, port } = await launchChrome(['--window-size=1180,820']);
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init();
+    await api.seedSave({ ...N2_FLOODED, lastShade: [6.5, 1.2] });
+    await c.send('Emulation.setDeviceMetricsOverride', { width: 1180, height: 820, deviceScaleFactor: 1, mobile: true });
+    await c.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    const points = new Map();
+    const dispatch = (type) => c.send('Input.dispatchTouchEvent', {
+      type, touchPoints: [...points.entries()].map(([id, p]) => ({ x: p.x, y: p.y, id })) });
+    const tStart = async (id, x, y) => { points.set(id, { x, y }); await dispatch('touchStart'); };
+    const tMove = async (id, x, y) => { points.set(id, { x, y }); await dispatch('touchMove'); };
+    const tEnd = async (id) => { points.delete(id); await dispatch('touchEnd'); };
+    const tap = async (x, y, hold = 110) => { await tStart(9, x, y); await sleep(hold); await tEnd(9); };
+    const rectCenter = async (sel) => {
+      const r = await api.eval(`(function(){ const n = document.querySelector('${sel}'); if(!n) return null;
+        const r = n.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+      if (!r) throw new Error(sel + ' missing');
+      return r;
+    };
+    try {
+      await api.nav(base + '/?turbo=5');
+      await api.waitFor(`__fm.state === 'title'`, 30000, 'title (touch)');
+      await tap(590, 410);
+      await api.waitFor(`!!document.getElementById('__arcade_touchpad')`, 8000, 'touchpad');
+      const base0 = await rectCenter('#__atp-base');
+      const south = await rectCenter('#__atp-s');
+      const east = await rectCenter('#__atp-e');
+      for (let i = 0; i < 8 && !(await api.eval('__fm.titleFocus === 1')); i++) {
+        await tStart(8, base0.x, base0.y); await tMove(8, base0.x, base0.y + 60);
+        await sleep(280); await tEnd(8); await sleep(250);
+      }
+      for (let i = 0; i < 8 && (await api.eval(`__fm.state === 'title'`)); i++) {
+        await tap(south.x, south.y); await sleep(400);
+      }
+      await api.waitFor(`__fm.state === 'play'`, 30000, 'playing (touch)');
+      /* stand by the water, board with ✕ */
+      await api.eval('__fmDebug.warp(7.4, 3.8)');
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board prompt (touch)');
+      for (let i = 0; i < 6 && !(await api.eval('__fm.sailing')); i++) {
+        await tap(south.x, south.y); await sleep(400);
+      }
+      gate('sail(touch): ✕ boards from the shallows', await api.eval('__fm.sailing === true'));
+      await api.eval('__fmDebug.boat(0, 45); 0');   // open water: no grounding in the steering test
+      const a0 = await api.eval('__fm.boatAng');
+      await tStart(8, base0.x, base0.y);
+      await tMove(8, base0.x + 60, base0.y - 30);
+      await sleep(200);
+      await tMove(8, base0.x + 110, base0.y - 55);
+      await sleep(2600);
+      await tEnd(8);
+      gate('sail(touch): the virtual stick sails her',
+        (await api.eval('__fm.boatSpd')) > 1.0 || Math.abs((await api.eval('__fm.boatAng')) - a0) > 0.15,
+        'spd=' + (await api.eval('__fm.boatSpd')).toFixed(1));
+      /* full sail via ○ hold + stick (east first, then the stick) */
+      await tStart(7, east.x, east.y);
+      await sleep(150);
+      await tStart(8, base0.x, base0.y);
+      await tMove(8, base0.x, base0.y - 60);
+      await sleep(200);
+      await tMove(8, base0.x, base0.y - 125);
+      await api.waitFor('__fm.boatSpd > 5.2', 30000, 'full sail (touch)').catch(() => {});
+      const fullSpd = await api.eval('__fm.boatSpd');
+      await tEnd(8); await tEnd(7);
+      gate('sail(touch): ○ hold fills the sail', fullSpd > 5.2, 'spd=' + fullSpd.toFixed(1));
+      /* glide off + come ashore */
+      await api.eval('__fmDebug.boat(8, 4.6, 0.6); P.x=8; P.z=4.6; BOAT.spd=0; 0');
+      await api.waitFor(`__fm.prompt === 'ashore'`, 15000, 'ashore prompt (touch)');
+      for (let i = 0; i < 6 && (await api.eval('__fm.sailing')); i++) {
+        await tap(south.x, south.y); await sleep(400);
+      }
+      gate('sail(touch): ✕ comes ashore', await api.eval('__fm.sailing === false'));
+      const bad = api.consoleBad;
+      gate('sail(touch): zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('sail touch suite', false, e.message);
+      await api.shot('sail-touch-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* the MAIDEN VOYAGE: Pearl begs aboard, one guided lap, then the sea is free */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({ ...N2_FLOODED, voyageDone: false });
+      await api.nav(base + '/?turbo=8');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      const D = driver(api, 'pad');
+      await api.walkTo(7.4, 3.8, 1.0, 40000);
+      await api.waitFor(`__fm.prompt === 'board'`, 15000, 'Pearl is waiting');
+      await D.confirm();
+      await advanceDialog(api, D, 'pearlBeg');
+      await api.waitFor('__fm.voyageActive === true && __fm.pearlAboard === true', 12000, 'she is aboard');
+      gate('voyage: Pearl begs aboard and rides the first launch', true);
+      await api.waitFor('__fm.voyA === true', 90000, 'her first wonder line');
+      await api.waitFor('__fm.voyB === true', 120000, 'her second wonder line');
+      gate('voyage: both wonder lines fired mid-lap', true);
+      await api.waitFor('__fm.voyageDone === true', 180000, 'the lap comes home');
+      gate('voyage: the lap ends — Pearl ashore, the helm still YOURS',
+        (await api.eval('__fm.pearlAboard')) === false && (await api.eval('__fm.sailing')) === true);
+      const bad = api.consoleBad;
+      gate('voyage: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      gate('voyage suite', false, e.message);
+      await api.shot('voyage-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+}
+
+/* ═══ NIGHT-TWO SHOTS: journeys and singles, staged to be LOOKED at ═══ */
+async function suiteN2Shots(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  try {
+    /* ── the dungeon descent strip ── */
+    await api.seedSave(N2_HOLLOW_OPEN);
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    await api.eval('__fmDebug.hud(false)');
+    await api.eval(`showCaption = function () {}; floatEl.classList.remove('on'); 0`);
+    const still = async (ms) => { await sleep(ms || 550); await api.eval(`floatEl.classList.remove('on'); 0`); await sleep(120); };
+    await api.eval('__fmDebug.warp(1914, 1170); __fmDebug.face(0.8);');
+    await api.eval('__fmDebug.cam(1908, groundH(1908,1164)+2.2, 1164, 1938, groundH(1938,1192)+2.5, 1192)');
+    await still(650);
+    await api.shot('n2-descent-1-parted-stones');
+    await api.eval('__fmDebug.warp(1955, 1212); __fmDebug.face(0.6);');
+    await api.eval('__fmDebug.cam(1949, groundH(1949,1206)+2.0, 1206, 1972, groundH(1972,1236)+1.6, 1236)');
+    await still(650);
+    await api.shot('n2-descent-2-throat');
+    await api.eval('__fmDebug.warp(1968, 1231);');
+    await api.eval('__fmDebug.cam(1963, groundH(1963,1227)+2.4, 1227, 1975, groundH(1975,1236)+1.2, 1240)');
+    await still(650);
+    await api.shot('n2-descent-3-gallery-beamshaft');
+    await api.eval('__fmDebug.warp(2006, 1263);');
+    await api.eval('__fmDebug.cam(2001, groundH(2001,1258)+2.6, 1258, 2014, groundH(2014,1272)+2.2, 1272)');
+    await still(650);
+    await api.shot('n2-descent-4-chandelier-vault');
+    await api.eval('__fmDebug.warp(1992, 1285);');
+    await api.eval('__fmDebug.cam(1994.5, groundH(1994,1283)+1.5, 1282.5, 1990.2, groundH(1990,1288)+1.6, 1288.6)');
+    await still(650);
+    await api.shot('n2-benbait-fossil');
+    /* the wyrm: telegraph (wake), daze (brow), the cure wave */
+    await api.seedSave(N2_WYRM_READY);
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    const Dw = driver(api, 'pad');
+    await api.eval('__fmDebug.hud(false)');
+    await api.eval(`showCaption = function () {}; floatEl.classList.remove('on'); 0`);
+    await api.eval('__fmDebug.warp(2044, 1301)');
+    await api.waitFor('__fm.wyrmActive === true', 15000, 'wyrm up (shots)');
+    /* WAKE shot: the hump hunting close — pin hearts so it cannot end us */
+    for (let i = 0; i < 120; i++) {
+      await api.eval('P.hearts = P.maxHearts; 0');
+      const st = await api.eval('__fm.wyrmSt');
+      const d = await api.eval('Math.hypot(__fm.wyrmX - __fm.x, __fm.wyrmZ - __fm.z)');
+      if (st === 'swim' && d < 9 && d > 2.5) break;
+      await sleep(120);
+    }
+    for (let tries = 0; tries < 6; tries++) {
+      await api.eval('__fmDebug.freeze(1)');
+      if ((await api.eval('__fm.wyrmSt')) === 'swim') break;
+      await api.eval('__fmDebug.freeze(0)');
+      await sleep(400);
+    }
+    await api.eval(`(function(){
+      const T = __fm;
+      const gy = groundH(T.wyrmX, T.wyrmZ);
+      __fmDebug.cam(T.wyrmX + 4.2, gy + 2.1, T.wyrmZ + 5.2, T.wyrmX, gy + 0.5, T.wyrmZ);
+    })()`);
+    await sleep(450);
+    await api.shot('n2-wyrm-wake-telegraph');
+    await api.eval('__fmDebug.freeze(0); __fmDebug.camOff()');
+    /* DAZE shot: stand the slab until it reels, brow blazing */
+    await api.eval('__fmDebug.warp(2040, 1298)');
+    for (let i = 0; i < 160; i++) {
+      await api.eval('P.hearts = P.maxHearts; if (Math.hypot(P.x - 2040, P.z - 1298) > 1) __fmDebug.warp(2040, 1298); 0');
+      if ((await api.eval('__fm.wyrmSt')) === 'daze') break;
+      await sleep(150);
+    }
+    await api.eval('__fmDebug.freeze(1)');
+    await api.eval(`(function(){
+      const T = __fm;
+      const gy = groundH(T.wyrmX, T.wyrmZ);
+      __fmDebug.cam(T.wyrmX + 3.6, gy + 3.4, T.wyrmZ + 4.4, T.wyrmX, gy + 2.7, T.wyrmZ);
+    })()`);
+    await sleep(450);
+    await api.shot('n2-wyrm-daze-browglow');
+    await api.eval('__fmDebug.freeze(0); __fmDebug.camOff()');
+    /* the cure: fight it out (faced swings), then catch the water bow */
+    {
+      let sawCine = false;
+      for (let i = 0; i < 500; i++) {
+        if ((await api.eval('__fm.state')) === 'cine') { sawCine = true; break; }
+        const wx = await api.eval('__fm.wyrmX'), wz = await api.eval('__fm.wyrmZ');
+        const d = Math.hypot((await api.eval('__fm.x')) - wx, (await api.eval('__fm.z')) - wz);
+        if (d > 2.8) await api.walkTo(wx, wz, 2.4, 5000).catch(() => {});
+        await api.eval('__fmDebug.face(Math.atan2(__fm.wyrmX - __fm.x, __fm.wyrmZ - __fm.z))');
+        await Dw.confirm();
+        await api.eval('P.hearts = P.maxHearts; 0');
+        await sleep(140);
+      }
+      if (sawCine) {
+        await api.eval('window.__fmTurbo = 1');
+        for (let i = 0; i < 90; i++) {
+          const t = await api.eval('CINE.id === "wyrmCure" ? CINE.t : -1');
+          if (t > 5.8 && t < 7.8) { await api.shot('n2-wyrm-cure-wave'); break; }
+          if (t < 0 && i > 12) { await api.shot('n2-wyrm-cure-wave'); break; }
+          await sleep(180);
+        }
+        await api.eval('window.__fmTurbo = undefined');
+      } else {
+        await api.shot('n2-wyrm-cure-wave');
+      }
+    }
+    /* ── THE FLOOD strip: run the real cinematic at real time ── */
+    await api.seedSave({ ...N2_CARRY, lastShade: [-33, -72] });
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    await api.installBot('pad');
+    await api.eval('__fmDebug.hud(false)');
+    const D = driver(api, 'pad');
+    await api.walkTo(-37, -74.5, 1.6, 40000);
+    await api.waitFor(`__fm.prompt === 'wheel2'`, 12000, 'wheel prompt (shots)');
+    await api.eval('window.__fmTurbo = 1');
+    await D.confirm();
+    const floodShots = [
+      [1.1, 'n2-flood-1-shield-slot'], [2.9, 'n2-flood-2-second-notch'],
+      [5.6, 'n2-flood-3-sky-secondstar'], [8.2, 'n2-flood-4-silver-line'],
+      [9.6, 'n2-flood-5-dive-swing'],
+    ];
+    for (const [tt, name] of floodShots) {
+      await api.waitFor(`(__fm.floodCine !== null && __fm.floodCine >= ${tt}) || __fm.autorun === true`, 30000, name);
+      await api.shot(name);
+    }
+    await api.waitFor(`__fm.handoffK >= 0.45 || __fm.handoffRumbles > 0`, 20000, 'mid-swing');
+    await api.shot('n2-flood-6-handoff-mid');
+    await api.waitFor(`__fm.handoffRumbles === 1`, 20000, 'control live');
+    await sleep(600);
+    await api.shot('n2-flood-7-running-free');
+    await api.eval('window.__fmTurbo = undefined');
+    await api.waitFor(`__fm.autorun === false`, 30000, 'run eased out');
+    /* singles: shield in the wheel, second star, flooded bay from the hill */
+    await api.eval('__fmDebug.warp(-30, -66)');
+    await api.eval('__fmDebug.cam(-32, groundH(-38,-78)+6.4, -68, -38, groundH(-38,-78)+7.6, -78)');
+    await still(700);
+    await api.shot('n2-shield-in-the-wheel');
+    await api.eval('__fmDebug.cam(-30, groundH(-38,-78)+8.5, -64, 30, 30, 90)');
+    await still(700);
+    await api.shot('n2-second-star');
+    await api.eval('__fmDebug.cam(-34, groundH(-38,-78)+9, -60, 10, -2, 60)');
+    await still(700);
+    await api.shot('n2-flooded-bay-from-wheel-hill');
+    /* the boat afloat + first sail strip + Pearl aboard */
+    await api.eval('__fmDebug.camOff()');
+    await api.walkTo(4, -2, 2.2, 90000);
+    await api.waitFor('__fm.boatFloating === true', 40000, 'boat floated (shots)');
+    await api.eval('__fmDebug.cam(1.5, 1.4, -3.5, 8.5, -0.4, 6)');
+    await still(700);
+    await api.shot('n2-wakeboat-afloat');
+    await api.eval('__fmDebug.camOff()');
+    await api.walkTo(7.4, 3.8, 1.0, 40000);
+    await api.waitFor(`__fm.prompt === 'board'`, 15000, 'board (shots)');
+    await D.confirm();
+    await advanceDialog(api, D, 'pearlBeg').catch(() => {});
+    await api.waitFor('__fm.sailing === true', 15000, 'under way (shots)');
+    await sleep(2500);
+    await api.eval('__fmDebug.freeze(1)');
+    await api.eval(`__fmDebug.cam(BOAT.x - Math.sin(BOAT.ang) * 7 + 2.5, 1.6, BOAT.z - Math.cos(BOAT.ang) * 7, BOAT.x, 0.4, BOAT.z)`);
+    await sleep(400);
+    await api.shot('n2-first-sail-pearl-aboard');
+    await api.eval('__fmDebug.freeze(0); __fmDebug.camOff()');
+    await api.eval(`__fmBot.tol=4; __fmBot.target=[-20, 60]`);
+    await sleep(4200);
+    await api.eval('__fmDebug.freeze(1)');
+    await api.eval(`__fmDebug.cam(BOAT.x + 6, 2.2, BOAT.z - 5, BOAT.x, 0.2, BOAT.z + 4)`);
+    await sleep(400);
+    await api.shot('n2-first-sail-open-water');
+    await api.eval('__fmDebug.freeze(0); __fmDebug.camOff(); __fmBot.release()');
+    const bad = api.consoleBad;
+    gate('n2shots: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('n2shots suite', false, e.message);
+    await api.shot('n2shots-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
 const whichArg = process.argv[2] || 'all';
 const parts = whichArg.split(',');
 const which = parts.length > 1 ? 'list' : whichArg;
@@ -4161,6 +5445,11 @@ try {
   if (wants('dmgvis')) await suiteDmgVis(base);
   if (wants('fperf')) await suiteForestPerf(base);
   if (wants('fshots')) await suiteForestShots(base);
+  if (wants('hollow')) await suiteHollow(base);
+  if (wants('wyrm')) await suiteWyrm(base);
+  if (wants('flood')) await suiteFlood(base);
+  if (wants('sail')) await suiteSail(base);
+  if (wants('n2shots')) await suiteN2Shots(base);
 } finally {
   srv.close();
 }

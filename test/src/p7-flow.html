@@ -147,6 +147,9 @@ function applyWorldState() {
   rebuildSalt();
   /* the Parched Forest derives too */
   if (window.__forestApplySave) window.__forestApplySave();
+  /* night two: the Falls Hollow, the flood, and the boat derive last —
+     the tide hook may override sky/wheel state for sky step 2 */
+  if (window.__tideApplySave) window.__tideApplySave();
   /* quest line */
   if (SAVE) setQuest(S.q);
   else { QUEST.q = 0; questEl.textContent = ''; questEl.classList.remove('on'); }
@@ -496,6 +499,7 @@ window.__fmDebug = {
   skyProbe(on) {
     skyDome.visible = !on; sunDisc.visible = !on;
     if (starMesh) starMesh.visible = !on;
+    if (window.starMesh2) starMesh2.visible = !on && (SAVE && SAVE.sky >= 2);
     if (on) {
       renderer.setClearColor(0xff00ff, 1);
       scene.fog.near = 1e7; scene.fog.far = 1e7 + 1;
@@ -568,7 +572,8 @@ function updateVisuals(dtv, now) {
   // fog: grotto vs open sky
   const inG = inGrottoAt(P.x, P.z) && state !== 'title';
   grottoT += (( inG ? 1 : 0) - grottoT) * Math.min(1, dtv * 2.4);
-  const sf = mix3(SKY0.fog, SKY1.fog, SKY.t);
+  const sf = SKY.t <= 1 ? mix3(SKY0.fog, SKY1.fog, SKY.t)
+                        : mix3(SKY1.fog, SKY2.fog, Math.min(1, SKY.t - 1));   // step 2 (night two)
   mix3(sf, FOG_GROTTO.col, grottoT, _fogC);
   scene.fog.color.setRGB(_fogC[0], _fogC[1], _fogC[2]);
   scene.fog.near = lerp(FOG0.near, FOG_GROTTO.near, grottoT);
@@ -600,8 +605,11 @@ function updateVisuals(dtv, now) {
     if (pearlStar) pearlStar.visible = near2(330, -140, 25) && SAVE && SAVE.sky >= 1;
     wheelRing.visible = near2(WHEEL_POS.x, WHEEL_POS.z, 135);
     if (grottoCapMesh) grottoCapMesh.visible = near2(46, 155, 165);
-    tidewater.visible = tidepoolFilled && near2(REFILL_POOL.x, REFILL_POOL.z, 110);
-    for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = near2(patch.cx, patch.cz, 55);
+    // v8.1: the cave INTERIOR had no gate at all and drew from the far side of
+    // the forest — same 165 m radius as its cap, which covers standing inside
+    if (grottoDomeMesh) grottoDomeMesh.visible = near2(46, 155, 165);
+    tidewater.visible = tidepoolFilled && !(SAVE && SAVE.sky >= 2) && near2(REFILL_POOL.x, REFILL_POOL.z, 110);   // the real sea subsumes it
+    for (const patch of kelpPatches) if (patch.mesh) patch.mesh.visible = !patch.flooded && near2(patch.cx, patch.cz, 55);
     // v3: collectible salt crystals — bob, spin, sparkle (distance-culled)
     for (const s of saltPickups) {
       if (s.got) { s.mesh.visible = false; continue; }

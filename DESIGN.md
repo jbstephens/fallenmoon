@@ -729,3 +729,111 @@ missable prompt; safety gets its own positive signal.
    hearts fills toward the next tick; in shade it flips to a leaf
    and fades. No memory required, no reading required — a
    six-year-old tracks it by color and buzz.
+
+---
+
+# PHASE 2 NIGHT TWO — THE FALLS HOLLOW & THE TIDE'S RETURN
+(locked 2026-08-16; John delegated the open questions — "apply all
+the things we learned and go build")
+
+## The dungeon: THE FALLS HOLLOW
+Behind the rockfall: a water-carved cathedral that hasn't heard
+water in a year. Vibe: eerie quiet wonder, puzzle-forward, two fight
+beats (hornet nests). Curved flowstone galleries, dry plunge pools
+strung like beads, petrified waterwheels of an older civilization,
+salt-crystal chandeliers. Puzzle language: LIGHT THROUGH DRY
+CHANNELS — sun shafts from cracks redirected by mirror-shells
+(grotto's language, grown up) along channels the water used to take,
+re-lighting carved water-glyphs to open the way down. One hidden
+side-chamber (Ben-bait): a moonfish fossil in the wall + salt hoard.
+ONE new mural clue, deliberately ambiguous: the moon being LOWERED
+into the sea on chains — "to rest"? — no answer given (the chain
+mystery stays open until John joins that decision, ~region 4).
+
+## The guardian: THE SILT WYRM
+The spirit of the Silverrun itself, gone rigid and sun-mad — a great
+river-serpent of dried silt and tumbled stones, coiled in the last
+basin, wearing the HALF SHIELD as a brow-plate (the crab precedent).
+- Signature move (the learnable): it SWIMS through dry silt like
+  water — visible dorsal wake of rising dust + rumble — and erupts
+  beneath you. Counter: stand on the stone slabs (it cannot swim
+  through stone). Teaches terrain-reading. The wake IS the
+  visibility contract: if it can strike, its wake is on screen
+  (no-invisible-damage invariant applies).
+- Phase 2 adds a tail sweep (jump it); phase 3 calls dust-devils.
+- Boss conventions in full: HP bar, phase notches, chip damage on
+  any hit + big damage on the brow-plate during post-erupt daze
+  (glowing telegraph), kid-bot-wins gate, proximity wake, sunstruck
+  checkpoints per phase.
+- The cure is the payoff: cured, the Wyrm DISSOLVES INTO WATER —
+  the first free water anyone has seen — bows as a wave-form, and
+  leaves the Half Shield floating in a suddenly-wet pool.
+  (Foreshadows the flood by minutes.)
+
+## The homecoming: THE TIDE COMES HOME
+Carry the Half Shield down the Silverrun (it hums; moon compass
+sings) → Moonwheel → slot (✕):
+1. Authored cinematic (≤12s, skippable after first view): wheel
+   turns second notch, bell, sky dims another eighth, SECOND star —
+   then the horizon: a silver line, rushing in. Boats lift on the
+   bay as the sea pours home. Grotto mouth drinks the tide.
+2. Playable joy-beat, no fail state: run down to the bay as the
+   last stretch fills around your ankles; the WAKE-BOAT — the one
+   you slept under on frame one — lifts, rights itself, and bobs.
+   Pearl arrives breathless. The bay is OCEAN now.
+World-state (all through applyWorldState, bidirectional, save-
+derived, sky=2): bay water plane at design waterline; boats float;
+old seabed content relocated (salt to shorelines, kelp gone under,
+crabs to beaches, wisps hover water); grotto interior stays dry
+(waterline below its floor — everything v1 remains completable);
+cartographer's wall map gains a hand-drawn NEW blue line (he was
+wrong, the good way); tidepool subsumed by the real sea; Pearl's
+chart untouched (her star remains). New Game must fully un-flood.
+
+## SAILING v1
+The wake-boat is pilotable on the bay: ✕ at the boat to board/
+disembark at shores, stick steers, ○ holds for full sail (the
+sprint of the sea), gentle drift physics, camera pulls back behind
+the boat, wisps fizz over open water and can't follow. The open sea
+edge is a soft boundary: swells turn you back + one line ("The open
+sea wants a better keel. Someday.") — the hook for phase 3
+landfalls. Maiden voyage: Pearl begs aboard and rides the first
+launch — one gentle guided lap of the bay with her two-line
+wonder-dialogue, then sailing is free forever, with or without her.
+Water rendering: flat animated color bands + sparse highlight
+quads, zero transparency tricks beyond one alpha plane, budgets
+unchanged (≤80/≤120k) — measured while sailing at full clip.
+
+## Process law for this build (the week's lessons, non-negotiable)
+- ONE ground authority: every new walkable surface (dungeon floors,
+  shores, boat deck) via the makeMeshField pattern or explicit
+  solid regions; rendered==physics to 0.0000m, gated.
+- No impression geometry inside playable space, ever; flooded-bay
+  water obeys the same pairing rules.
+- Walked-journey verification with structural-experience questions
+  (dense grids + real walked/sailed paths + 4 azimuths + never-
+  enclosed + frame-sequence review), both regions + dungeon + bay
+  under sail.
+- Maria's hazard rules for ANY new hazard.
+- applyWorldState carries every new flag; the John-sequence gate
+  (completed save → NEW GAME → world fully fresh) extended to flood
+  state both directions.
+- Cinematics ≤12s, skippable, show-don't-tell.
+- Deploy marker: build-unique string, verified ABSENT from the
+  previous bundle before polling.
+- Family q4 save must continue seamlessly into all of this.
+
+## FLOOD HANDOFF AMENDMENT (John, 8/16: "like the start of
+Uncharted 4... and I will love you forever" — locked)
+The flood cinematic and the joy-beat are ONE continuous shot with an
+invisible control handoff: authored camera sweeps the returning sea,
+dives downhill past Wick (already running, in his own run animation,
+at his own speed, on a player-plausible path), settles into the
+follow-cam — and input is live before the player knows it. Stick
+input during the swing accelerates the blend and takes over
+instantly. No cuts, no fades, no prompts; the only tells are one
+soft haptic pulse at control-live and letterbox bars (if any)
+sliding away at that exact instant. No-input path: Wick eases to a
+stop, so the "wait, is this me?" discovery works both ways.
+Principle for all future cinematic-to-play moments: handoff is a
+DISCOVERY, not a transition.

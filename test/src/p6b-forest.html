@@ -649,6 +649,11 @@ const farMegas = [];   // 800 m merges:    { key, bh, mesh, cx, cz, actR }
     t.mesh.visible = false;
     scene.add(t.mesh);
     t.md = null;
+    // real extent, cached: the fog-wall cull needs the tile's own footprint,
+    // not the nominal grid cell (edge tiles are partial)
+    t.mesh.geometry.computeBoundingSphere();
+    { const bs = t.mesh.geometry.boundingSphere;
+      t.bx = bs.center.x; t.by = bs.center.y; t.bz = bs.center.z; t.br = bs.radius; }
     farTier.push(t.mesh);
     farTiles.push(t);
   }
@@ -665,6 +670,7 @@ const farMegas = [];   // 800 m merges:    { key, bh, mesh, cx, cz, actR }
     m.mesh.geometry.computeBoundingSphere();
     const bs = m.mesh.geometry.boundingSphere;
     m.cx = bs.center.x; m.cz = bs.center.z;
+    m.bx = bs.center.x; m.by = bs.center.y; m.bz = bs.center.z; m.br = bs.radius;
     m.actR = (m.bh ? 165 : 387) + bs.radius + 4;
     farTier.push(m.mesh);
     farMegas.push(m);
@@ -743,34 +749,57 @@ let fallsMesh = null;
     // a talus skirt where the pour-over used to boil
     latheW(md, [[7.5, -1.5], [4.5, 1.6], [0, 3.2]], { seg: 7, ex: 1.3, x: cx + Math.cos(a) * 3, y: gy - 0.5, z: cz + Math.sin(a) * 3, ry: -a, flat: true, segJitter: 0.12, col: C_CLIFF2 });
   }
-  // THE ROCKFALL — fresh boulders sealing the plunge-pool basin. Marched
-  // along the same circle the collision seals (one source of truth).
-  const toFore = Math.atan2(1165 - BASIN.z, 1900 - BASIN.x);
-  for (let i = -5; i <= 5; i++) {
-    const a = toFore + i * 0.21;
-    const r = BASIN.r - 1 + Math.abs(hash2(i, 11)) * 2.5;
-    const bx = BASIN.x + Math.cos(a) * r, bz = BASIN.z + Math.sin(a) * r;
-    const gy = groundH(bx, bz) - 1.2;
-    const s = 3.3 + Math.abs(hash2(i, 7)) * 2.0 - Math.abs(i) * 0.14;
-    latheW(md, [[s, 0], [s * 0.85, s * 1.1], [s * 0.4, s * 1.9], [0, s * 2.3]],
-      { seg: 6, ex: 0.85, x: bx, y: gy, z: bz, ry: i * 1.7, flat: true, segJitter: 0.13,
-        col: i % 2 ? C_FROCK : C_FROCK2, cols: [C_FROCK2, C_FROCK, C_CLIFF3] });
-    // pale fresh-broken faces — these stones fell RECENTLY
-    if (i % 2 === 0) {
-      boxW(md, { x: bx, y: gy + s * 0.8, z: bz, w: s * 0.5, d: s * 0.4, h: s * 0.7, ry: i, rx: 0.4, col: C_CHUTE });
-    }
-  }
-  // second smaller course of rubble at their feet
-  for (let i = -6; i <= 6; i += 2) {
-    const a = toFore + i * 0.18;
-    const bx = BASIN.x + Math.cos(a) * (BASIN.r + 2.5), bz = BASIN.z + Math.sin(a) * (BASIN.r + 2.5);
-    const gy = groundH(bx, bz) - 0.6;
-    latheW(md, [[1.3, 0], [0.9, 1.1], [0, 1.7]], { seg: 5, x: bx, y: gy, z: bz, ry: i * 2.3, flat: true, segJitter: 0.1, col: C_FROCK2 });
-  }
   fallsMesh = mdMesh(md, WORLD_MAT, false);
   fallsMesh.matrixAutoUpdate = false; fallsMesh.updateMatrix();
   fallsMesh.visible = false;
   scene.add(fallsMesh);
+})();
+
+/* THE ROCKFALL — fresh boulders sealing the plunge-pool basin. Marched along
+   the same circle the collision seals (one source of truth). Night two: its
+   OWN meshes — sealed vs PARTED (the moon compass resonates the stones
+   aside); applyWorldState picks which one stands. */
+let rockfallMesh = null, rockfallOpenMesh = null;
+(function buildRockfall() {
+  const C_CLIFF3 = [0.72, 0.65, 0.53], C_CHUTE = [0.93, 0.9, 0.81];
+  const toFore = Math.atan2(1165 - BASIN.z, 1900 - BASIN.x);
+  const build = (parted) => {
+    const md = MD();
+    for (let i = -5; i <= 5; i++) {
+      let a = toFore + i * 0.21;
+      let r = BASIN.r - 1 + Math.abs(hash2(i, 11)) * 2.5;
+      let sink = 0;
+      if (parted) {
+        // the gap: the middle stones stand ASIDE — shoved outward along the
+        // ring and half-sunk, leaving a walkable mouth into the basin
+        if (Math.abs(i) <= 1) { a += (i >= 0 ? 1 : -1) * 0.62; r += 2.8; sink = 1.6; }
+        else if (Math.abs(i) === 2) { a += (i > 0 ? 1 : -1) * 0.24; r += 1.2; sink = 0.5; }
+      }
+      const bx = BASIN.x + Math.cos(a) * r, bz = BASIN.z + Math.sin(a) * r;
+      const gy = groundH(bx, bz) - 1.2 - sink;
+      const s = 3.3 + Math.abs(hash2(i, 7)) * 2.0 - Math.abs(i) * 0.14;
+      latheW(md, [[s, 0], [s * 0.85, s * 1.1], [s * 0.4, s * 1.9], [0, s * 2.3]],
+        { seg: 6, ex: 0.85, x: bx, y: gy, z: bz, ry: i * 1.7, flat: true, segJitter: 0.13,
+          col: i % 2 ? C_FROCK : C_FROCK2, cols: [C_FROCK2, C_FROCK, C_CLIFF3] });
+      if (i % 2 === 0) {
+        boxW(md, { x: bx, y: gy + s * 0.8, z: bz, w: s * 0.5, d: s * 0.4, h: s * 0.7, ry: i, rx: 0.4, col: C_CHUTE });
+      }
+    }
+    for (let i = -6; i <= 6; i += 2) {
+      const a = toFore + i * 0.18;
+      if (parted && Math.abs(i) <= 2) continue;   // rubble cleared from the mouth
+      const bx = BASIN.x + Math.cos(a) * (BASIN.r + 2.5), bz = BASIN.z + Math.sin(a) * (BASIN.r + 2.5);
+      const gy = groundH(bx, bz) - 0.6;
+      latheW(md, [[1.3, 0], [0.9, 1.1], [0, 1.7]], { seg: 5, x: bx, y: gy, z: bz, ry: i * 2.3, flat: true, segJitter: 0.1, col: C_FROCK2 });
+    }
+    const m = mdMesh(md, WORLD_MAT, false);
+    m.matrixAutoUpdate = false; m.updateMatrix();
+    m.visible = false;
+    scene.add(m);
+    return m;
+  };
+  rockfallMesh = build(false);
+  rockfallOpenMesh = build(true);
 })();
 
 /* THE FIRE-WATCH TOWER — climbable by real stairs (collider tops) */
@@ -1594,7 +1623,9 @@ function tickHornet(h) {
   if (h.dead) return;
   h.t += DT;
   const gy = groundH(h.x, h.z);
-  if (inShadeAt(h.x, h.z) && h.st !== 'pop') { popHornet(h); return; }   // imp family: shade fizzles them
+  // imp family: shade fizzles them — except the FALLS HOLLOW nests, whose
+  // own ember glow sustains them in the dark (the boss-arena imp precedent)
+  if (h.area !== 'hollow' && inShadeAt(h.x, h.z) && h.st !== 'pop') { popHornet(h); return; }
   const d2p = Math.hypot(P.x - h.x, P.z - h.z);
   const faceP = () => { h.face = Math.atan2(P.x - h.x, P.z - h.z); };
   if (h.st === 'drift') {
@@ -1899,9 +1930,11 @@ function tickForest() {
       break;
     }
   }
-  /* the sealed falls basin HUMS when you reach the rockfall */
+  /* the sealed falls basin HUMS when you reach the rockfall (until the
+     resonance beat is about to open it — night two takes over from there) */
   const dh = Math.hypot(P.x - HUM_SPOT.x, P.z - HUM_SPOT.z);
-  if (dh < 13 && !humLatch) {
+  if (window.__n2WillOpen && window.__n2WillOpen()) { /* resonance owns the spot */ }
+  else if (dh < 13 && !humLatch) {
     humLatch = true;
     SFX.hum();
     showCaption('The stones here fell recently. Something under there hums.', 4200);
@@ -1967,6 +2000,7 @@ window.__forestApplySave = function () {
 /* ── per-frame: visibility, fog, animation, telemetry (rides cullChunks,
    which updateVisuals calls right after it finishes the base fog) ── */
 const FOGF = { col: col(0xe9d2ab), near: 160, far: 1250 };
+const _fogFwd = new THREE.Vector3();      // hoisted: the fog-wall cull's camera basis
 const FDBG = { reveal: false, overhead: false };
 let fT = 0, fClock = performance.now(), dbgDone = false;
 const FCHEST_ALL = [millChest, ferryChest, fgrottoChest, cedarChest];
@@ -1985,6 +2019,12 @@ cullChunks = function (ccx, ccz) {
     c.mesh.visible = (dx * dx + dz * dz) < (c.r2 || 27225);
   }
   fallsMesh.visible = forestVis;
+  {
+    const drx = BASIN.x - ccx, drz = BASIN.z - ccz;
+    const rfNear = drx * drx + drz * drz < 200 * 200;
+    rockfallMesh.visible = forestVis && rfNear && !window.__basinOpenNow;
+    rockfallOpenMesh.visible = forestVis && rfNear && !!window.__basinOpenNow;
+  }
   towerMesh.visible = forestVis;
   cedarMesh.visible = forestVis;
   window.__springsMesh.visible = forestVis;
@@ -1996,10 +2036,29 @@ cullChunks = function (ccx, ccz) {
      the near chunk and the covering mega are culled. The bay impression
      additionally requires the camera east of the pass: it must never appear
      inside Brightharbor. */
+  /* v8.1: past the fog WALL a far-tier mesh renders as 100% fog colour and
+     nothing else — linear fog saturates at fog.far, so those meshes paint
+     exactly the band the fog already paints. Culling them costs no pixel and
+     bought the falls-hollow vista its headroom back. Conservative on purpose:
+     measured against the region's fully-ramped far plane (the bay's is 185 m,
+     so this never fires there) and against the mesh's real bounding sphere.
+     The test uses VIEW depth, not ground distance: three.js fogs by
+     -mvPosition.z, so a mesh out at the corner of a 66° frustum is far less
+     fogged than its map distance suggests. Nearest depth of the bounding
+     sphere, with the camera basis taken fresh (updateCamera already ran). */
+  const fogWall = (FDBG.overhead || reveal) ? Infinity : FOGF.far;
+  camera.updateMatrixWorld();
+  camera.getWorldDirection(_fogFwd);
+  const cpx = camera.position.x, cpy = camera.position.y, cpz = camera.position.z;
+  const pastFogWall = (o) => {
+    const depth = (o.bx - cpx) * _fogFwd.x + (o.by - cpy) * _fogFwd.y + (o.bz - cpz) * _fogFwd.z;
+    return depth - o.br > fogWall;
+  };
   for (let i = 0; i < farMegas.length; i++) {
     const fm = farMegas[i];
     const dx = fm.cx - ccx, dz = fm.cz - ccz;
-    fm.mesh.visible = !reveal && (dx * dx + dz * dz > fm.actR * fm.actR) && (fm.bh ? ccx > 170 : forestVis);
+    fm.mesh.visible = !reveal && (dx * dx + dz * dz > fm.actR * fm.actR) &&
+      !pastFogWall(fm) && (fm.bh ? ccx > 170 : forestVis);
   }
   for (let i = 0; i < farTiles.length; i++) {
     const ft = farTiles[i];
@@ -2010,7 +2069,8 @@ cullChunks = function (ccx, ccz) {
     }
     const pairVis = !!(ft.pair && ft.pair.mesh && ft.pair.mesh.visible);
     const megaVis = !!(ft.mega && ft.mega.mesh.visible);
-    ft.mesh.visible = !pairVis && !megaVis && !reveal && (ft.bh ? ccx > 170 : forestVis);
+    ft.mesh.visible = !pairVis && !megaVis && !reveal && !pastFogWall(ft) &&
+      (ft.bh ? ccx > 170 : forestVis);
   }
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
   for (const ch of FCHEST_ALL) ch.group.visible = forestVis && near2(ch.x, ch.z, 80);
@@ -2184,6 +2244,11 @@ function animateForest(dtv, now, ccx, ccz) {
     if (!vis) continue;
     h.m.root.position.set(h.x, h.y, h.z);
     h.m.root.rotation.y = h.face || 0;
+    /* v8.1 draw-call hygiene: the ground blob is a DODGING cue — it only has
+       to exist while the dive is readable. Past 22 m it is a couple of pixels
+       under a bug you cannot fight yet, and the falls hollow parks four
+       hornets in one vista (4 extra calls for nothing). */
+    h.m.shadow.visible = near2(h.x, h.z, 22);
     h.m.shadow.position.y = groundH(h.x, h.z) - h.y + 0.04;
     h.m.wings.rotation.x = -0.05 + Math.sin(now / 1000 * 95 + h.sx) * 0.5;
     if (h.st === 'tele') {

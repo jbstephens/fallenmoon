@@ -322,6 +322,17 @@
     opacity: 1; pointer-events: none;
     transition: opacity 1.1s ease;
   }
+  /* night two: cinematic letterbox — slides OFF the instant control goes
+     live (the flood beat's only visual acknowledgment of the handoff) */
+  #cineBars { position: absolute; inset: 0; pointer-events: none; }
+  #cineBars .bar {
+    position: absolute; left: 0; right: 0; height: 72px; background: #06080c;
+    transition: transform 0.55s cubic-bezier(0.5, 0, 0.3, 1);
+  }
+  #cineBars .barT { top: 0; transform: translateY(-100%); }
+  #cineBars .barB { bottom: 0; transform: translateY(100%); }
+  #cineBars.on .barT { transform: translateY(0); }
+  #cineBars.on .barB { transform: translateY(0); }
 </style>
 </head>
 <body>
@@ -389,6 +400,7 @@
 
   <div id="sunveil"></div>
   <div id="reliefveil"></div>
+  <div id="cineBars"><div class="bar barT"></div><div class="bar barB"></div></div>
   <div id="glare"></div>
   <div id="fadeBlack"></div>
 </div>

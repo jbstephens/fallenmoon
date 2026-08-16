@@ -24,6 +24,8 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
+const BUILD_TAG = 'FM-N2-TIDES-RETURN-1';   // night-two deploy marker
+window.__fmBuild = BUILD_TAG;
 
 /* ───────────────────────── math utils ───────────────────────── */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -498,6 +500,17 @@ function defaultSave() {
     fallsHum: false,          // heard the hum at the sealed falls basin
     forestSeen: false,        // crossed Cinder Pass once (region title shown)
     swelterSeen: false,       // one-time swelter warning caption
+    /* PHASE 2 night two — THE FALLS HOLLOW & THE TIDE'S RETURN */
+    basinOpen: false,         // the rockfall parted (moon compass resonance)
+    glyph1: false, glyph2: false,   // the two water-glyph doors, re-lit
+    hChest: false,            // the Ben-bait salt hoard chest
+    hFossil: false,           // looked at the moonfish fossil
+    hMural: false,            // looked at the chain mural (kept ambiguous)
+    wyrmDone: false,          // the Silt Wyrm cured (dissolved into water)
+    floodSeen: false,         // watched the flood cinematic once (skippable after)
+    sailedOnce: false,        // has ever sailed
+    voyageDone: false,        // Pearl's maiden voyage happened
+    boatX: null, boatZ: null, boatAng: 0.9,   // where the wake-boat is moored
     lastShade: [8.2, 7.0],
   };
 }
@@ -527,6 +540,8 @@ function loadSave() {
     if (out.wallBurned) qMin = Math.max(qMin, 2);
     if (out.bossDone) qMin = Math.max(qMin, 3);
     if (out.sky >= 1 || out.ph >= 1) qMin = Math.max(qMin, 4);
+    /* night two: the same never-dead-end rule for the Half Shield arc */
+    if (out.sky >= 2 || out.ph >= 2) qMin = Math.max(qMin, 6);
     if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }

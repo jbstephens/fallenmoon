@@ -11,6 +11,8 @@ const QUEST_TEXT = {
   2: 'RECOVER THE CRESCENT HORN — 0/8 PHASES RESTORED',
   3: 'CARRY THE CRESCENT TO THE MOONWHEEL',
   4: '1/8 PHASES RESTORED',
+  5: 'CARRY THE HALF SHIELD TO THE MOONWHEEL',
+  6: '2/8 PHASES RESTORED',
 };
 function setQuest(q) {
   QUEST.q = q;
@@ -18,7 +20,7 @@ function setQuest(q) {
   const t = QUEST_TEXT[q] || '';
   questEl.textContent = t;
   questEl.classList.toggle('on', !!t);
-  if (q === 4) setTimeout(() => questEl.classList.remove('on'), 9000);
+  if (q === 4 || q === 6) setTimeout(() => questEl.classList.remove('on'), 9000);
 }
 
 /* ── glare overlay ── */
@@ -1257,8 +1259,8 @@ function tickBossDefeat(t) {
     // ONE hint: the carving behind the arena — the moon, chained, the chain leading down.
     const mx = GROTTO_B.x + GROTTO_B.r - 1.2, mz = GROTTO_B.z;
     const k = smoothstep(clamp((t - 8.0) / 1.2, 0, 1));
-    cineCam(lerp(P.x + 2.6, mx - 8, k), lerp(groundH(P.x, P.z) + 1.7, 3.4, k), lerp(P.z + 2.6, mz, k),
-      mx, 3.0, mz);
+    cineCam(lerp(P.x + 2.6, mx - 8, k), lerp(groundH(P.x, P.z) + 1.7, 7.15, k), lerp(P.z + 2.6, mz, k),
+      mx, 6.75, mz);
     if (CINE.step === 3) { CINE.step = 4; SFX.yawn(); /* low weird tone */ }
   } else {
     itemGetT = -1;
