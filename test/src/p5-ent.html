@@ -278,8 +278,32 @@ function trySwingKelp() {
 }
 
 /* ── damage to the player ── */
-function hurtPlayer(n, fromX, fromZ) {
+/* v7 damage-visibility invariant (John's field mystery: hits landing with
+   "no enemy anywhere" on screen). A SOURCED hit only lands if its source is
+   actually rendered this frame: visible flag chain true AND bounding sphere
+   inside the camera frustum. Otherwise the hit is suppressed — no damage,
+   no knockback. Swelter is exempt by design (it never calls hurtPlayer and
+   carries its own full feedback package). */
+const _dmgFrustum = new THREE.Frustum();
+const _dmgMat = new THREE.Matrix4();
+const _dmgSphere = new THREE.Sphere();
+let dmgSuppressed = 0;
+const lastDmgCheck = { vis: null, frus: null };
+function damageSourceRendered(root) {
+  let o = root, vis = true;
+  while (o) { if (!o.visible) { vis = false; break; } o = o.parent; }
+  lastDmgCheck.vis = vis;
+  if (!vis) { lastDmgCheck.frus = null; return false; }
+  _dmgMat.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+  _dmgFrustum.setFromProjectionMatrix(_dmgMat);
+  _dmgSphere.center.setFromMatrixPosition(root.matrixWorld);
+  _dmgSphere.radius = 1.4;   // the source's BODY — generous enough for edge-of-screen, tight enough that behind-the-camera stays unseen
+  lastDmgCheck.frus = _dmgFrustum.intersectsSphere(_dmgSphere);
+  return lastDmgCheck.frus;
+}
+function hurtPlayer(n, fromX, fromZ, srcRoot) {
   if (P.iframes > 0 || state !== 'play') return;
+  if (srcRoot && !damageSourceRendered(srcRoot)) { dmgSuppressed++; return; }
   P.hearts = Math.max(0, P.hearts - n);
   P.iframes = 85;
   P.hitT = 0.34; P.st = 'hit';
@@ -591,17 +615,28 @@ function poseAttack(c, n, ph) {
   c.shL.rotation.z = 0.35;
 }
 function poseAir(c, jvy) {
-  /* v5 jump: athletic, not prayerful — arms flung WIDE and nearly
-     straight for balance (lead arm higher, never symmetric), one knee
-     driving, legs reaching into the landing. */
+  /* v7 jump: a SPRINT HURDLE, not a leap (John twice: the wide-flung
+     straight arms read theatrical). Torso pitched into the run, lead knee
+     driven up with the shin tucked, trail leg reaching back, arms in a
+     runner's counter-swing — right forward / left back, elbows ~90°,
+     held close to the body. Never symmetric, never wide. The fall blends
+     the lead leg down toward the landing so touchdown recovers straight
+     into the run. */
   const up = clamp(jvy / 6.6, -1, 1);
-  c.kneeL.rotation.x = 0.95 + up * 0.6; c.kneeR.rotation.x = 0.45 + up * 0.35;
-  c.hipL.rotation.x = -0.6 - up * 0.35; c.hipR.rotation.x = -0.15 - up * 0.12;
-  c.shL.rotation.x = -0.55 - Math.max(0, -up) * 0.3;   // lead arm, rises into the fall
-  c.shR.rotation.x = -0.3 - Math.max(0, -up) * 0.2;
-  c.shL.rotation.z = 1.05; c.shR.rotation.z = -0.9;    // flung out, asymmetric
-  c.elL.rotation.x = -0.12; c.elR.rotation.x = -0.18;  // nearly straight
-  c.torso.rotation.x = 0.16 - up * 0.12;
+  const fall = Math.max(0, -up);                       // 0 rising → 1 falling
+  // lead (left) knee drives up hard, then reaches for the ground
+  c.hipL.rotation.x = -1.15 + fall * 0.6;
+  c.kneeL.rotation.x = 1.35 - fall * 0.8;
+  // trail (right) leg stays back, folded, coming through late
+  c.hipR.rotation.x = 0.32 - fall * 0.45;
+  c.kneeR.rotation.x = 0.62 + fall * 0.22;
+  // runner's counter-swing: RIGHT arm punches forward bent, LEFT drives back
+  c.shR.rotation.x = -0.88 + fall * 0.28; c.shR.rotation.z = -0.14;
+  c.elR.rotation.x = -1.5;
+  c.shL.rotation.x = 0.55 - fall * 0.3; c.shL.rotation.z = 0.16;
+  c.elL.rotation.x = -1.18;
+  // torso pitched forward on the sprint line, easing up into the landing
+  c.torso.rotation.x = 0.3 - fall * 0.12;
 }
 function poseItemGet(c, ph) {
   const up = smoothstep(clamp(ph * 2.4, 0, 1));

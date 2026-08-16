@@ -36,14 +36,26 @@ function bakeCol(nx, ny, nz, c, out) {
   else if (d > -0.15) { out[0] = c[0] * 0.8; out[1] = c[1] * 0.81; out[2] = c[2] * 0.9; }
   else { out[0] = c[0] * 0.56; out[1] = c[1] * 0.62; out[2] = Math.min(1, c[2] * 0.78 + 0.06); }
 }
+/* v7 WARM bake: same form shading, hue preserved. The standard bake's deep
+   shade branch cools toward BLUE (right for stone/sky bounce, and how the
+   whole bay was tuned) — but on thin organic forms it reads as saturated
+   blue paint on a TV (John's field photo: blue pine trunks). Organic props
+   (trees, stumps, snags) opt in via `warm: true` and shade toward BROWN. */
+function bakeColWarm(nx, ny, nz, c, out) {
+  const d = nx * SUNDIR[0] + ny * SUNDIR[1] + nz * SUNDIR[2];
+  if (d > 0.55) { out[0] = Math.min(1, c[0] * 1.08 + 0.02); out[1] = Math.min(1, c[1] * 1.04 + 0.01); out[2] = c[2] * 0.98; }
+  else if (d > 0.1) { out[0] = Math.min(1, c[0] * 1.0 + 0.01); out[1] = c[1] * 0.97; out[2] = c[2] * 0.94; }
+  else if (d > -0.15) { out[0] = c[0] * 0.84; out[1] = c[1] * 0.81; out[2] = c[2] * 0.76; }
+  else { out[0] = c[0] * 0.62; out[1] = c[1] * 0.57; out[2] = c[2] * 0.5; }
+}
 const _bc = [0, 0, 0];
-function pushTriW(md, ax, ay, az, bx, by, bz, cx, cy, cz, c, flip) {
+function pushTriW(md, ax, ay, az, bx, by, bz, cx, cy, cz, c, flip, warm) {
   if (flip) { const t1 = bx, t2 = by, t3 = bz; bx = cx; by = cy; bz = cz; cx = t1; cy = t2; cz = t3; }
   let ux = bx - ax, uy = by - ay, uz = bz - az;
   let vx = cx - ax, vy = cy - ay, vz = cz - az;
   let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
   const l = Math.hypot(nx, ny, nz) || 1;
-  bakeCol(nx / l, ny / l, nz / l, c, _bc);
+  (warm ? bakeColWarm : bakeCol)(nx / l, ny / l, nz / l, c, _bc);
   md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
   md.c.push(_bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2], _bc[0], _bc[1], _bc[2]);
 }
@@ -60,8 +72,8 @@ function boxW(md, o) {   // baked-light version of box()
     cs[i] = [p[0] + o.x, p[1] + o.y, p[2] + o.z];
   }
   const qd = (a, b, c2, dd, cc) => {
-    pushTriW(md, a[0], a[1], a[2], b[0], b[1], b[2], c2[0], c2[1], c2[2], cc);
-    pushTriW(md, a[0], a[1], a[2], c2[0], c2[1], c2[2], dd[0], dd[1], dd[2], cc);
+    pushTriW(md, a[0], a[1], a[2], b[0], b[1], b[2], c2[0], c2[1], c2[2], cc, false, o.warm);
+    pushTriW(md, a[0], a[1], a[2], c2[0], c2[1], c2[2], dd[0], dd[1], dd[2], cc, false, o.warm);
   };
   // wound OUTWARD on every face (v2 backface audit: v1 wound these inward,
   // so building walls vanished at glancing angles and tops read upside-down)
@@ -84,7 +96,7 @@ function latheW(md, prof, o) {
     m.c.push(c[0], c[1], c[2], c[0], c[1], c[2], c[0], c[1], c[2]);
   };
   const base = o.flat ? flatPush : (m, ax, ay, az, bx, by, bz, cx, cy, cz, c) =>
-    pushTriW(m, ax, ay, az, bx, by, bz, cx, cy, cz, c, false);
+    pushTriW(m, ax, ay, az, bx, by, bz, cx, cy, cz, c, false, o.warm);
   // winding corrected per-face: normals point OUT of the axis (or IN for o.inward)
   const tri = (A, B, C, c) => {
     const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]);
@@ -172,6 +184,69 @@ function groundH(x, z) {
   h += Math.min(26, ex * ex * 0.045) * (0.85 + vnoise(x * 0.04, z * 0.04) * 0.15);
   return h;
 }
+/* ═══ v7 ONE-GROUND-AUTHORITY ═══
+   The rendered ground sheet triangulates ANALYTIC samples on a fixed
+   lattice; anything asking groundH between lattice points used to get the
+   analytic field instead — up to 0.58 m off the visible triangles in the
+   bay, 5.6 m in the forest (measured). John's photos showed the cost:
+   feet in the ground, props floating, and no single truth for the far-tier
+   gates to compare against. From here on, groundH IS the mesh: an exact
+   replica of the builder's triangulation (same cell origins, same fine-cell
+   split, same diagonal), with a corner cache so it's cheaper per query than
+   the analytic function it wraps. The builders below sample this SAME
+   function at lattice corners, where it returns the analytic value —
+   rendered and simulated ground are now equal by construction. */
+function makeMeshField(analytic, x0, z0, x1, z1, step, finePred) {
+  const half = step / 2;
+  const cache = new Map();   // numeric half-step lattice keys — no per-query allocation
+  const corner = (x, z) => {
+    const rx = Math.round((x - x0) / half), rz = Math.round((z - z0) / half);
+    const k = rx * 2048 + rz;
+    let v = cache.get(k);
+    if (v !== undefined) return v;
+    const oddX = rx & 1, oddZ = rz & 1;
+    if (oddX !== oddZ) {
+      /* T-JUNCTION KILLER: a fine-cell mid-edge vertex on a coarse
+         neighbor's boundary must sit ON the coarse edge (the straight line
+         between the step-lattice corners) — otherwise the rendered sheet
+         cracks up to 0.54 m there and the field disagrees with the mesh
+         (found by the v7 dense-grid gate). Both the builder and this field
+         read corners HERE, so mesh and physics snap together. */
+      let coarseAdj = false;
+      if (oddX) {          // on a horizontal step boundary (z on the step lattice)
+        const cxo = x - half;
+        coarseAdj = (z < z1 - 1e-9 && !finePred(cxo, z)) ||
+                    (z - step >= z0 - 1e-9 && !finePred(cxo, z - step));
+        if (coarseAdj) v = (corner(x - half, z) + corner(x + half, z)) / 2;
+      } else {             // on a vertical step boundary (x on the step lattice)
+        const czo = z - half;
+        coarseAdj = (x < x1 - 1e-9 && !finePred(x, czo)) ||
+                    (x - step >= x0 - 1e-9 && !finePred(x - step, czo));
+        if (coarseAdj) v = (corner(x, z - half) + corner(x, z + half)) / 2;
+      }
+      if (!coarseAdj) v = analytic(x, z);
+    } else v = analytic(x, z);
+    cache.set(k, v);
+    return v;
+  };
+  return function (x, z) {
+    if (x < x0 || x >= x1 || z < z0 || z >= z1) return analytic(x, z);
+    const ix = Math.floor((x - x0) / step), iz = Math.floor((z - z0) / step);
+    let cx = x0 + ix * step, cz = z0 + iz * step, s = step;
+    if (finePred(cx, cz)) {
+      s = step / 2;
+      if (x >= cx + s) cx += s;
+      if (z >= cz + s) cz += s;
+    }
+    const y00 = corner(cx, cz), y10 = corner(cx + s, cz),
+          y01 = corner(cx, cz + s), y11 = corner(cx + s, cz + s);
+    const u = (x - cx) / s, v = (z - cz) / s;
+    return v >= u ? y00 + u * (y11 - y01) + v * (y01 - y00)
+                  : y00 + u * (y10 - y00) + v * (y11 - y10);
+  };
+}
+const BAY_FINE = (x, z) => x > -48 && x < 48 && z > -50 && z < 18;   // shared w/ buildGround
+groundH = makeMeshField(groundH, -110, -110, 110, 186, 2.2, BAY_FINE);
 /* ── grotto interior tests ── */
 function distSeg(px, pz, ax, az, bx, bz) {
   const dx = bx - ax, dz = bz - az;
@@ -446,7 +521,8 @@ function pushTriWV(md, ax, ay, az, bx, by, bz, cx, cy, cz, cA, cB, cC) {
   };
   // v3: double mesh resolution where the camera lives — the village, the
   // spawn beach, and the grass↔sand transition band around them
-  const fine = (x, z) => x > -48 && x < 48 && z > -50 && z < 18;
+  // (v7: BAY_FINE is shared with the groundH mesh-field — ONE triangulation)
+  const fine = BAY_FINE;
   for (let x = -110; x < 110; x += STEP) {
     for (let z = -110; z < 186; z += STEP) {
       if (fine(x, z)) {

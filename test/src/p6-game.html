@@ -673,7 +673,7 @@ function tickCrab(cr) {
     const lr = resolveSolid(lox, loz, c[0], c[1]);
     cr.x = lr[0]; cr.z = lr[1];
     // v3: a well-timed jump sails over the pinch
-    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z);
+    if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z, cr.c.root);
     if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
   } else if (cr.st === 'recover') {
     if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
@@ -766,7 +766,7 @@ function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
   } else if (w.st === 'dive') {
     w.x += w.dir[0] * DT; w.y += w.dir[1] * DT; w.z += w.dir[2] * DT;
     if (Math.hypot(P.x - w.x, P.z - w.z) < 0.85 && Math.abs(w.y - (groundH(P.x, P.z) + 1.0)) < 1.0) {
-      hurtPlayer(1, w.x, w.z);
+      hurtPlayer(1, w.x, w.z, w.m.root);
       w.st = 'drift'; w.t = 0;
     }
     if (w.y < gy + 0.25 || w.t > 1.1) { w.st = 'drift'; w.t = 0; }
@@ -889,7 +889,7 @@ function tickBoss() {
         CAM.shake = 0.5;
         rumble({ duration: 280, strong: 0.9, weak: 0.6 });
         burst(psDust, B.slamPos[0], groundH(B.slamPos[0], B.slamPos[1]) + 0.3, B.slamPos[1], 22, 2.6, 2.2, 0.8);
-        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z);
+        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z, B.c.root);
       }
       break;
     case 'slam':
@@ -927,7 +927,7 @@ function tickBoss() {
       break;
     case 'charge': {
       B.x += B.chargeDir[0] * 10 * DT; B.z += B.chargeDir[1] * 10 * DT;
-      if (Math.hypot(P.x - B.x, P.z - B.z) < 2.4) hurtPlayer(1, B.x - B.chargeDir[0], B.z - B.chargeDir[1]);
+      if (Math.hypot(P.x - B.x, P.z - B.z) < 2.4) hurtPlayer(1, B.x - B.chargeDir[0], B.z - B.chargeDir[1], B.c.root);
       const dc = Math.hypot(B.x - GROTTO_B.x, B.z - GROTTO_B.z);
       if (dc > GROTTO_B.r - 3.2) {
         // crash into the wall — dizzy, vulnerable

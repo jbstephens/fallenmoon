@@ -244,7 +244,10 @@ function endCamTouch(e) {
 }
 window.addEventListener('touchend', endCamTouch, { passive: true });
 window.addEventListener('touchcancel', endCamTouch, { passive: true });
-function rumble(opts) {
+function rumble(opts, tag) {
+  // tag: haptic vocabulary telemetry — swelter buzz / relief double-pulse
+  // must be DISTINCT from combat, and the gates assert the right one fired
+  window.__lastRumble = { tag: tag || 'generic', opts, t: performance.now() };
   if (window.ArcadeController && ArcadeController.rumble) {
     try { ArcadeController.rumble(0, opts); } catch (e) {}
   }
@@ -252,6 +255,7 @@ function rumble(opts) {
 
 /* ───────────────────────── audio (all synth, lazy ctx) ───────────────────────── */
 let AC = null, master = null, heatGain = null, shadeGain = null, heatLFO = null;
+let szGain = null;   // v7 swelter sizzle layer (rises with exposure, cuts on relief)
 let musicBoxT = 0, padOsc = [];
 function kickAudio() {
   if (AC) { if (AC.state === 'suspended') AC.resume().catch(() => {}); return; }
@@ -272,6 +276,21 @@ function kickAudio() {
   heatLFO = AC.createOscillator(); heatLFO.frequency.value = 0.13;
   const lg = AC.createGain(); lg.gain.value = 0.012;
   heatLFO.connect(lg); lg.connect(heatGain.gain); heatLFO.start();
+  // v7 swelter sizzle: bright filtered noise + a thin high shimmer — rises
+  // through the exposure grace period, drops to the shade hush on relief
+  {
+    const slen = AC.sampleRate * 1.5, sbuf = AC.createBuffer(1, slen, AC.sampleRate);
+    const sd = sbuf.getChannelData(0);
+    for (let i = 0; i < slen; i++) sd[i] = Math.random() * 2 - 1;
+    const ssrc = AC.createBufferSource(); ssrc.buffer = sbuf; ssrc.loop = true;
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3400; bp.Q.value = 0.8;
+    szGain = AC.createGain(); szGain.gain.value = 0.0;
+    ssrc.connect(bp); bp.connect(szGain); szGain.connect(master);
+    ssrc.start();
+    const szLFO = AC.createOscillator(); szLFO.frequency.value = 6.5;
+    const szLG = AC.createGain(); szLG.gain.value = 0.008;
+    szLFO.connect(szLG); szLG.connect(szGain.gain); szLFO.start();
+  }
   // shade pad: two soft detuned sines
   shadeGain = AC.createGain(); shadeGain.gain.value = 0.0; shadeGain.connect(master);
   [110, 164.8, 220.5].forEach((f, i) => {
@@ -432,6 +451,12 @@ function audioAmbient(dt, inShade, dusk) {
   const shadeTarget = (state === 'play' && inShade) ? 1.0 : 0.0;
   heatGain.gain.value += (heatTarget - heatGain.gain.value) * Math.min(1, dt * 2.2);
   shadeGain.gain.value += (shadeTarget - shadeGain.gain.value) * Math.min(1, dt * 2.0);
+  // v7 swelter sizzle: level pushed by the forest tick (__swAudioLevel);
+  // rises slowly with exposure, CUTS fast on relief (dt*5) to the shade hush
+  if (szGain) {
+    const szT = (state === 'play' ? (window.__swAudioLevel || 0) : 0) * 0.16;
+    szGain.gain.value += (szT - szGain.gain.value) * Math.min(1, dt * (szT < szGain.gain.value ? 5 : 1.6));
+  }
   if (inShade && state === 'play') {
     musicBoxT -= dt;
     if (musicBoxT <= 0) {

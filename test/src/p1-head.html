@@ -299,6 +299,24 @@
     position: absolute; inset: 0; background: #fff8ea;
     opacity: 0; pointer-events: none;
   }
+  /* v7 swelter package: heat vignette (builds through the grace period,
+     gentle pulse) + the cool relief wash. Pure gradients + opacity — no
+     backdrop-filter, no per-frame paint beyond a composited opacity. */
+  #sunveil {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background:
+      radial-gradient(ellipse 72% 68% at 50% 46%, rgba(255,140,40,0) 52%,
+        rgba(255,120,30,0.34) 86%, rgba(255,80,10,0.55) 100%);
+  }
+  #sunveil.on { animation: swpulse 1.5s ease-in-out infinite; }
+  @keyframes swpulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+  #reliefveil {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background:
+      radial-gradient(ellipse 80% 74% at 50% 48%, rgba(90,200,180,0) 46%,
+        rgba(70,180,160,0.3) 82%, rgba(50,150,140,0.5) 100%);
+  }
+  #sunstat { position: absolute; left: 26px; top: 20px; pointer-events: none; }
   #fadeBlack {
     position: absolute; inset: 0; background: #0b0e14;
     opacity: 1; pointer-events: none;
@@ -313,6 +331,7 @@
 
   <div id="hud">
     <canvas id="hearts" width="360" height="110"></canvas>
+    <canvas id="sunstat" width="46" height="46"></canvas>
     <div id="questLine"></div>
   </div>
   <div id="bossBar">
@@ -368,6 +387,8 @@
     <div id="tbcGo"></div>
   </div>
 
+  <div id="sunveil"></div>
+  <div id="reliefveil"></div>
   <div id="glare"></div>
   <div id="fadeBlack"></div>
 </div>

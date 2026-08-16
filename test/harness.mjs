@@ -3042,10 +3042,16 @@ async function suiteForest(base) {
       await api.waitFor(`__fm.nearBoarState === 'charge'`, 10000, 'boar charge');
       const bt1 = await api.eval('__fm.tick');
       g('boar telegraph is long (paw ≥0.9s)', bt1 - bt0 >= 54, (bt1 - bt0) + ' ticks');
-      // stand still and eat it: exactly 2 hearts
+      // stand still and eat it: exactly 2 hearts — CAMERA ON THE BOAR
+      // (v7 damage-visibility invariant: an unseen charge is suppressed by
+      // design now, so the eat-it gate must actually watch the boar)
+      await api.eval(`window.__faceBoar = true;(function w(){ if (!window.__faceBoar) return;
+        if (__fm.nearBoarDist < 900) { CAM.yaw = Math.atan2(__fm.nearBoarX - P.x, __fm.nearBoarZ - P.z) + Math.PI; CAM.stickAge = 0; }
+        requestAnimationFrame(w); })()`);
       await topUp();
       const bh0 = await api.eval('__fm.hearts');
       await api.waitFor(`__fm.hearts < ${bh0}`, 10000, 'charge lands');
+      await api.eval('window.__faceBoar = false; 0');
       const bh1 = await api.eval('__fm.hearts');
       g('boar charge hits for 2 hearts', bh0 - bh1 === 2, `${bh0}→${bh1}`);
       // jump-dodge the next one
@@ -3538,10 +3544,589 @@ async function suiteForestShots(base) {
     await sleep(1400);
     await api.shot('forest-overhead-map');
     await api.eval('__fmDebug.overhead(0); __fmDebug.camOff(); __fmDebug.hud(true);');
+    /* 12 — v7 FIELD SET: the pass-seam walkthrough strip (John's photo walk) */
+    await api.eval('__fmDebug.hud(false)');
+    for (const [i, x, z] of [[1, 120, 38], [2, 155, 38], [3, 195, 42], [4, 240, 55]]) {
+      await api.eval(`__fmDebug.warp(${x}, ${z}); P.hearts = P.maxHearts; swelterT = 0; __fmDebug.face(1.5); 0`);
+      await api.eval(`CAM.yaw = ${x < 200 ? -1.6 : -1.2}; CAM.pitch = 0.34; CAM.ready = false; 0`);
+      await sleep(650);
+      await api.shot(`pass-seam-${i}-x${x}-1280x720`);
+    }
+    /* 13 — v7 trunk close-up: warm bark, canopy attached */
+    await api.eval(`(function(){
+      let tr = null;
+      for (let ix = Math.floor(1180/9); ix <= Math.floor(1260/9) && !tr; ix++)
+        for (let iz = Math.floor(560/9); iz <= Math.floor(640/9) && !tr; iz++) {
+          const t = treeInfo(ix, iz); if (t && !t.bare) tr = t;
+        }
+      window.__trShot = tr;
+      __fmDebug.warp(tr.x + 5, tr.z + 4);
+      __fmDebug.cam(tr.x + 4.4, groundH(tr.x, tr.z) + 1.9, tr.z + 3.6, tr.x, groundH(tr.x, tr.z) + 2.6, tr.z); })()`);
+    await sleep(550);
+    await api.shot('trunk-closeup-1280x720');
+    await api.eval('__fmDebug.camOff(); 0');
+    /* 14 — v7 JUMP APEX in the forest, MID-RUN (the sprint-hurdle bar).
+       Staged exactly like the kelp apex: the bot runs, □ taps mid-stride,
+       a rAF watcher freezes the sim at the airborne apex. */
+    await api.eval('window.__fmTurbo = 1');
+    await api.eval(`window.__jShot2=false;(function w(){
+      const T=__fm;
+      if(T.air&&T.airY>0.55&&Math.hypot(P.vx,P.vz)>2.5){window.__jShot2=true;__fmDebug.freeze(1);return;}
+      requestAnimationFrame(w);})()`);
+    for (let att = 0; att < 6 && !(await api.eval('window.__jShot2')); att++) {
+      await api.eval('__fmDebug.warp(880, 470); P.hearts = P.maxHearts; swelterT = 0; 0');
+      await api.eval('__fmBot.tol = 0.6; __fmBot.target = [920, 490]');
+      const t0 = Date.now();
+      while (Date.now() - t0 < 5000) {
+        if (await api.eval('window.__jShot2')) break;
+        if (await api.eval(`!__fm.air && Math.hypot(__fm.x-880, __fm.z-470) > 4`)) await api.tap(2);
+        await sleep(60);
+      }
+      await api.eval('__fmBot.target = null');
+    }
+    gate('fshots: forest run-jump apex captured', await api.eval('window.__jShot2'));
+    await api.eval(`(function(){ const T=__fm;
+      __fmDebug.cam(T.x + 3.1, groundH(T.x+3.1, T.z-1.4)+1.6, T.z - 1.4, T.x, T.fy + 0.8, T.z); })()`);
+    await sleep(200);
+    await api.shot('jump-apex-forest-run-1280x720');
+    await api.eval('__fmDebug.freeze(0); __fmDebug.camOff(); __fmBot.release(); __fakePad.press();');
+    await api.eval('__fmDebug.hud(true)');
     const bad = api.consoleBad;
     gate('fshots: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
   } catch (e) {
     gate('fshots suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v7 GROUND-AUTHORITY gates (John's field patch, both regions) ═══
+   The lesson written into gates: seams and live-camera behavior get
+   ASSERTED on a dense grid, not sampled at hand-picked points.
+   Per position, camera orbited to 4 azimuths:
+     (a) the near-tier chunk under the player is VISIBLE
+     (b) |rendered ground at player (raycast on near tier) − groundH| < 0.05
+     (c) no impression/far-tier face within 300 m of the camera
+     (d) player capsule + camera NEVER enclosed by far-tier geometry
+         (up-rays + camera→player segment), incl. walked downslope paths */
+const SWEEP_SRC = `window.__sweep = { done: false, res: null, err: null };
+(async function () {
+try {
+  const rAF = () => new Promise(r => requestAnimationFrame(r));
+  const rc = new THREE.Raycaster();
+  const V = THREE.Vector3;
+  const res = { pts: 0, checks: 0, rays: 0, aFail: [], bFail: [], cFail: [], dFail: [],
+                worstDh: 0, worstRay: 0, pairViol: 0, prescan: {} };
+  const push = (arr, s) => { if (arr.length < 30) arr.push(s); };
+  /* PRESCAN: every rendered ground-lattice vertex height, read from the REAL
+     chunk geometry once. Gate (b) then compares the rendered corners of the
+     cell under each grid point against groundH — plus a raycast subset for
+     end-to-end truth (three.js raycast has no BVH; full-grid raycasts would
+     take hours against 60k-tri chunks). */
+  const LAT = {
+    forest: { x0: 110, z0: -38, half: 4, map: new Map() },
+    bay: { x0: -110, z0: -110, half: 1.1, map: new Map() },
+  };
+  const scanChunk = (mesh, L) => {
+    const p = mesh.geometry.getAttribute('position');
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i);
+      const rx = Math.round((x - L.x0) / L.half), rz = Math.round((z - L.z0) / L.half);
+      if (Math.abs(x - (L.x0 + rx * L.half)) > 1e-5 || Math.abs(z - (L.z0 + rz * L.half)) > 1e-5) continue;
+      const k = rx * 8192 + rz;
+      const y = p.getY(i);
+      // keep the lattice vertex CLOSEST to the authority height: prop verts
+      // can coincidentally align to the lattice above/below the sheet, and a
+      // shell ABOVE the ground is (c)/(d)'s job to catch, not (b)'s
+      const want = groundH(L.x0 + rx * L.half, L.z0 + rz * L.half);
+      const prev = L.map.get(k);
+      if (prev === undefined || Math.abs(y - want) < Math.abs(prev - want)) L.map.set(k, y);
+    }
+  };
+  for (const ch of fchunkMap.values()) if (ch.mesh) scanChunk(ch.mesh, LAT.forest);
+  for (const ch of chunkMap.values()) if (ch.mesh) scanChunk(ch.mesh, LAT.bay);
+  res.prescan = { forest: LAT.forest.map.size, bay: LAT.bay.map.size };
+  const isForest = (x, z) => x > 110 && !(x > 300 && z < -30);
+  const chunkUnder = (x, z) => isForest(x, z)
+    ? fchunkMap.get(Math.floor(x / 200) + 'f' + Math.floor(z / 200))
+    : chunkMap.get(Math.floor((x + 110) / 80) + '_' + Math.floor((z + 110) / 80));
+  /* rendered-corner check: the exact cell the mesh-field interpolates must
+     exist in the RENDERED geometry with the same corner heights */
+  const cellCorners = (x, z) => {
+    const L = isForest(x, z) ? LAT.forest : LAT.bay;
+    const fine = isForest(x, z) ? FOREST_FINE : BAY_FINE;
+    const step = L.half * 2;
+    let cx = L.x0 + Math.floor((x - L.x0) / step) * step,
+        cz = L.z0 + Math.floor((z - L.z0) / step) * step, s = step;
+    if (fine(cx, cz)) {
+      s = L.half;
+      if (x >= cx + s) cx += s;
+      if (z >= cz + s) cz += s;
+    }
+    const out = [];
+    for (const [ox, oz] of [[0, 0], [s, 0], [0, s], [s, s]]) {
+      const rx = Math.round((cx + ox - L.x0) / L.half), rz = Math.round((cz + oz - L.z0) / L.half);
+      out.push([cx + ox, cz + oz, L.map.get(rx * 8192 + rz)]);
+    }
+    return out;
+  };
+  const farVis = () => __farTiles.filter(t => t.mesh.visible);
+  const sphereOf = (m) => {
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+    return m.geometry.boundingSphere;
+  };
+  const pts = window.__sweepPts;
+  let ptIdx = 0;
+  for (const [x, z] of pts) {
+    ptIdx++;
+    if (isForest(x, z) ? window.__forestSolid(x, z) : worldSolidAt(x, z)) continue;
+    if (typeof roomAt === 'function' && roomAt(x, z)) continue;
+    __fmDebug.warp(x, z);
+    P.hearts = P.maxHearts; swelterT = 0; P.iframes = 300;
+    res.pts++;
+    const tag0 = x.toFixed(0) + ',' + z.toFixed(0);
+    /* (b) rendered corners of THIS cell == the authority at those corners
+       (camera-free). Region forced to the QUERY point's field: an fp-noise
+       corner coordinate at the x=110 seam column must not flip regions. */
+    const fieldHere = isForest(x, z) ? forestHMesh : _bhGroundH;
+    for (const [cxx, czz, ry] of cellCorners(x, z)) {
+      const dh = ry === undefined ? 99 : Math.abs(ry - fieldHere(cxx, czz));
+      if (dh > 0.05) { push(res.bFail, tag0 + ' corner ' + cxx + ',' + czz + '=' + (ry === undefined ? 'MISSING' : dh.toFixed(3))); }
+      else if (dh > res.worstDh) res.worstDh = dh;
+    }
+    /* raycast subset: end-to-end rendered-surface truth every ~40th point */
+    if (ptIdx % 40 === 0) {
+      const cu = chunkUnder(x, z);
+      if (cu && cu.mesh) {
+        rc.set(new V(x, 400, z), new V(0, -1, 0));
+        const hits = rc.intersectObject(cu.mesh, false);
+        if (hits.length) {
+          // canopies/props intercept the ray too — the gate is that a
+          // rendered surface exists AT the authority height
+          let dh = 99;
+          for (const h of hits) dh = Math.min(dh, Math.abs((400 - h.distance) - groundH(x, z)));
+          res.rays++;
+          if (dh > 0.05) push(res.bFail, tag0 + ' RAY dh=' + dh.toFixed(3));
+          else if (dh > res.worstRay) res.worstRay = dh;
+        }
+      }
+    }
+    for (const yaw of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      CAM.yaw = yaw; CAM.pitch = 0.38; CAM.ready = false; CAM.stickAge = 0;
+      await rAF(); await rAF();
+      if (state !== 'play') { __fmDebug.warp(x, z); await rAF(); }
+      res.checks++;
+      const tag = tag0 + '@' + yaw.toFixed(1);
+      // (a) near chunk under the player is visible
+      const cu = chunkUnder(x, z);
+      if (!cu || !cu.mesh || !cu.mesh.visible) push(res.aFail, tag);
+      // structural pairing invariant: never (near visible && paired far visible)
+      for (const ft of __farTiles) {
+        if (ft.mesh.visible && ft.pair && ft.pair.mesh && ft.pair.mesh.visible) { res.pairViol++; break; }
+      }
+      const cc = camera.position;
+      const fv = farVis();
+      // (c) no far-tier face inside its region's NEAR RING (the ordered
+      // per-chunk-suppression branch): forest ring 387 m ⇒ nearest legal far
+      // face ≥ 246 m; bay ring 165 m ⇒ ≥ 120 m. Bounding-sphere prefilter
+      // (sphere-dist ≥ ring ⇒ no face can be closer), raycast fan only
+      // against the rare survivors.
+      for (const [bh, ring] of [[false, 240], [true, 120]]) {
+        const nearRing = [];
+        for (const ft of fv) {
+          if (ft.bh !== bh) continue;
+          const s = sphereOf(ft.mesh);
+          if (Math.hypot(s.center.x - cc.x, s.center.z - cc.z) - s.radius < ring) nearRing.push(ft.mesh);
+        }
+        if (!nearRing.length) continue;
+        let close = 0;
+        for (let a = 0; a < 16; a++) {
+          const dx = Math.cos(a / 16 * Math.PI * 2), dz = Math.sin(a / 16 * Math.PI * 2);
+          for (const dy of [-0.05, -0.3, -0.7]) {
+            rc.set(new V(cc.x, cc.y, cc.z), new V(dx, dy, dz).normalize());
+            rc.far = ring;
+            if (rc.intersectObjects(nearRing, false).length) { close++; break; }
+          }
+        }
+        rc.far = Infinity;
+        if (close) push(res.cFail, tag + (bh ? ' bay' : ' forest') + ' rays=' + close + ' meshes=' + nearRing.length);
+      }
+      // (d) never enclosed: up-rays (player + camera) and the camera→player
+      // segment, against far meshes overlapping those columns
+      const overhead = [];
+      for (const ft of fv) {
+        const s = sphereOf(ft.mesh);
+        const dP = Math.hypot(s.center.x - x, s.center.z - z);
+        const dC = Math.hypot(s.center.x - cc.x, s.center.z - cc.z);
+        if (Math.min(dP, dC) < s.radius + 4) overhead.push(ft.mesh);
+      }
+      if (overhead.length) {
+        let enc = 0;
+        rc.set(new V(x, groundH(x, z) + 0.25, z), new V(0, 1, 0));
+        if (rc.intersectObjects(overhead, false).length) enc++;
+        rc.set(new V(cc.x, cc.y, cc.z), new V(0, 1, 0));
+        if (rc.intersectObjects(overhead, false).length) enc++;
+        const seg = new V(x - cc.x, P.fy + 1 - cc.y, z - cc.z);
+        const segLen = seg.length() || 1;
+        rc.set(new V(cc.x, cc.y, cc.z), seg.normalize());
+        rc.far = segLen;
+        if (rc.intersectObjects(overhead, false).length) enc++;
+        rc.far = Infinity;
+        if (enc) push(res.dFail, tag + ' enc=' + enc);
+      }
+    }
+  }
+  __sweep.res = res;
+} catch (e) { __sweep.err = String(e && e.stack || e); }
+  __sweep.done = true;
+})();`;
+
+async function suiteGround(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, mh: 8, region: 'forest', lastShade: [243, 57] });
+  await api.nav(base + '/?turbo=4');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.installBot('pad');
+
+    /* the dense grid: FOREST every 50 m + BRIGHTHARBOR every 25 m
+       + the pass corridor every 10 m + the field-photo points */
+    const pts = [];
+    for (let x = 180; x <= 2170; x += 50) for (let z = -20; z <= 1390; z += 50) pts.push([x, z]);
+    for (let x = -100; x <= 105; x += 25) for (let z = -100; z <= 178; z += 25) pts.push([x, z]);
+    for (let x = 100; x <= 240; x += 10) pts.push([x, x < 180 ? 38 : 38 + (x - 180) * 0.28]);   // the pass corridor
+    // John's photo points + every spring bowl + the two grottos + forecourt
+    for (const p of [[1580, 980], [1100, 700], [1050, 600], [240, 58], [36, 58], [-26, 46], [-44, 78],
+                     [390, 130], [700, 340], [1400, 690], [1650, 900], [1868, 1122], [700, 720], [1750, 380], [1900, 1165]]) pts.push(p);
+    await api.eval(`window.__sweepPts = ${JSON.stringify(pts)}; 0`);
+    await api.eval(SWEEP_SRC + '\n;0');   // detach: never await the sweep promise over CDP
+    const t0 = Date.now();
+    while (!(await api.eval('__sweep.done'))) {
+      if (Date.now() - t0 > 900000) throw new Error('sweep timed out');
+      await sleep(1500);
+    }
+    const r = await api.eval('__sweep.res');
+    gate('ground: dense grid coverage (walkable points swept)', r.pts > 700, `${r.pts} pts / ${r.checks} camera checks`);
+    gate('ground: (a) near tier VISIBLE under player everywhere', r.aFail.length === 0, r.aFail.slice(0, 4).join(' | '));
+    gate('ground: (b) |rendered − groundH| < 0.05 m everywhere', r.bFail.length === 0,
+      `worst=${r.worstDh.toFixed(4)}m ` + r.bFail.slice(0, 4).join(' | '));
+    gate('ground: (c) no far-tier face inside the near ring (246 m forest / 120 m bay)', r.cFail.length === 0, r.cFail.slice(0, 4).join(' | '));
+    gate('ground: (d) player/camera never enclosed by far tier', r.dFail.length === 0, r.dFail.slice(0, 4).join(' | '));
+    gate('ground: pairing invariant (near visible ⇒ paired far culled)', r.pairViol === 0, 'violations=' + r.pairViol);
+
+    /* walked downslope-to-water paths (the repro shape): per-frame enclosure
+       monitor while REALLY walking — bay shore dip + a spring bowl approach */
+    await api.eval(`window.__encViol = 0;(function w(){
+      if (window.__encViol === undefined) return;
+      const fv = __farTiles.filter(t => t.mesh.visible).map(t => t.mesh);
+      const rc = new THREE.Raycaster(new THREE.Vector3(P.x, P.fy + 0.2, P.z), new THREE.Vector3(0, 1, 0));
+      if (rc.intersectObjects(fv, false).length) window.__encViol++;
+      const cc = camera.position;
+      rc.set(new THREE.Vector3(cc.x, cc.y, cc.z), new THREE.Vector3(0, 1, 0));
+      if (rc.intersectObjects(fv, false).length) window.__encViol++;
+      requestAnimationFrame(w); })()`);
+    await api.eval('__fmDebug.warp(10, -30)');
+    await api.walkTo(36, 58, 2.5, 90000);      // village → down the shore to the tidepools
+    await api.walkTo(-26, 46, 2.5, 90000);     // across the dry bay floor
+    await api.eval('__fmDebug.warp(1120, 720)');
+    await api.walkTo(1052, 602, 3.0, 90000);   // downslope into the spring-3 bowl
+    const enc = await api.eval('const v = __encViol; __encViol = undefined; v');
+    gate('ground: walked downslope paths never enclosed (per-frame)', enc === 0, 'violations=' + enc);
+
+    /* photo-matched stills — the two field compositions + the bay quay */
+    await api.eval('__fmDebug.camOff(); 0');
+    for (const [name, x, z, yaw] of [
+      ['field-midforest-1580x980', 1580, 980, 0.4],
+      ['field-spring-1100x700', 1100, 700, -0.6],
+      ['field-bay-tidepools', 30, 52, 2.6],
+    ]) {
+      await api.eval(`__fmDebug.warp(${x}, ${z}); P.hearts = P.maxHearts; swelterT = 0; 0`);
+      await api.eval(`CAM.yaw = ${yaw}; CAM.pitch = 0.38; CAM.ready = false; 0`);
+      await sleep(700);
+      await api.shot(name);
+    }
+    const bad = api.consoleBad;
+    gate('ground: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('ground suite', false, e.message);
+    await api.shot('ground-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v7 TREE-UNIFICATION gates: rendered forest == colliding forest,
+   one height authority, warm bark (no blue trunks — automated hue check) ═══ */
+async function suiteTrees(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, region: 'forest', lastShade: [243, 57] });
+  await api.nav(base + '/?turbo=6');
+  try {
+    await api.waitFor(`!!window.__fmTreeAudit && __fmTreeAudit.length > 0`, 30000, 'tree audit registry');
+    const r = await api.eval(`(function(){
+      const A = window.__fmTreeAudit;
+      const res = { total: A.length, blueVerts: 0, baseOff: 0, canopyGap: 0, collMiss: 0,
+                    shadeMiss: 0, worstBase: 0, bare: 0 };
+      for (let i = 0; i < A.length; i++) {
+        const t = A[i];
+        if (t.bare) res.bare++;
+        const ch = fchunkMap.get(t.key);
+        if (!ch || !ch.mesh) { res.collMiss++; continue; }
+        const p = ch.mesh.geometry.getAttribute('position');
+        const col = ch.mesh.geometry.getAttribute('color');
+        let minY = 1e9;
+        for (let v = t.v0; v < t.vTrunk; v++) {
+          if (col.getZ(v) > col.getX(v) + 0.02) res.blueVerts++;   // warm-bark hue band: B never dominates R
+          if (p.getY(v) < minY) minY = p.getY(v);
+        }
+        const base = Math.abs(minY - (groundH(t.x, t.z) - 0.25));
+        if (base > 0.06) res.baseOff++;
+        if (base > res.worstBase) res.worstBase = base;
+        if (!t.bare) {
+          let cMin = 1e9;
+          for (let v = t.vTrunk; v < t.v1; v++) if (p.getY(v) < cMin) cMin = p.getY(v);
+          if (cMin > t.gy + t.h * 0.5 + 0.05) res.canopyGap++;     // canopy base must meet the trunk
+        }
+        if (!window.__forestSolid(t.x + t.r * 0.5, t.z)) res.collMiss++;   // rendered trunk collides
+        if (!t.bare && !canopyAt(t.x, t.z)) res.shadeMiss++;               // rendered canopy shades
+      }
+      // reverse direction: collision grid answers must all be RENDERED trees
+      let ghosts = 0;
+      const byCell = new Set(A.map(t => t.ix + ':' + t.iz));
+      for (let ix = Math.floor(110/9); ix <= Math.ceil(2180/9); ix += 3) {
+        for (let iz = Math.floor(-38/9); iz <= Math.ceil(1398/9); iz += 3) {
+          const t = treeInfo(ix, iz);
+          if (t && !byCell.has(ix + ':' + iz)) ghosts++;
+        }
+      }
+      res.ghosts = ghosts;
+      res.worstBase = +res.worstBase.toFixed(4);
+      return res;
+    })()`);
+    gate('trees: registry covers the region', r.total > 8000, r.total + ' trees, ' + r.bare + ' snags');
+    gate('trees: ZERO blue-dominant trunk vertices (warm bark)', r.blueVerts === 0, 'blue=' + r.blueVerts);
+    gate('trees: every trunk base sits on groundH (±0.06)', r.baseOff === 0, 'worst=' + r.worstBase + 'm');
+    gate('trees: zero floating canopies (canopy meets trunk)', r.canopyGap === 0, 'gaps=' + r.canopyGap);
+    gate('trees: every rendered trunk collides + every canopy shades', r.collMiss === 0 && r.shadeMiss === 0,
+      `collMiss=${r.collMiss} shadeMiss=${r.shadeMiss}`);
+    gate('trees: zero collision-only ghost trees (grid ⊆ rendered)', r.ghosts === 0, 'ghosts=' + r.ghosts);
+    const bad = api.consoleBad;
+    gate('trees: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('trees suite', false, e.message);
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v7 SWELTER FEEDBACK gates (locked spec, John + Maria 8/16):
+   warning before harm / the tick teaches / relief is celebrated /
+   state always legible ═══ */
+async function suiteSwelter(base) {
+  const { proc, port } = await launchChrome(['--autoplay-policy=no-user-gesture-required']);
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, mh: 6, region: 'forest', lastShade: [243, 57] });
+  await api.nav(base + '/?turbo=6');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.installBot('pad');
+    await api.eval('kickAudio(); 0');
+    const spot = await api.eval(`(function(){
+      for (let x = 840; x < 1000; x += 6) for (let z = 430; z < 520; z += 6) {
+        if (!window.__forestSolid(x, z) && !forestShadeAt(x, z)) return { x, z };
+      } return null; })()`);
+    gate('swelter: an open-sun test stretch exists', !!spot, JSON.stringify(spot));
+    const warpSun = async () => {
+      await api.eval(`__fmDebug.warp(${spot.x}, ${spot.z}); P.hearts = P.maxHearts; swelterT = 0; 0`);
+    };
+
+    /* 1 WARNING BEFORE HARM: vignette builds through the grace period */
+    await warpSun();
+    await api.waitFor('swelterT > 60 && swelterT < 900', 20000, 'mid-grace');
+    const early = await api.eval('({v: __fm.swVign, on: __fm.swVignOn, icon: __fm.swIconMode, fill: __fm.swIconFill, aud: __fm.swAudioLevel, dom: +getComputedStyle(sunveilEl).opacity})');
+    gate('swelter: vignette builds BEFORE the first tick', early.v > 0.1 && early.on && early.dom > 0.05,
+      JSON.stringify(early));
+    gate('swelter: sun icon on + filling toward the tick', early.icon === 'sun' && early.fill > 0.02 && early.fill < 0.9,
+      `icon=${early.icon} fill=${early.fill.toFixed(2)}`);
+    gate('swelter: sizzle audio layer live in open sun', early.aud > 0.25,
+      'level=' + early.aud.toFixed(2) + ' gain=' + await api.eval('__fm.swAudio.toFixed(4)'));
+    const lateV = await (async () => {
+      await api.waitFor('swelterT > 1000', 30000, 'late-grace');
+      return api.eval('__fm.swVign');
+    })();
+    gate('swelter: vignette grows with exposure', lateV > early.v + 0.15,
+      `${early.v.toFixed(2)} → ${lateV.toFixed(2)}`);
+
+    /* 2 THE TICK TEACHES: glyph + instructive rotating line + distinct buzz */
+    const h0 = await api.eval('__fm.hearts');
+    await api.waitFor(`__fm.swTicks >= 1`, 30000, 'first tick');
+    const tick1 = await api.eval('({h: __fm.hearts, g: __fm.swGlyphT, cap: __fm.caption, lines: __fm.swLineCount, r: __fm.lastRumble, icon: __fm.swIconMode})');
+    gate('swelter: tick drains exactly 1 heart', tick1.h === h0 - 1, `${h0}→${tick1.h}`);
+    gate('swelter: sun glyph flashes on the hearts', tick1.g > 0, 'glyphT=' + tick1.g.toFixed(2));
+    gate('swelter: first line = the locked opener, instructive', !!tick1.cap && tick1.cap.indexOf('bites') >= 0 && tick1.cap.indexOf('shade') >= 0,
+      JSON.stringify(tick1.cap));
+    gate('swelter: haptic buzz tagged distinct from combat', tick1.r === 'swelter', 'rumble=' + tick1.r);
+    await api.waitFor(`__fm.swTicks >= 2`, 40000, 'second tick');
+    const tick2 = await api.eval('({cap: __fm.caption, lines: __fm.swLineCount, idx: __fm.swLineIdx})');
+    gate('swelter: the line ROTATES (variant on tick 2)', tick2.idx === 2 && !!tick2.cap && tick2.cap.indexOf('bites') < 0,
+      JSON.stringify(tick2.cap));
+    gate('swelter: line rate ≈ once per 20 s of exposure (no spam)', tick2.lines === 2, 'lines=' + tick2.lines);
+    await api.shot('swelter-vignette-1280x720');
+
+    /* 4 STATE LEGIBLE + 3 RELIEF CELEBRATED: a real sun→shade walk */
+    await api.eval('P.hearts = P.maxHearts; swelterT = 600; 0');   // mid-swelter
+    const rel0 = await api.eval('__fm.swReliefs');
+    await api.eval('__fmDebug.warp(700, 340); 0');                  // spring 2: instant shade
+    await api.waitFor(`__fm.swReliefs > ${rel0}`, 15000, 'relief fires');
+    const rel = await api.eval('({t: __fm.swReliefT, icon: __fm.swIconMode, r: __fm.lastRumble, aud: __fm.swAudioLevel, dom: +getComputedStyle(reliefveilEl).opacity})');
+    gate('swelter: relief wash + leaf + rumble on shade entry',
+      rel.t > 0 && rel.icon === 'leaf' && rel.dom > 0.1, JSON.stringify(rel));
+    gate('swelter: relief rumble is the gentle double-pulse tag', rel.r === 'relief', 'rumble=' + rel.r);
+    gate('swelter: sizzle CUTS on relief', rel.aud === 0, 'level=' + rel.aud);
+    await api.waitTicks(20);
+    gate('swelter: relief chime fired (SFX.relief exists + AC live)',
+      await api.eval(`typeof SFX.relief === 'function' && !!AC`));
+    await api.shot('swelter-relief-1280x720');
+    // leaf fades, then sun returns on re-exposure (sun→shade→sun legibility)
+    await warpSun();
+    await api.waitFor(`__fm.swIconMode === 'sun'`, 15000, 'sun icon returns');
+    gate('swelter: state icon tracks sun→shade→sun', true);
+
+    /* Wick wilts + brow-wipes in open sun (idle) */
+    await api.eval('swelterT = 400; 0');
+    await api.waitFor('__fm.swWilt === true', 20000, 'wilt on');
+    gate('swelter: Wick wilts in open sun', true);
+    await api.waitFor('typeof window.__swWipePh === "number" && window.__swWipePh > 0.2', 25000, 'brow wipe plays');
+    gate('swelter: brow wipe plays on the idle', true);
+    await api.eval('__fmDebug.freeze(1); 0');
+    await api.shot('swelter-wilt-wipe-1280x720');
+    await api.eval('__fmDebug.freeze(0); 0');
+
+    /* relief and swelter never fire outside the forest */
+    await api.eval('__fmDebug.warp(60, 20); P.hearts = P.maxHearts; 0');
+    await api.waitFor(`__fm.swVign < 0.05 && __fm.swIconMode === 'off' && __fm.swAudioLevel === 0`,
+      8000, 'package winds down in the bay');
+    gate('swelter: package inert in Brightharbor', true,
+      'vign=' + (await api.eval('__fm.swVign')).toFixed(3));
+    const bad = api.consoleBad;
+    gate('swelter: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('swelter suite', false, e.message);
+    await api.shot('swelter-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
+/* ═══ v7 CREATURE gates: spawns/patrols as designed + the damage-visibility
+   invariant (no hit from an unrendered enemy — John's phantom damage) ═══ */
+async function suiteDmgVis(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  await api.seedSave({ ...FOREST_SAVE, mh: 8, region: 'forest', lastShade: [243, 57] });
+  await api.nav(base + '/?turbo=2');
+  try {
+    await api.waitFor(`__fm.state === 'title'`, 25000, 'title');
+    await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 10, 'focus CONTINUE');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 12, 'leave title');
+    await api.waitFor(`__fm.state === 'play'`, 25000, 'playing');
+    await api.installBot('pad');
+
+    /* census: everything the design places is spawned, alive, and homed */
+    const census = await api.eval(`(function(){
+      const glades = ['glade1','glade2','glade3'].map(id => FCLUSTERS.find(q => q.id === id));
+      const out = { boars: BOARS.length, hornets: HORNETS.length, boarHomes: 0, hornetHomes: 0,
+                    passCrabs: crabs.filter(cr => cr.area === 'pass').length,
+                    passImps: wisps.filter(w => w.area === 'pass').length };
+      for (const b of BOARS) {
+        if (glades.some(g => Math.hypot(b.sx - g.x, b.sz - g.z) < g.r + 14)) out.boarHomes++;
+      }
+      const H = FCLUSTERS.find(q => q.id === 'hollow'), F = FCLUSTERS.find(q => q.id === 'ferry');
+      for (const h of HORNETS) {
+        if (Math.hypot(h.sx - H.x, h.sz - H.z) < H.r + 14 || Math.hypot(h.sx - F.x, h.sz - F.z) < F.r + 14) out.hornetHomes++;
+      }
+      return out; })()`);
+    gate('creatures: 6 boars spawned, all homed to their glades', census.boars === 6 && census.boarHomes === 6, JSON.stringify(census));
+    gate('creatures: 6 hornets spawned at hollow + ferry', census.hornets === 6 && census.hornetHomes === 6);
+    gate('creatures: pass on-ramp crabs + imps present', census.passCrabs === 2 && census.passImps === 3);
+    // they PATROL (graze/drift movement over real time)
+    const m0 = await api.eval('BOARS.map(b => [b.x, b.z]).flat().concat(HORNETS.map(h => [h.x, h.z]).flat())');
+    await api.waitTicks(240);
+    const m1 = await api.eval('BOARS.map(b => [b.x, b.z]).flat().concat(HORNETS.map(h => [h.x, h.z]).flat())');
+    let moved = 0;
+    for (let i = 0; i < 12; i += 2) {   // the six boars graze visibly even unwatched
+      if (Math.hypot(m1[i] - m0[i], m1[i + 1] - m0[i + 1]) > 0.4) moved++;
+    }
+    gate('creatures: boars actually patrol (positions move)', moved >= 5, moved + '/6 boars moved');
+    gate('creatures: hornets alive at their posts (dive gate lives in forest suite)',
+      await api.eval('HORNETS.every(h => !h.dead)'));
+    // visible when the camera is near
+    await api.eval('__fmDebug.warp(910, 552); 0');
+    await api.waitTicks(10);
+    gate('creatures: near boar renders when camera is near',
+      await api.eval('BOARS.some(b => !b.dead && Math.hypot(b.x - P.x, b.z - P.z) < 30 && b.c.root.visible)'));
+
+    /* THE INVARIANT — suppressed while UNRENDERED. Geometry note: with the
+       3.3 m follow camera a melee-contact source is ALWAYS in-frustum, so
+       the live failure class is the VISIBLE-FLAG one — an enemy hidden by
+       the render cull still ticking. Reproduce it through the REAL cull
+       path: park the camera 120 m off with the real freecam; animateForest's
+       own 46 m visibility radius hides the boar; its brain still charges and
+       contacts. The hit must be suppressed, heart count untouched. */
+    const faceToward = `(function(){ if (__fm.nearBoarDist < 900) {
+      CAM.yaw = Math.atan2(__fm.nearBoarX - P.x, __fm.nearBoarZ - P.z) + Math.PI;
+      CAM.stickAge = 0; CAM.ready = false; } })()`;
+    await api.eval('__fmDebug.warp(893, 553); P.hearts = P.maxHearts; P.iframes = 0; swelterT = 0; 0');
+    await api.waitFor('__fm.nearBoarDist < 15', 30000, 'boar aggro');
+    await api.eval('__fmDebug.cam(1013, groundH(1013, 673) + 30, 673, 893, groundH(893, 553), 553)');
+    await api.waitFor('BOARS.every(b => !b.c.root.visible)', 10000, 'boar culled by the real visibility radius');
+    const sup0 = await api.eval('__fm.dmgSuppressed');
+    const hs0 = await api.eval('__fm.hearts');
+    let supNow = sup0;
+    for (let i = 0; i < 120 && supNow === sup0; i++) {
+      await api.eval('P.iframes = 0; swelterT = 0; 0');
+      supNow = await api.eval('__fm.dmgSuppressed');
+      if ((await api.eval('__fm.hearts')) < hs0) break;
+      await sleep(150);
+    }
+    const hsAfter = await api.eval('__fm.hearts');
+    gate('invariant: culled (unrendered) boar contact deals NO damage', hsAfter === hs0 && supNow > sup0,
+      `hearts ${hs0}→${hsAfter}, suppressed ${sup0}→${supNow}`);
+    gate('invariant: suppression logged as visibility-out', await api.eval('__fm.lastDmgVis === false'));
+    await api.eval('__fmDebug.camOff(); 0');
+
+    /* seen boar hits for real (the same charge, camera facing) */
+    await api.eval('__fmDebug.warp(893, 553); 0');
+    await api.waitFor('__fm.nearBoarDist < 15', 30000, 'boar aggro 2');
+    await api.eval(faceToward);
+    await api.eval('P.hearts = P.maxHearts; P.iframes = 0; swelterT = 0; 0');
+    const hv0 = await api.eval('__fm.hearts');
+    let hvNow = hv0, hvMin = hv0;
+    for (let i = 0; i < 120 && hvNow >= hv0; i++) {
+      await api.eval(faceToward);
+      await api.eval('swelterT = 0; 0');
+      hvNow = await api.eval('__fm.hearts');
+      if (hvNow < hvMin) hvMin = hvNow;
+      await sleep(150);
+    }
+    gate('invariant: SEEN boar charge still hits (2 hearts)', hv0 - hvMin === 2, `hearts ${hv0}→${hvMin}`);
+    const bad = api.consoleBad;
+    gate('dmgvis: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('dmgvis suite', false, e.message);
+    await api.shot('dmgvis-FAIL').catch(() => {});
   }
   c.close(); proc.kill();
 }
@@ -3570,6 +4155,10 @@ try {
   if (wants('perf')) await suitePerf(base);
   if (wants('world')) await suiteWorld(base);
   if (wants('forest')) await suiteForest(base);
+  if (wants('ground')) await suiteGround(base);
+  if (wants('trees')) await suiteTrees(base);
+  if (wants('swelter')) await suiteSwelter(base);
+  if (wants('dmgvis')) await suiteDmgVis(base);
   if (wants('fperf')) await suiteForestPerf(base);
   if (wants('fshots')) await suiteForestShots(base);
 } finally {

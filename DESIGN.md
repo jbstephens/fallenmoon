@@ -709,3 +709,23 @@ bay transforms — water, floating boats, submerged grotto path,
 cartographer's maps wrong), the wake-boat floats, FIRST SAIL
 tutorial, sailing system v1. Gets its own locked design before it
 runs.
+
+## SWELTER FEEDBACK — refined with John + Maria, 8/16 (locked)
+Principles (Maria's): instructive not descriptive; never a single
+missable prompt; safety gets its own positive signal.
+1. WARNING BEFORE HARM: in open forest sun the heat vignette builds
+   over the grace period BEFORE the first tick — you see it coming.
+2. THE TICK TEACHES: swelter damage flashes the sun glyph on the
+   hearts AND an instructive line — "TAKE SHELTER — TREES, ROCKS,
+   SPRINGS" — rotating with variants, repeating (rate-limited, ~once
+   per 20s of continued exposure), so missing one costs nothing.
+   Distinct sharp haptic buzz, different from combat.
+3. RELIEF IS CELEBRATED: stepping into canopy/rock shade/spring
+   while sweltering fires an immediate cool blue-green vignette
+   wash, a soft relief chime, a leaf glyph by the hearts, sizzle
+   audio cuts to the shade hush, and a gentle double-pulse rumble —
+   you FEEL the safety change hands, visually and haptically.
+4. STATE ALWAYS LEGIBLE: while in open sun a small sun icon by the
+   hearts fills toward the next tick; in shade it flips to a leaf
+   and fades. No memory required, no reading required — a
+   six-year-old tracks it by color and buzz.
