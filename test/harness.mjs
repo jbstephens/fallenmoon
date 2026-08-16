@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -40,8 +41,23 @@ function serve() {
   return new Promise(r => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port })));
 }
 
+const CHROME_PROFILES = [];
+function sweepChromeProfiles() {
+  for (const d of CHROME_PROFILES.splice(0)) {
+    try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) {}
+  }
+}
+process.on('exit', sweepChromeProfiles);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => { sweepChromeProfiles(); process.exit(130); });
+}
+
 async function launchChrome(extraFlags = []) {
-  const profile = fs.mkdtempSync(path.join(DIR, 'test', '.chrome-'));
+  // Chrome profiles live in the OS temp dir, never in the repo: this tree
+  // may sit inside a synced folder (iCloud Documents), and a few hundred
+  // abandoned profiles there once cost 16 GB and a wedged sync daemon.
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fm-chrome-'));
+  CHROME_PROFILES.push(profile);
   const proc = spawn(CHROME, [
     '--headless=new', '--mute-audio', '--remote-debugging-port=0',
     '--use-angle=swiftshader', '--enable-unsafe-swiftshader',

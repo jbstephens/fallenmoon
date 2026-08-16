@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,7 +31,8 @@ function serve() {
   return new Promise(r => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port })));
 }
 async function launchChrome() {
-  const profile = fs.mkdtempSync(path.join(DIR, 'test', '.chrome-probe-'));
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fm-probe-'));
+  process.on('exit', () => { try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) {} });
   const proc = spawn(CHROME, [
     '--headless=new', '--mute-audio', '--remote-debugging-port=0',
     '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
