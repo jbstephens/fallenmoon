@@ -7,6 +7,7 @@
 //   node test/harness.mjs all
 //   (or: flow kbd touch perf shots)
 import { spawn } from 'node:child_process';
+import cp from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -51,6 +52,41 @@ process.on('exit', sweepChromeProfiles);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => { sweepChromeProfiles(); process.exit(130); });
 }
+
+/* SWEEP ON THE WAY IN, TOO. The handlers above only fire on a clean exit,
+   so every run that is killed — a timeout, a ^C, an agent that dies mid
+   suite — orphans a headless Chrome AND its profile. Orphans are not idle:
+   swiftshader has no vsync, so a leftover instance sits at 250%+ CPU
+   forever. Two of them survived an overnight build here, ran for seven
+   hours, ate five of ten cores, and quietly failed the perf and timing
+   gates of every later run before anyone noticed the machine was busy.
+   484 abandoned profiles had also piled up (2.3 GB).
+   So: before this run starts, kill any stray fm-* Chrome and bin any
+   profile older than an hour. Never touch a real browser — the match is on
+   our own `--user-data-dir=<tmp>/fm-*` and nothing else. */
+function sweepStrayChrome() {
+  const tmp = os.tmpdir();
+  try {
+    cp.execSync(`pkill -f "user-data-dir=${tmp.replace(/\/$/, '')}/fm-" 2>/dev/null`,
+      { stdio: 'ignore' });
+  } catch (e) { /* nothing to kill is the normal case */ }
+  const cutoff = Date.now() - 3600e3;
+  let binned = 0;
+  try {
+    for (const name of fs.readdirSync(tmp)) {
+      if (!/^fm-[a-z]/i.test(name)) continue;
+      const full = path.join(tmp, name);
+      try {
+        const st = fs.statSync(full);
+        if (!st.isDirectory() || st.mtimeMs > cutoff) continue;
+        fs.rmSync(full, { recursive: true, force: true });
+        binned++;
+      } catch (e) {}
+    }
+  } catch (e) {}
+  if (binned) console.log(`swept ${binned} abandoned Chrome profile(s) from ${tmp}`);
+}
+sweepStrayChrome();
 
 async function launchChrome(extraFlags = []) {
   // Chrome profiles live in the OS temp dir, never in the repo: this tree
