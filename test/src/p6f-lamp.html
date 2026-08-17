@@ -117,20 +117,27 @@ const lampRoom = {
   const bx = LIGHTHOUSE.x, bz = LIGHTHOUSE.z;
   const by = groundH(bx, bz) - 0.3 + 8.95;
   const md = MD();
-  const LEN = 620, W0 = 0.55, W1 = 26;
+  /* A LIGHTHOUSE BEAM, NOT A LASER BAR. The first cut was 620m long and 26m
+     wide at the far end, additive and bright — from the shore it read as a
+     solid glowing girder lying across the horizon. What sells a beam is a
+     NARROW shaft that fades out long before it ends, tilted down onto the
+     water, faint enough to be atmosphere. Two wedges crossed in an X so it
+     reads from any bearing without a cone's triangles. */
+  const LEN = 300, W0 = 0.35, W1 = 4.6, DROP = 5.5;
   for (const dir of [1, -1]) {
-    const c0 = [1.0, 0.94, 0.72], c1 = [1.0, 0.86, 0.48];
-    // a flat wedge and a second one rolled 90°, so the shaft reads from
-    // every angle without a cone's triangle count
-    pushQuad(md, [-W0, 0, 0], [W0, 0, 0],
-      [W1 * dir * 0 + W1, 0, LEN * dir], [-W1, 0, LEN * dir], c0, c1);
-    pushQuad(md, [0, -W0, 0], [0, W0, 0],
-      [0, W1 * 0.5, LEN * dir], [0, -W1 * 0.5, LEN * dir], c1, c0);
+    const near = [1.0, 0.95, 0.78], far = [1.0, 0.88, 0.55];
+    const fz = LEN * dir, fy = -DROP;
+    // horizontal blade
+    pushQuad(md, [-W0, 0, 0], [W0, 0, 0], [W1, fy, fz], [-W1, fy, fz], near, far);
+    // vertical blade
+    pushQuad(md, [0, -W0, 0], [0, W0, 0], [0, fy + W1 * 0.6, fz], [0, fy - W1 * 0.6, fz], near, far);
   }
   lampBeam = mdMesh(md, new THREE.MeshBasicMaterial({
     vertexColors: true, transparent: true, opacity: 0.0,
-    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
+    side: THREE.DoubleSide,
   }), false);
+  lampBeam.renderOrder = 4;
   lampBeam.position.set(bx, by, bz);
   lampBeam.frustumCulled = false;
   lampBeam.visible = false;
@@ -250,13 +257,14 @@ tickCine = function (t) {
 const _lampCull = cullChunks;
 cullChunks = function (ccx, ccz) {
   _lampCull(ccx, ccz);
+  extendLampDebugOnce();
   const lit = lampLitNow || !!(SAVE && SAVE.lampLit);
-  const want = lit ? (0.30 + 0.55 * lampSunk()) : 0;      // brightest at dusk
+  const want = lit ? (0.34 + 0.66 * lampSunk()) : 0;      // brightest at dusk
   lampFlare += ((CINE.id === 'lampLight' ? lampFlare : (lit ? 1 : 0)) - lampFlare) * 0.06;
   if (lampBeam) {
     lampSpin += 0.0065;                                    // ~6s a revolution
     lampBeam.rotation.y = lampSpin;
-    lampBeam.material.opacity = want * 0.5;
+    lampBeam.material.opacity = want * 0.17;   // atmosphere, not a bar
     lampBeam.visible = lit && want > 0.02;
   }
   if (lampGlowMesh) {
@@ -281,9 +289,14 @@ window.__telemetryHooks.push(function (T) {
                     roomAt(P.x, P.z).id === 'lamp');
   T.lampBeamOn = !!(lampBeam && lampBeam.visible);
 });
-(function extendLampDebug() {
+/* __fmDebug is born in p7, which loads AFTER this file, so the helpers have
+   to be hung on lazily — the same once-guard the tide and forest parts use. */
+let lampDebugDone = false;
+function extendLampDebugOnce() {
+  if (lampDebugDone) return;
   const d = window.__fmDebug;
   if (!d) return;
+  lampDebugDone = true;
   d.warpLamp = function () {
     window.__fmDebug.warp(lampRoom.spawn.x, lampRoom.spawn.z);
     return { x: lampRoom.spawn.x, z: lampRoom.spawn.z };
@@ -294,5 +307,5 @@ window.__telemetryHooks.push(function (T) {
       opacity: lampBeam ? +lampBeam.material.opacity.toFixed(3) : null,
       sunk: +lampSunk().toFixed(3) };
   };
-})();
+}
 </script>

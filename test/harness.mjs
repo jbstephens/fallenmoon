@@ -5598,6 +5598,33 @@ async function suiteIsles(base) {
     gate('isles: SAFETY RAIL — every sanctuary stays shade at all 21 sun angles',
       railR.worst === null, `${railR.checked} checks, worst=${JSON.stringify(railR.worst)}`);
 
+    /* THE LAMP ROOM — Finn's joke from the first ten minutes, paid off.
+       The stairs only go somewhere once there is a dusk to light for. */
+    gate('lamp: the stairs open once the sun moves', await api.eval('__fm.lampStairsOpen === true'));
+    await api.eval('__fmDebug.warp(330, -178.55); 0');
+    await api.waitTicks(16);
+    await api.eval('P.x = 331.75; P.z = -179.35; 0');
+    await api.waitTicks(10);
+    gate('lamp: the ground room offers ✕ CLIMB at the stairs',
+      (await api.eval('JSON.stringify((currentInteract()||{}).id)')) === '"lampStair"');
+    await api.eval('doInteract(currentInteract()); 0');
+    await api.waitFor('__fm.inLampRoom === true', 25000, 'up in the lamp room');
+    gate('lamp: climbing puts you in the lamp room', await api.eval('__fm.inLampRoom === true'));
+    await api.eval('P.x = 330; P.z = -259.9; 0');
+    await api.waitTicks(10);
+    gate('lamp: the unlit lamp offers ✕ LIGHT THE LAMP',
+      (await api.eval('JSON.stringify((currentInteract()||{}).id)')) === '"lampLight"');
+    await api.eval('doInteract(currentInteract()); 0');
+    await api.waitFor('__fm.lampLit === true', 30000, 'the lamp catches');
+    gate('lamp: it lights, and the beam turns', await api.eval('__fm.lampLit === true') &&
+      await api.eval('__fm.lampBeamOn === true'));
+    /* brighter at dusk than at noon — the whole reason it waited for phase 3 */
+    await api.eval('__fmDebug.sunSet(0.02); 0'); await api.waitTicks(8);
+    const noonOp = (await api.eval('__fmDebug.lampInfo()')) && await api.eval('__fmDebug.lampInfo().opacity');
+    await api.eval('__fmDebug.sunSet(0.95); 0'); await api.waitTicks(8);
+    const duskOp = await api.eval('__fmDebug.lampInfo().opacity');
+    gate('lamp: the beam swells toward dusk', duskOp > noonOp * 1.5, `noon=${noonOp} dusk=${duskOp}`);
+
     /* the John sequence, extended to phase 3 */
     /* the John sequence through the REAL title: NEW GAME over a finished
        save, confirm the overwrite guard, and demand a fresh world. */
@@ -5605,7 +5632,9 @@ async function suiteIsles(base) {
     await api.waitFor(`__fm.state === 'title'`, 30000, 'title again');
     await tapUntil(api, () => api.tap(12), '__fm.titleFocus === 0', 10, 'focus NEW GAME');
     await tapUntil(api, () => api.tap(0), `__fm.state !== 'title' || __fm.ngGuard === true`, 12, 'the guard');
-    await api.tap(0);
+    /* retry the confirm too: a single press at the title can land while the
+       sim is still building the world and be spent before it is acted on */
+    await tapUntil(api, () => api.tap(0), `__fm.state === 'play'`, 14, 'fresh adventure');
     await api.waitFor(`__fm.state === 'play'`, 30000, 'fresh adventure');
     const fresh = await api.eval(`JSON.stringify({ refit: !!(SAVE && SAVE.boatRefit), moon: !!(SAVE && SAVE.moonSeen),
       bell: !!(SAVE && SAVE.watchBell), tort: !!(SAVE && SAVE.tortoiseDone), arc: !!(SAVE && SAVE.sunArc),
@@ -5614,6 +5643,8 @@ async function suiteIsles(base) {
       const f = JSON.parse(fresh);
       gate('isles: NEW GAME un-refits the boat, un-sees the moon, re-pins the sun',
         !f.refit && !f.moon && !f.bell && !f.tort && !f.arc && f.sky === 0, fresh);
+      gate('lamp: NEW GAME puts the lamp out again',
+        (await api.eval('__fm.lampLit')) === false && (await api.eval('__fm.lampStairsOpen')) === false);
     }
     const bad = api.consoleBad;
     gate('isles: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
