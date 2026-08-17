@@ -1,0 +1,2957 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PHASE 3, PART ONE — THE CROSSING & THE HOURLESS ISLES (the world)
+
+   Owns: the open-ocean swell, the keel salvage + Finn's refit + the DOUBLE
+   SAIL, combat afloat (sun gulls, reef gar), the crossing cinematic with
+   THE DROWNED MOON, and the archipelago itself (islands, shores, the
+   Bellwright, clapper crabs, chests, landfall).
+
+   Does NOT own: the Foundry dungeon, the Hour Tortoise, the Gibbous Bell,
+   the sun-moves payoff or the end cards — those are p6e-isles.html, which
+   is concatenated AFTER this file and may rely on every const below.
+
+   Wraps (delegate pattern, _n2 = the night-two/tide owner):
+     groundH, waterDepthAt, inShadeAt, nearestShadeSpot, areaAt,
+     worldSolidAt, collide, currentInteract, doInteract, tickSailing,
+     tickPlayer, swingHits, cullChunks, objectivePoint, updateCamera,
+     animateWick, startCine, tickCine, respawnLeftBehind
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── PINNED GEOGRAPHY (authoritative; p6e reads these) ───────────────── */
+/* The isles sit WEST/SOUTHWEST of Brightharbor, deliberately opposite the
+   Parched Forest (x 170..2180) so no far-tier land can intrude on the
+   crossing's horizon. Extent 2.2km x 1.5km including open water. */
+const ISLES = { x0: -2450, x1: -250, z0: -1150, z1: 350 };
+const CROSS_LANE = { fromX: -70, fromZ: 40, toX: -980, toZ: -210 };
+const MOON_SITE = { x: -560, z: -60, r: 165 };   // the drowned, chained moon
+const WATCHSTONE = { x: -980, z: -210, r: 95 };  // first landfall + anchor
+const KILN_ISLE = { x: -1520, z: -420, r: 145 }; // Great Campanile + Foundry
+const DROWNED_SPIRE = { x: -1180, z: -640, r: 58 };
+const NETMENDER = { x: -820, z: -520, r: 44 };
+const GANNET_STACK = { x: -1750, z: -120, r: 62 };
+const LONG_STRAND = { x: -2050, z: -700, r: 115 };
+const CHIME_REEF = { x: -1350, z: -60, r: 92 };
+const ISLE_LIST = [WATCHSTONE, KILN_ISLE, DROWNED_SPIRE, NETMENDER,
+                   GANNET_STACK, LONG_STRAND];
+/* the Foundry's door, at the campanile base — p6e builds what is behind it */
+const FOUNDRY_DOOR = { x: -1520, z: -352 };
+/* THE TWO BAY-SIDE PINS BELOW ARE THE ONLY NUMBERS CORRECTED FROM THE
+   ORIGINAL BLOCK, and only after sampling the flooded bay's real waterline
+   (WL = -0.55): the authored literals were (34,96) — 79 m from the only
+   drowned wreck, in 2.1 m of open water — and (10.5,9.5), which is 1.6 m
+   UNDER the returned sea. A "pry the keel" prompt floating in open water
+   and a "beach" below the waterline are not shippable. Names are untouched
+   (nothing outside this file reads them) and every ISLES pin above is
+   byte-identical to the brief. */
+/* where Finn refits the boat: the dry beach beside the moored wake-boat */
+const REFIT_BEACH = { x: 9.0, z: -2.6 };
+/* the drowned wreck's keel timber — ON her deck, where you disembark */
+const KEEL_SPOT = { x: WRECK.x - 1.6, z: WRECK.z + 1.2 };
+
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
+
+/* ── save-derived gates ───────────────────────────────────────────────── */
+const refitDone = () => !!(SAVE && SAVE.boatRefit);
+const seaOpen = refitDone;          // once she is refit, the sea edge lets you go
+window.__foundrySealed = () => !(SAVE && SAVE.watchBell);   // p6e reads this
+
+/* ═══ THE SWELL ═══
+   Three sine components with different amplitude, period and heading, so
+   the water never reads metronomic. Everything is evaluated analytically —
+   the displaced grid below writes IN PLACE into pooled Float32Arrays and
+   allocates nothing per frame. The BAY STAYS CALM: the amplitude envelope
+   is zero inside SEA_EDGE and shoals to nothing against every shore. */
+const SWELL = [
+  { amp: 0.95, dx:  0.93, dz:  0.37, len: 78, spd: 8.8 },
+  { amp: 0.52, dx:  0.55, dz: -0.84, len: 41, spd: 6.4 },
+  { amp: 0.24, dx:  0.99, dz: -0.12, len: 23, spd: 4.9 },
+];
+for (const s of SWELL) { s.k = TAU / s.len; s.w = s.k * s.spd; }
+let seaClock = 0;                       // sim-driven (deterministic under turbo)
+
+/* the BIG SET: a travelling crest, telegraphed, that costs SPEED not hearts */
+const SET = {
+  on: false, phase: 'idle', t: 0, next: 9, nx: 0.94, nz: 0.34,
+  c: 0, spd: 16, amp: 0, hit: false, warned: false, u: 0,
+  passes: 0, stalls: 0, keeps: 0, lastLine: -999, spillT: 0,
+};
+function bigSetHeight(x, z) {
+  if (!SET.on) return 0;
+  const u = x * SET.nx + z * SET.nz - SET.c;
+  const w = 27;
+  if (u > 92 || u < -104) return 0;
+  const g = Math.exp(-(u * u) / (w * w));
+  const t2 = (u + w * 1.55);
+  return SET.amp * (g - 0.4 * Math.exp(-(t2 * t2) / (w * w * 0.85)));
+}
+/* the envelope: calm bay, open ocean, and shoaling water against a shore */
+/* two answers from one island sweep: how much swell survives here, and how
+   far offshore we are (which is what the water's COLOUR reads, not the
+   swell — a calm lee should still be deep blue if the water is deep) */
+const _shoal = { amp: 0, off: 1 };
+function seaShoalAt(x, z) {
+  const dBay = Math.hypot(x - SEA_EDGE.x, z - SEA_EDGE.z);
+  let k = smoothstep(clamp((dBay - 98) / 62, 0, 1));
+  let off = smoothstep(clamp((dBay - 96) / 90, 0, 1));
+  for (let i = 0; i < ISLE_LIST.length; i++) {
+    const is = ISLE_LIST[i];
+    const d = Math.hypot(x - is.x, z - is.z);
+    if (d < is.r + 60) k *= clamp((d - is.r * 0.94) / 58, 0, 1);
+    if (d < is.r + 210) off = Math.min(off, smoothstep(clamp((d - is.r * 0.98) / 205, 0, 1)));
+  }
+  const dr = Math.hypot(x - CHIME_REEF.x, z - CHIME_REEF.z);
+  if (dr < CHIME_REEF.r + 60) k *= clamp(0.42 + (dr - CHIME_REEF.r * 0.92) / 110, 0.42, 1);
+  if (dr < CHIME_REEF.r + 190) off = Math.min(off, smoothstep(clamp((dr - CHIME_REEF.r * 0.9) / 185, 0, 1)));
+  _shoal.amp = k; _shoal.off = off;
+  return _shoal;
+}
+function swellAmpAt(x, z) { return seaShoalAt(x, z).amp; }
+function swellRawAt(x, z, t) {
+  let h = 0;
+  for (let i = 0; i < 3; i++) {
+    const s = SWELL[i];
+    h += s.amp * Math.sin((x * s.dx + z * s.dz) * s.k - s.w * t);
+  }
+  return h;
+}
+/* the one public answer: displacement of the sea surface at (x,z), now */
+function swellAt(x, z) {
+  const a = swellAmpAt(x, z);
+  if (a <= 0.002) return 0;
+  return (swellRawAt(x, z, seaClock) + bigSetHeight(x, z)) * a;
+}
+window.__swellAt = swellAt;
+
+/* ═══ THE SEA FLOOR — one analytic field, one mesh authority ═══ */
+const SEA_FLOOR = -12.5;
+const MOON_BOWL_R = 640, MOON_BOWL_D = 232;
+const CHAN = { z: 34, hw: 18, fall: 8 };     // the harbour gap west out of the bay
+const CHAN_RECT = { x0: -112, x1: -88, z0: 0, z1: 68 };
+
+/* island shape parameters live ON the pinned objects — one table, no copy */
+WATCHSTONE.top = 12.5; WATCHSTONE.core = 0.80; WATCHSTONE.shelf = -8.5; WATCHSTONE.rough = 0.9; WATCHSTONE.wob = 0.10; WATCHSTONE.seed = 1.7; WATCHSTONE.id = 'watch';
+KILN_ISLE.top = 30.0; KILN_ISLE.core = 0.86; KILN_ISLE.shelf = -9.5; KILN_ISLE.rough = 1.3; KILN_ISLE.wob = 0.12; KILN_ISLE.seed = 3.1; KILN_ISLE.id = 'kiln';
+DROWNED_SPIRE.top = -1.7; DROWNED_SPIRE.core = 0.55; DROWNED_SPIRE.shelf = -9.0; DROWNED_SPIRE.rough = 0.3; DROWNED_SPIRE.wob = 0.08; DROWNED_SPIRE.seed = 5.4; DROWNED_SPIRE.id = 'spire';
+NETMENDER.top = 7.6; NETMENDER.core = 0.68; NETMENDER.shelf = -7.5; NETMENDER.rough = 0.7; NETMENDER.wob = 0.14; NETMENDER.seed = 0.9; NETMENDER.id = 'net';
+GANNET_STACK.top = 21.0; GANNET_STACK.core = 0.24; GANNET_STACK.shelf = -9.5; GANNET_STACK.rough = 1.1; GANNET_STACK.wob = 0.09; GANNET_STACK.seed = 4.2; GANNET_STACK.id = 'gannet';
+GANNET_STACK.ramp = 1.35; GANNET_STACK.rampCore = 0.78;      // the gull road up
+LONG_STRAND.top = 6.2; LONG_STRAND.core = 0.92; LONG_STRAND.shelf = -7.0; LONG_STRAND.rough = 0.8; LONG_STRAND.wob = 0.16; LONG_STRAND.seed = 2.4; LONG_STRAND.id = 'strand';
+
+function isleRadiusAt(is, a) {
+  return is.r * (1 + is.wob * (Math.sin(a * 3 + is.seed) * 0.6 + Math.sin(a * 5 + is.seed * 2.3) * 0.4));
+}
+function isleProfileH(is, x, z) {
+  const dx = x - is.x, dz = z - is.z;
+  const d = Math.hypot(dx, dz);
+  if (d > is.r * 1.75) return null;
+  const a = Math.atan2(dz, dx);
+  const R = isleRadiusAt(is, a);
+  if (d > R * 1.6) return null;
+  if (d >= R) {                              // the shelf falling away offshore
+    const t = smoothstep(clamp((d - R) / (R * 0.58), 0, 1));
+    return lerp(WL, is.shelf, t);
+  }
+  let core = is.core;
+  if (is.ramp !== undefined) {
+    let da = a - is.ramp;
+    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+    core = lerp(core, is.rampCore, smoothstep(clamp((0.9 - Math.abs(da)) / 0.6, 0, 1)));
+  }
+  const k = 1 - d / R;                       // 0 at the waterline → 1 at the core
+  let h = WL + (is.top - WL) * smoothstep(clamp(k / core, 0, 1));
+  const inland = clamp(k * 4.5, 0, 1);
+  h += vnoise(x * 0.014, z * 0.014) * (is.top * 0.16 + 1.4) * inland;   // long dune swell
+  h += vnoise(x * 0.045, z * 0.045) * is.rough * inland;
+  h += vnoise(x * 0.11 + 7, z * 0.11) * 0.35 * inland;                  // hummocks
+  return h;
+}
+/* CHIME REEF: a shallow bar with a handful of rock heads breaking the swell */
+const REEF_HEADS = [];
+{
+  const rnd = mulberry32(60418);
+  for (let i = 0; i < 7; i++) {
+    const a = i / 7 * TAU + rnd() * 0.4;
+    const d = CHIME_REEF.r * (0.3 + rnd() * 0.62);
+    REEF_HEADS.push({ x: CHIME_REEF.x + Math.cos(a) * d, z: CHIME_REEF.z + Math.sin(a) * d,
+      r: 3.6 + rnd() * 3.4, h: WL + 0.9 + rnd() * 2.2 });
+  }
+}
+function reefH(x, z) {
+  const d = Math.hypot(x - CHIME_REEF.x, z - CHIME_REEF.z);
+  let h = -1e9;
+  if (d < CHIME_REEF.r * 1.4) {
+    h = lerp(WL - 1.35, SEA_FLOOR, smoothstep(clamp((d - CHIME_REEF.r * 0.7) / (CHIME_REEF.r * 0.7), 0, 1)));
+    h += vnoise(x * 0.05, z * 0.05) * 0.5;
+  }
+  for (let i = 0; i < REEF_HEADS.length; i++) {
+    const rh = REEF_HEADS[i];
+    const dd = Math.hypot(x - rh.x, z - rh.z);
+    if (dd < rh.r + 2) h = Math.max(h, lerp(rh.h, WL - 1.2, smoothstep(clamp((dd - rh.r * 0.55) / (rh.r * 0.9), 0, 1))));
+  }
+  return h;
+}
+/* THE HOME HEADLAND: Brightharbor's own west rim, seen from the sea, and
+   the CHANNEL cut through it — the only way out of the bay. */
+const _n2GroundH = groundH;                 // the pre-phase-3 ground authority
+function homeSeamH(z) { return _n2GroundH(-110, clamp(z, -108, 184)); }
+function chanWz(z) {
+  const d = Math.abs(z - CHAN.z);
+  return smoothstep(clamp((CHAN.hw + CHAN.fall - d) / CHAN.fall, 0, 1));
+}
+function chanFloorWest(x, z) {
+  return lerp(-4.5, -11.5, smoothstep(clamp((-110 - x) / 78, 0, 1)));
+}
+function homeCoastH(x, z) {
+  const zw = smoothstep(clamp((250 - Math.abs(z - 40)) / 88, 0, 1));
+  if (zw <= 0) return -1e9;
+  const fall = smoothstep(clamp((-110 - x) / 120, 0, 1));
+  let h = lerp(homeSeamH(z), -9.8, fall);
+  const w = chanWz(z);
+  if (w > 0) h = lerp(h, Math.min(h, chanFloorWest(x, z)), w);
+  return lerp(-9.8, h, zw);
+}
+function seaRaw(x, z) {
+  let h = SEA_FLOOR + vnoise(x * 0.0035, z * 0.0035) * 3.4 + vnoise(x * 0.012, z * 0.012) * 0.8;
+  const dm = Math.hypot(x - MOON_SITE.x, z - MOON_SITE.z);
+  if (dm < MOON_BOWL_R) h -= MOON_BOWL_D * smoothstep(clamp((MOON_BOWL_R - dm) / (MOON_BOWL_R * 0.66), 0, 1));
+  for (let i = 0; i < ISLE_LIST.length; i++) {
+    const p = isleProfileH(ISLE_LIST[i], x, z);
+    if (p !== null && p > h) h = p;
+  }
+  const rf = reefH(x, z);
+  if (rf > h) h = rf;
+  if (x > -262) { const c = homeCoastH(x, z); if (c > h) h = c; }
+  return h;
+}
+/* the CHANNEL inside the bay's own rendered rect: the same cut, expressed
+   over Brightharbor's terrain so the two fields meet exactly at x = -110 */
+function chanW(x, z) {
+  return smoothstep(clamp((-92 - x) / 6, 0, 1)) * chanWz(z);
+}
+function chanRaw(x, z) {
+  const nat = _n2GroundH(x, z);
+  const w = chanW(x, z);
+  if (w <= 0) return nat;
+  const t = smoothstep(clamp((-92 - x) / 18, 0, 1));
+  const floor = lerp(-2.95, seaRaw(-110, z), t);
+  return lerp(nat, Math.min(nat, floor), w);
+}
+
+/* ONE GROUND AUTHORITY: both fields are mesh-fields, so the height the sim
+   reads IS the triangulation that renders. The channel field reuses
+   Brightharbor's exact lattice (origin −110/−110, step 2.2, BAY_FINE) so
+   its vertices land on the bay sheet's own vertices — which is what lets
+   the carve below edit that sheet in place instead of pairing a second
+   copy of the ground against it. */
+const SEA_STEP = 6;
+const SEA_X0 = -2468, SEA_Z0 = -1184, SEA_X1 = -104, SEA_Z1 = 388;
+const ISLE_FINE = (x, z) => {
+  for (let i = 0; i < ISLE_LIST.length; i++) {
+    const is = ISLE_LIST[i];
+    const d = Math.hypot(x - is.x, z - is.z);
+    if (d > is.r - 30 && d < is.r + 24) return true;
+  }
+  return Math.hypot(x - CHIME_REEF.x, z - CHIME_REEF.z) < CHIME_REEF.r + 18;
+};
+const seaHMesh = makeMeshField(seaRaw, SEA_X0, SEA_Z0, SEA_X1, SEA_Z1, SEA_STEP, ISLE_FINE);
+const chanHMesh = makeMeshField(chanRaw, -110, -110, 110, 186, 2.2, BAY_FINE);
+const inSeaQ = (x, z) => x < -110 && x > SEA_X0 && z > SEA_Z0 && z < SEA_Z1;
+const inChanQ = (x, z) => x >= -110 && x <= CHAN_RECT.x1 && z >= CHAN_RECT.z0 && z <= CHAN_RECT.z1;
+groundH = function (x, z) {
+  if (x < -86) {
+    if (inSeaQ(x, z)) return seaHMesh(x, z);
+    if (inChanQ(x, z)) return chanHMesh(x, z);
+  }
+  return _n2GroundH(x, z);
+};
+/* which island (if any) owns this spot — used by areas, shade and culling */
+function isleAt(x, z) {
+  for (let i = 0; i < ISLE_LIST.length; i++) {
+    const is = ISLE_LIST[i];
+    if (Math.hypot(x - is.x, z - is.z) < is.r * 1.12) return is;
+  }
+  return null;
+}
+function ashoreOnIsle(x, z) {
+  const is = isleAt(x, z);
+  return is && groundH(x, z) > WL - 0.2 ? is : null;
+}
+const atSeaQ = (x, z) => x < -96;
+
+/* ── water depth: the sea now reaches a great deal further west ── */
+const _n2WaterDepth = waterDepthAt;
+waterDepthAt = function (x, z) {
+  if (x < -86 && (inSeaQ(x, z) || inChanQ(x, z))) {
+    if (!flooded()) return 0;
+    return Math.max(0, WL - groundH(x, z));
+  }
+  return _n2WaterDepth(x, z);
+};
+
+/* ── shade, respawn anchors, areas ── */
+/* every island carries a shade circle and a mooring anchor; the anchor is
+   where a sunstruck sailor wakes — WITH the boat, never in the water */
+const ISLE_SHADE = [];
+const ISLE_ANCHORS = [];   // {x,z (moor, in water), sx,sz (shade, ashore), id}
+function pushIsleAnchor(is, ax, az, sx, sz) {
+  ISLE_ANCHORS.push({ x: ax, z: az, sx, sz, id: is.id });
+}
+const _n2InShadeAt = inShadeAt;
+inShadeAt = function (x, z) {
+  if (x < -96) {
+    for (let i = 0; i < ISLE_SHADE.length; i++) {
+      const s = ISLE_SHADE[i];
+      if (Math.hypot(x - s.x, z - s.z) < s.r) return true;
+    }
+    return false;
+  }
+  return _n2InShadeAt(x, z);
+};
+let lastIsleAnchor = -1;                   // the most recent landfall/mooring
+function nearestIsleAnchor(x, z) {
+  if (lastIsleAnchor >= 0 && lastIsleAnchor < ISLE_ANCHORS.length) return ISLE_ANCHORS[lastIsleAnchor];
+  let best = null, bd = 1e9;
+  for (let i = 0; i < ISLE_ANCHORS.length; i++) {
+    const a = ISLE_ANCHORS[i];
+    const d = Math.hypot(x - a.x, z - a.z);
+    if (d < bd) { bd = d; best = a; }
+  }
+  return best;
+}
+const _n2NearestShade = nearestShadeSpot;
+nearestShadeSpot = function (x, z) {
+  if (x < -96) {
+    const a = nearestIsleAnchor(x, z);
+    if (a) return { x: a.sx, z: a.sz };
+  }
+  return _n2NearestShade(x, z);
+};
+const _n2AreaAt = areaAt;
+areaAt = function (x, z) {
+  if (x < -96) {
+    const is = isleAt(x, z);
+    return is ? 'isle_' + is.id : 'sea';
+  }
+  return _n2AreaAt(x, z);
+};
+
+/* ── SOLID authority west of the bay ── */
+const SPIRE_WALL = { r0: 6.6, r1: 9.4, archA: 1.05, archHalf: 0.36 };
+function spireArchOpen(a) {
+  let da = a - SPIRE_WALL.archA;
+  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+  return Math.abs(da) < SPIRE_WALL.archHalf;
+}
+function isleSolidAt(x, z) {
+  /* the Drowned Spire's shell — you sail IN through the broken arch */
+  {
+    const dx = x - DROWNED_SPIRE.x, dz = z - DROWNED_SPIRE.z;
+    const d = Math.hypot(dx, dz);
+    if (d > SPIRE_WALL.r0 && d < SPIRE_WALL.r1 && !spireArchOpen(Math.atan2(dz, dx))) return true;
+  }
+  /* the Great Campanile's shaft, and the tower at Watchstone */
+  if (Math.hypot(x - CAMPANILE.x, z - CAMPANILE.z) < CAMPANILE.r) return true;
+  if (Math.hypot(x - WATCH_TOWER.x, z - WATCH_TOWER.z) < WATCH_TOWER.r) return true;
+  /* reef heads that break the surface are real rock */
+  for (let i = 0; i < REEF_HEADS.length; i++) {
+    const rh = REEF_HEADS[i];
+    if (rh.h > WL + 0.35 && Math.hypot(x - rh.x, z - rh.z) < rh.r * 0.72) return true;
+  }
+  /* Brightharbor's west headland: dry cliff you may look at, never climb */
+  if (x < -108 && x > -262 && !isleAt(x, z) && groundH(x, z) > WL + 0.25) return true;
+  return false;
+}
+const _n2WorldSolid = worldSolidAt;
+worldSolidAt = function (x, z) {
+  if (x < -104) return isleSolidAt(x, z);
+  return _n2WorldSolid(x, z);
+};
+
+/* ── collide: Brightharbor's clamp stops at x = −98, which is the middle of
+   the new harbour gap. West of it we run the SAME collider list against the
+   isles' own bounds. (One list, two clamps — the alternative was editing
+   p4, which this build may not do.) ── */
+const _n2Collide = collide;
+collide = function (px, pz, pr, fy) {
+  if (!(px < -96 && px > SEA_X0 - 60 && pz > SEA_Z0 - 60 && pz < SEA_Z1 + 60)) {
+    return _n2Collide(px, pz, pr, fy);
+  }
+  let x = px, z = pz;
+  for (let i = 0; i < COLL.length; i++) {
+    const c = COLL[i];
+    if (c.off || c.plat) continue;
+    if (c.top !== undefined && fy !== undefined && fy >= c.top - 0.42) continue;
+    const dx = x - c.x, dz = z - c.z;
+    const d2 = dx * dx + dz * dz, rr = c.r + pr;
+    if (d2 < rr * rr && d2 > 0.0001) {
+      const d = Math.sqrt(d2);
+      x = c.x + dx / d * rr; z = c.z + dz / d * rr;
+    }
+  }
+  return [clamp(x, ISLES.x0 - 120, 104), clamp(z, ISLES.z0 - 120, ISLES.z1 + 120)];
+};
+
+/* ── THE HARBOUR GAP, carved into the sheet that already renders it ──
+   The bay's ground mesh was finalised in p4 (its build data is gone), so the
+   channel is cut by moving the sheet's OWN vertices onto the new field and
+   re-baking their colours. Vertices that do not sit on the old ground field
+   (props merged into the same chunk) are left alone. Rendered == physics by
+   construction: both read chanHMesh on Brightharbor's own lattice. */
+const S_SEABED = col(0x6d7a72), S_SEABED2 = col(0x55635f), S_CHANROCK = col(0x7e7d72),
+      S_CHANBAND = col(0xb0a68e), S_CHANBAND2 = col(0x8a8274);
+function chanColor(x, z, y) {
+  const n = vnoise(x * 0.09, z * 0.09), n2 = vnoise(x * 0.31 + 3, z * 0.31);
+  const t = clamp((WL - y) / 7, 0, 1);
+  mix3(S_SEABED, S_SEABED2, clamp(t * 1.1 + n * 0.25, 0, 1), _gc);
+  const steep = Math.abs(groundH(x + 1.1, z) - groundH(x - 1.1, z)) +
+                Math.abs(groundH(x, z + 1.1) - groundH(x, z - 1.1));
+  if (steep > 1.6) {
+    /* the cut face of the headland: banded rock, bedding lines and all */
+    const band = 0.5 + 0.5 * Math.sin(y * 1.35 + n * 2.2);
+    mix3(_gc, S_CHANROCK, clamp((steep - 1.6) / 3, 0, 0.9), _gc);
+    mix3(_gc, band > 0.55 ? S_CHANBAND : S_CHANBAND2, 0.16 + n2 * 0.12, _gc);
+  }
+  return _gc;
+}
+(function carveHarbourGap() {
+  let moved = 0, skipped = 0, worst = 0;
+  const A = [0, 0, 0], B = [0, 0, 0], C = [0, 0, 0];
+  for (const c of chunkMap.values()) {
+    if (!c.mesh) continue;
+    const g = c.mesh.geometry;
+    const pos = g.attributes.position, colA = g.attributes.color;
+    let dirty = false;
+    for (let t = 0; t + 2 < pos.count; t += 3) {
+      let inRect = true, isGround = true;
+      for (let k = 0; k < 3; k++) {
+        const x = pos.getX(t + k), z = pos.getZ(t + k), y = pos.getY(t + k);
+        if (x < CHAN_RECT.x0 || x > CHAN_RECT.x1 || z < CHAN_RECT.z0 || z > CHAN_RECT.z1) { inRect = false; break; }
+        if (Math.abs(y - _n2GroundH(x, z)) > 0.25) { isGround = false; break; }
+      }
+      if (!inRect) continue;
+      if (!isGround) { skipped++; continue; }
+      let changed = false;
+      for (let k = 0; k < 3; k++) {
+        const x = pos.getX(t + k), z = pos.getZ(t + k);
+        const ny = chanHMesh(x, z);
+        const dy = Math.abs(ny - pos.getY(t + k));
+        if (dy > 0.0005) { changed = true; if (dy > worst) worst = dy; }
+        const dst = k === 0 ? A : k === 1 ? B : C;
+        dst[0] = x; dst[1] = ny; dst[2] = z;
+      }
+      if (!changed) continue;
+      for (let k = 0; k < 3; k++) {
+        const dst = k === 0 ? A : k === 1 ? B : C;
+        pos.setXYZ(t + k, dst[0], dst[1], dst[2]);
+      }
+      // re-bake with the NEW face normal, exactly as buildGround did
+      const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
+      const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+      let nx = uy * vz - uz * vy, ny2 = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny2, nz) || 1;
+      nx /= l; ny2 /= l; nz /= l;
+      for (let k = 0; k < 3; k++) {
+        const dst = k === 0 ? A : k === 1 ? B : C;
+        const cc = chanColor(dst[0], dst[2], dst[1]);
+        bakeCol(nx, ny2, nz, cc, _bc);
+        colA.setXYZ(t + k, _bc[0], _bc[1], _bc[2]);
+      }
+      moved++; dirty = true;
+    }
+    if (dirty) {
+      pos.needsUpdate = true; colA.needsUpdate = true;
+      g.computeBoundingSphere();
+    }
+  }
+  window.__chanCarve = { tris: moved, skippedProps: skipped, worst: Math.round(worst * 100) / 100 };
+})();
+</script>
+<script>
+/* ═══════════ p6d/2 — THE OPEN OCEAN: swell grid, far water, the DROWNED MOON ═══════════ */
+
+/* ── the displaced swell grid ──
+   ≤48x48 verts, indexed, written IN PLACE into pooled Float32Arrays every
+   frame. Zero allocation in the hot path: the arrays, the index buffer and
+   every scratch below are made once, here. */
+const WG_N = LOWFX ? 30 : 48;
+const WG_CELL = LOWFX ? 11.5 : 7.0;
+const WG_SPAN = (WG_N - 1) * WG_CELL;
+let waveMesh = null, wavePos = null, waveCol = null, waveMat = null, waveIdx = null;
+let waveKeyI = 1e9, waveKeyJ = 1e9;
+(function buildWaveGrid() {
+  const n = WG_N * WG_N;
+  wavePos = new Float32Array(n * 3);
+  waveCol = new Float32Array(n * 3);
+  waveIdx = new Uint16Array((WG_N - 1) * (WG_N - 1) * 6);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(wavePos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(waveCol, 3));
+  g.setIndex(new THREE.BufferAttribute(waveIdx, 1));
+  waveMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.87, depthWrite: false,
+  });
+  waveMesh = new THREE.Mesh(g, waveMat);
+  waveMesh.frustumCulled = false;
+  waveMesh.renderOrder = 2;
+  waveMesh.visible = false;
+  scene.add(waveMesh);
+})();
+const S_SEA1 = col(0x11384f), S_SEA2 = col(0x1c5b68), S_SEA3 = col(0x3f8b8c),
+      S_SEA_SHOAL = col(0x6fb3a4), S_FOAM = col(0xdff0ee);
+const _wc = [0, 0, 0];
+let waterClarity = 0;              // 0 normal → 1 the clear water over the moon
+/* the bay keeps its OWN water plane (p6c). The ocean grid must not draw a
+   second surface on top of it, so the cells inside the bay's footprint are
+   dropped from the index — rebuilt only when the grid's origin moves. */
+const bayWaterCell = (cx, cz) => cx > -104 && cx < 106 && cz > -64 && cz < 190;
+function rebuildWaveIndex(x0, z0) {
+  let o = 0;
+  for (let j = 0; j < WG_N - 1; j++) {
+    for (let i = 0; i < WG_N - 1; i++) {
+      if (bayWaterCell(x0 + (i + 0.5) * WG_CELL, z0 + (j + 0.5) * WG_CELL)) continue;
+      const a = j * WG_N + i, b = a + 1, c = a + WG_N, d = c + 1;
+      waveIdx[o++] = a; waveIdx[o++] = c; waveIdx[o++] = d;
+      waveIdx[o++] = a; waveIdx[o++] = d; waveIdx[o++] = b;
+    }
+  }
+  for (let k = o; k < waveIdx.length; k++) waveIdx[k] = 0;
+  waveMesh.geometry.index.needsUpdate = true;
+  waveMesh.geometry.setDrawRange(0, o);
+}
+function updateWaveGrid() {
+  const ci = Math.round(camera.position.x / WG_CELL), cj = Math.round(camera.position.z / WG_CELL);
+  const cx = ci * WG_CELL, cz = cj * WG_CELL;
+  const x0 = cx - WG_SPAN / 2, z0 = cz - WG_SPAN / 2;
+  if (ci !== waveKeyI || cj !== waveKeyJ) { waveKeyI = ci; waveKeyJ = cj; rebuildWaveIndex(x0, z0); }
+  let o = 0;
+  let prevH = 0;
+  for (let j = 0; j < WG_N; j++) {
+    const z = z0 + j * WG_CELL;
+    prevH = 0;
+    for (let i = 0; i < WG_N; i++, o += 3) {
+      const x = x0 + i * WG_CELL;
+      const sh = seaShoalAt(x, z);
+      const a = sh.amp, off = sh.off;
+      const bs = a <= 0.002 ? 0 : bigSetHeight(x, z);
+      const h = a <= 0.002 ? 0 : (swellRawAt(x, z, seaClock) + bs) * a;
+      wavePos[o] = x; wavePos[o + 1] = WL + h; wavePos[o + 2] = z;
+      /* colour reads DEPTH, never calm: open-ocean blue in the deep, teal
+         over the shoals. The swell is sculpted by its own slope (free — the
+         previous vertex in this row is one subtraction away), which is what
+         gives a stylised sea its faces. */
+      mix3(S_SEA1, S_SEA3, 1 - off, _wc);
+      if (off < 0.5) mix3(_wc, S_SEA_SHOAL, (0.5 - off) * 1.5, _wc);
+      const slope = (h - prevH) / WG_CELL;
+      prevH = h;
+      const lit = clamp(1 + slope * 0.85, 0.82, 1.26);
+      _wc[0] *= lit; _wc[1] *= lit; _wc[2] *= lit;
+      /* THE DARK CREST LINE: a big set announces itself as a hard dark band
+         with white water on its shoulder, visible half a minute out */
+      if (bs > 0.28) {
+        mix3(_wc, S_SEA1, clamp(bs / 1.4, 0, 0.75), _wc);
+        _wc[0] *= 0.72; _wc[1] *= 0.76; _wc[2] *= 0.82;
+      } else if (bs < -0.18) {
+        mix3(_wc, S_SEA3, clamp(-bs / 0.9, 0, 0.4), _wc);
+      }
+      const crest = clamp((h - 0.62) / 0.85, 0, 1);
+      if (crest > 0) mix3(_wc, S_FOAM, crest * 0.7 * (1 - waterClarity), _wc);
+      const dip = clamp((-h - 0.25) / 1.0, 0, 1);
+      if (dip > 0) mix3(_wc, S_SEA2, dip * 0.55, _wc);
+      waveCol[o] = _wc[0]; waveCol[o + 1] = _wc[1]; waveCol[o + 2] = _wc[2];
+    }
+  }
+  waveMesh.geometry.attributes.position.needsUpdate = true;
+  waveMesh.geometry.attributes.color.needsUpdate = true;
+  waveMat.opacity = lerp(0.87, 0.17, waterClarity);
+}
+
+/* ── the far water: one opaque sheet under everything, holed around the
+   islands so their shallows stay readable ── */
+let farSeaMesh = null;
+(function buildFarSea() {
+  const md = MD();
+  const S = 80;
+  const cDeep = [0.09, 0.26, 0.36], cMid = [0.12, 0.33, 0.42];
+  /* a point is COVERED when another sheet already draws a floor there; a
+     cell is dropped only when all four corners are covered, so the far water
+     can never leave a hole for the sky to shine up through */
+  const covered = (px, pz) => {
+    for (let i = 0; i < ISLE_LIST.length; i++) {
+      const is = ISLE_LIST[i];
+      if (Math.hypot(px - is.x, pz - is.z) < is.r * 1.5) return true;
+    }
+    if (Math.hypot(px - CHIME_REEF.x, pz - CHIME_REEF.z) < CHIME_REEF.r * 1.45) return true;
+    if (Math.hypot(px - MOON_SITE.x, pz - MOON_SITE.z) < MOON_BOWL_R - 24) return true;
+    if (px > -300 && pz > -194 && pz < 264) return true;                   // the home coast sheet
+    return false;
+  };
+  for (let x = SEA_X0; x < -110; x += S) {
+    for (let z = SEA_Z0; z < SEA_Z1; z += S) {
+      if (covered(x, z) && covered(x + S, z) && covered(x, z + S) && covered(x + S, z + S)) continue;
+      const c = ((x / S) | 0) % 2 ? cDeep : cMid;
+      md.p.push(x, 0, z, x, 0, z + S, x + S, 0, z + S, x, 0, z, x + S, 0, z + S, x + S, 0, z);
+      for (let i = 0; i < 6; i++) md.c.push(c[0], c[1], c[2]);
+    }
+  }
+  farSeaMesh = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
+  farSeaMesh.position.y = WL - 0.55;
+  farSeaMesh.matrixAutoUpdate = false; farSeaMesh.updateMatrix();
+  farSeaMesh.frustumCulled = false;
+  farSeaMesh.visible = false;
+  scene.add(farSeaMesh);
+})();
+
+/* ── THE DROWNED MOON ──
+   A colossal pale sphere on the seabed, WRAPPED IN CHAINS, half-buried in
+   silt. Seen once, from above, inside an authored camera move. You cannot
+   reach it, fight it or touch it. Cost: one sphere, some rings, a silt bowl
+   built from the SAME height field the sim reads. */
+let moonMesh = null, moonSiltMesh = null, moonChainMesh = null;
+(function buildDrownedMoon() {
+  const md = MD();
+  const pale = [0.96, 0.96, 0.90], pale2 = [0.86, 0.87, 0.82], grey = [0.42, 0.45, 0.46];
+  const R = MOON_SITE.r;
+  /* pole to pole: she must be CLOSED at the crown — the first cut of this
+     sphere stopped at 68° and left an open ring exactly where the camera
+     looks down at her, so the reveal was a hole into the abyss. */
+  const rows = [];
+  for (let i = 0; i <= 22; i++) {
+    const a = -Math.PI / 2 + (i / 22) * Math.PI;
+    rows.push([Math.cos(a) * R, Math.sin(a) * R]);
+  }
+  /* 40 segments x 22 rows, not 20 x 11: the craters below are PAINTED into
+     these vertices, and at the coarse cut a 30m crater owned two or three of
+     them and blurred into a smudge. She also read as a smooth cream egg. */
+  const cols = [];
+  for (let i = 0; i < rows.length; i++) {
+    const k = i / (rows.length - 1);                 // 0 = buried pole, 1 = crown
+    cols.push(k < 0.34 ? grey : k < 0.5 ? pale2 : pale);
+  }
+  latheW(md, rows, { seg: 40, x: 0, y: 0, z: 0, segJitter: 0.05, col: pale, cols: cols });
+  moonMesh = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
+  /* CRATERS, PAINTED ON. Nothing else says MOON so fast — and painting them
+     into the sphere's own vertex colours (rather than laying dishes on top)
+     is the only way they follow her curve, since latheW cannot tilt. */
+  {
+    const rnd = mulberry32(20260817);
+    const cra = [];
+    for (let i = 0; i < 11; i++) {
+      const th = 0.10 + rnd() * 1.20, ph2 = rnd() * TAU;
+      // wider (0.13-0.34 rad) and deeper: at the old size and contrast they
+      // simply did not survive the fog out here
+      cra.push({ x: Math.sin(th) * Math.cos(ph2), y: Math.cos(th), z: Math.sin(th) * Math.sin(ph2),
+        c: Math.cos(0.13 + rnd() * 0.21), deep: 0.40 + rnd() * 0.22 });
+    }
+    const pos2 = moonMesh.geometry.attributes.position, col2 = moonMesh.geometry.attributes.color;
+    for (let i = 0; i < pos2.count; i++) {
+      const px2 = pos2.getX(i), py2 = pos2.getY(i), pz2 = pos2.getZ(i);
+      const l2 = Math.hypot(px2, py2, pz2) || 1;
+      const nx2 = px2 / l2, ny2 = py2 / l2, nz2 = pz2 / l2;
+      for (let k2 = 0; k2 < cra.length; k2++) {
+        const c3 = cra[k2];
+        const dot = nx2 * c3.x + ny2 * c3.y + nz2 * c3.z;
+        if (dot < c3.c) continue;
+        // a dish: bright at the rim, shadowed in the bowl
+        const t2 = (dot - c3.c) / (1 - c3.c);
+        const k3 = t2 < 0.22 ? lerp(1.12, c3.deep, t2 / 0.22) : c3.deep + (t2 - 0.22) * 0.22;
+        col2.setXYZ(i, Math.min(1, col2.getX(i) * k3), Math.min(1, col2.getY(i) * k3), Math.min(1, col2.getZ(i) * k3));
+        break;
+      }
+    }
+    col2.needsUpdate = true;
+  }
+  moonMesh.position.set(MOON_SITE.x, -MOON_BOWL_D + SEA_FLOOR + R * 0.42, MOON_SITE.z);
+  moonMesh.matrixAutoUpdate = false; moonMesh.updateMatrix();
+  moonMesh.frustumCulled = false;
+  moonMesh.visible = false;
+  scene.add(moonMesh);
+
+  /* THE CHAINS: four bands of vast links, rising out of the silt, over the
+     crown, and down the other side. Nobody says who set them. */
+  const mdC = MD();
+  const iron = [0.17, 0.18, 0.21], iron2 = [0.10, 0.11, 0.14];
+  for (let b = 0; b < 3; b++) {
+    const ba = b / 3 * Math.PI + 0.35;
+    /* 112 links a band, not 40. At 40 the links sat ~16m apart while each was
+       only ~5m across, so the band read as a row of floating grey rocks — the
+       single worst thing about the first reveal. Now they overlap end to end
+       and the eye joins them into one chain. */
+    const N = 112;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const ang = -0.35 + t * (Math.PI + 0.7);
+      const rr = R * 1.035;
+      const px = Math.cos(ang) * rr, py = Math.sin(ang) * rr;
+      const lx = px * Math.cos(ba), lz = px * Math.sin(ba);
+      // links: flattened rings, every other one turned a quarter — they
+      // overlap end to end, so from any distance the band reads as CHAIN
+      latheW(mdC, [[R * 0.042, 0], [R * 0.028, R * 0.040], [R * 0.042, R * 0.080]],
+        { seg: 5, ex: 0.5, x: lx, y: py, z: lz, ry: ba + (i % 2) * 1.57,
+          col: i % 2 ? iron : iron2 });
+    }
+  }
+  moonChainMesh = mdMesh(mdC, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
+  moonChainMesh.position.copy(moonMesh.position);
+  moonChainMesh.matrixAutoUpdate = false; moonChainMesh.updateMatrix();
+  moonChainMesh.frustumCulled = false;
+  moonChainMesh.visible = false;
+  scene.add(moonChainMesh);
+
+  /* the silt bowl it lies in — built from seaHMesh, so the floor you see is
+     the floor the field answers (nothing walks here; the pairing rule holds
+     anyway) */
+  const mdS = MD();
+  const STEP = 26;
+  const silt = [0.30, 0.31, 0.28], siltDeep = [0.03, 0.05, 0.07];
+  const gy = (x, z) => seaHMesh(x, z);
+  const gc = (x, z, y) => {
+    const t = clamp((SEA_FLOOR - y) / MOON_BOWL_D, 0, 1);
+    return mix3(silt, siltDeep, smoothstep(clamp(t * 1.25, 0, 1)));
+  };
+  for (let x = MOON_SITE.x - MOON_BOWL_R; x < MOON_SITE.x + MOON_BOWL_R; x += STEP) {
+    for (let z = MOON_SITE.z - MOON_BOWL_R; z < MOON_SITE.z + MOON_BOWL_R; z += STEP) {
+      if (Math.hypot(x + STEP / 2 - MOON_SITE.x, z + STEP / 2 - MOON_SITE.z) > MOON_BOWL_R) continue;
+      const y00 = gy(x, z), y10 = gy(x + STEP, z), y01 = gy(x, z + STEP), y11 = gy(x + STEP, z + STEP);
+      const c00 = gc(x, z, y00).slice(), c01 = gc(x, z + STEP, y01).slice();
+      const c11 = gc(x + STEP, z + STEP, y11).slice(), c10 = gc(x + STEP, z, y10).slice();
+      pushTriWV(mdS, x, y00, z, x, y01, z + STEP, x + STEP, y11, z + STEP, c00, c01, c11);
+      pushTriWV(mdS, x, y00, z, x + STEP, y11, z + STEP, x + STEP, y10, z, c00, c11, c10);
+    }
+  }
+  moonSiltMesh = mdMesh(mdS, WORLD_MAT, false);
+  moonSiltMesh.matrixAutoUpdate = false; moonSiltMesh.updateMatrix();
+  moonSiltMesh.frustumCulled = false;
+  moonSiltMesh.visible = false;
+  scene.add(moonSiltMesh);
+})();
+
+/* ── the harbour gap's water, seen from the BAY side. The ocean grid owns
+   the surface once the camera is west of the headland; this static patch
+   owns it before that, at exactly the same height, so the swap is
+   invisible and the two never draw on top of each other. ── */
+let chanWaterMesh = null;
+(function buildChannelWater() {
+  const md = MD();
+  const S = 4;
+  for (let x = -114; x < -86; x += S) {
+    for (let z = 0; z < 68; z += S) {
+      const g4 = [chanHMesh(x, z), chanHMesh(x + S, z), chanHMesh(x, z + S), chanHMesh(x + S, z + S)];
+      if (Math.min(g4[0], g4[1], g4[2], g4[3]) > WL + 0.3) continue;
+      const c = [0.15, 0.37, 0.47];
+      md.p.push(x, 0, z, x, 0, z + S, x + S, 0, z + S, x, 0, z, x + S, 0, z + S, x + S, 0, z);
+      for (let i = 0; i < 6; i++) md.c.push(c[0], c[1], c[2]);
+    }
+  }
+  chanWaterMesh = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.88, depthWrite: false,
+  }), false);
+  chanWaterMesh.renderOrder = 2;
+  chanWaterMesh.position.y = WL;
+  chanWaterMesh.matrixAutoUpdate = false; chanWaterMesh.updateMatrix();
+  chanWaterMesh.frustumCulled = false;
+  chanWaterMesh.visible = false;
+  scene.add(chanWaterMesh);
+})();
+
+/* ── the seam curtain: the bay sheet (2.2 m lattice) and the sea sheet
+   (6 m) meet at x = −110 with different z-samples. A one-metre-stepped
+   skirt hung on the higher of the two edges plugs every hairline. ── */
+let seamMesh = null;
+(function buildSeamSkirt() {
+  const md = MD();
+  const c = mix3(S_SEABED2, [0, 0, 0], 0.25);
+  for (let z = -130; z < 210; z += 1) {
+    const y0 = Math.max(chanHMesh(-110, z), seaHMesh(-110.001, z));
+    const y1 = Math.max(chanHMesh(-110, z + 1), seaHMesh(-110.001, z + 1));
+    md.p.push(-110, y0 + 0.05, z, -110, y1 + 0.05, z + 1, -110, y1 - 9, z + 1,
+              -110, y0 + 0.05, z, -110, y1 - 9, z + 1, -110, y0 - 9, z);
+    for (let i = 0; i < 6; i++) md.c.push(c[0], c[1], c[2]);
+  }
+  seamMesh = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  seamMesh.matrixAutoUpdate = false; seamMesh.updateMatrix();
+  seamMesh.frustumCulled = false;
+  seamMesh.visible = false;
+  scene.add(seamMesh);
+})();
+</script>
+<script>
+/* ═══════════ p6d/3 — THE HOURLESS ISLES: shores, towers, bells ═══════════
+   An old bell-keeping culture rang the hours from tower to tower, the hour
+   passing across the water like a wave. Silent for a year, because there
+   are no hours any more. Bleached timber, verdigris bronze, salt-white
+   stone, gull-streaked. ONE ground authority throughout: every walkable
+   surface is either the seaHMesh sheet or a platform collider whose top IS
+   the rendered deck. */
+
+const S_ISAND = col(0xe2d3af), S_IWET = col(0xa2997f), S_ITURF = col(0xbab887),
+      S_ITURF2 = col(0x98a271), S_IROCK = col(0x9d9a8f), S_IROCK2 = col(0x7b7a72),
+      S_IDEEP = col(0x53625e);
+const S_STONE = col(0xd5ccb6), S_STONE2 = col(0xb0a68e), S_STONE3 = col(0x8a8274),
+      S_BRONZE = col(0x9c7c3e), S_BRONZE2 = col(0x6f5527), S_VERD = col(0x5f9c86),
+      S_TIMB = col(0xa79576), S_TIMB2 = col(0x83725a), S_GUANO = col(0xe9e7dd),
+      S_ROPE = col(0xbfae8a), S_SOOT = col(0x4a463f);
+
+/* ── my own chunk tier: one merged mesh per island, culled by distance ── */
+const seaChunks = [];
+function seaChunk(id, x, z, r) {
+  for (let i = 0; i < seaChunks.length; i++) if (seaChunks[i].id === id) return seaChunks[i].md;
+  const c = { id, md: MD(), x, z, r2: r * r, mesh: null };
+  seaChunks.push(c);
+  return c.md;
+}
+
+/* ── island ground colour ── */
+function isleColor(x, z, y) {
+  const n = vnoise(x * 0.07, z * 0.07);
+  const n2 = vnoise(x * 0.019 + 11, z * 0.019 - 4);
+  if (y < WL - 0.9) { mix3(S_IDEEP, S_IWET, clamp((y - (WL - 5.5)) / 4.6, 0, 1), _gc); return _gc; }
+  if (y < WL + 0.5) { mix3(S_IWET, S_ISAND, clamp((y - (WL - 0.9)) / 1.4, 0, 1), _gc); return _gc; }
+  const sx = (seaHMesh(x + 2, z) - seaHMesh(x - 2, z)) / 4;
+  const sz = (seaHMesh(x, z + 2) - seaHMesh(x, z - 2)) / 4;
+  const slope = Math.hypot(sx, sz);
+  /* sand → salt-bleached turf, patched by two noise octaves so no two
+     facets read the same, and rock only where the ground really breaks */
+  mix3(S_ISAND, S_ITURF, clamp((y - WL - 1.6) / 4.4 + n2 * 0.25, 0, 1), _gc);
+  mix3(_gc, S_ITURF2, clamp(n * 0.5 + n2 * 0.45 + 0.4, 0, 1) * 0.5, _gc);
+  const rockT = 0.52 + n * 0.22 + n2 * 0.16;
+  if (slope > rockT) mix3(_gc, n > 0 ? S_IROCK : S_IROCK2, clamp((slope - rockT) / 0.55, 0, 0.85), _gc);
+  return _gc;
+}
+/* The bay's bake drops to 56% brightness on any face turned more than ~35°
+   from the sun, which is right for a cracked seabed and wrong for an island:
+   a dome's whole lee turns one flat grey. The isles use a gentler four-step
+   ramp of the same shape — the toon banding stays, the dead half-dome goes —
+   plus a faint azimuth tint so no two slopes read identically. */
+const _ic = [0, 0, 0];
+function pushTriIsle(md, ax, ay, az, bx, by, bz, cx, cy, cz, cA, cB, cC) {
+  const ux = bx - ax, uy = by - ay, uz = bz - az;
+  const vx = cx - ax, vy = cy - ay, vz = cz - az;
+  let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+  const l = Math.hypot(nx, ny, nz) || 1;
+  nx /= l; ny /= l; nz /= l;
+  const d = nx * SUNDIR[0] + ny * SUNDIR[1] + nz * SUNDIR[2];
+  const k = d > 0.86 ? 1.05 : d > 0.68 ? 0.98 : d > 0.42 ? 0.9 : 0.82;
+  const warm = 1 + nx * 0.035, cool = 1 - nz * 0.03;
+  for (const c of [cA, cB, cC]) {
+    _ic[0] = Math.min(1, c[0] * k * warm);
+    _ic[1] = Math.min(1, c[1] * k);
+    _ic[2] = Math.min(1, c[2] * k * cool);
+    md.c.push(_ic[0], _ic[1], _ic[2]);
+  }
+  md.p.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+}
+
+/* ── the shared sheet builder: the SAME lattice and fine-cell split the
+   height field uses, so rendered == physics by construction ── */
+function buildSeaSheet(md, x0, z0, x1, z1, keep) {
+  const gcv = (x, z) => {
+    const y = seaHMesh(x, z);
+    const c = isleColor(x, z, y);
+    return [c[0], c[1], c[2], y];
+  };
+  const cell = (x, z, s) => {
+    const c00 = gcv(x, z), c10 = gcv(x + s, z), c01 = gcv(x, z + s), c11 = gcv(x + s, z + s);
+    pushTriIsle(md, x, c00[3], z, x, c01[3], z + s, x + s, c11[3], z + s, c00, c01, c11);
+    pushTriIsle(md, x, c00[3], z, x + s, c11[3], z + s, x + s, c10[3], z, c00, c11, c10);
+  };
+  const ax0 = SEA_X0 + Math.floor((x0 - SEA_X0) / SEA_STEP) * SEA_STEP;
+  const az0 = SEA_Z0 + Math.floor((z0 - SEA_Z0) / SEA_STEP) * SEA_STEP;
+  for (let x = ax0; x < x1; x += SEA_STEP) {
+    for (let z = az0; z < z1; z += SEA_STEP) {
+      if (keep && !keep(x + SEA_STEP / 2, z + SEA_STEP / 2)) continue;
+      if (ISLE_FINE(x, z)) {
+        const h = SEA_STEP / 2;
+        cell(x, z, h); cell(x + h, z, h); cell(x, z + h, h); cell(x + h, z + h, h);
+      } else cell(x, z, SEA_STEP);
+    }
+  }
+}
+for (const is of ISLE_LIST) {
+  const R = is.r * 1.55;
+  const md = seaChunk(is.id, is.x, is.z, R + 60);
+  buildSeaSheet(md, is.x - R, is.z - R, is.x + R, is.z + R,
+    (mx, mz) => Math.hypot(mx - is.x, mz - is.z) < R + SEA_STEP);
+}
+/* the chime reef's bar */
+{
+  const R = CHIME_REEF.r * 1.5;
+  const md = seaChunk('reef', CHIME_REEF.x, CHIME_REEF.z, R + 60);
+  buildSeaSheet(md, CHIME_REEF.x - R, CHIME_REEF.z - R, CHIME_REEF.x + R, CHIME_REEF.z + R,
+    (mx, mz) => Math.hypot(mx - CHIME_REEF.x, mz - CHIME_REEF.z) < R + SEA_STEP);
+}
+/* Brightharbor's west headland and the harbour gap, seen from the water */
+{
+  const md = seaChunk('coast', -190, CHAN.z, 240);
+  buildSeaSheet(md, -302, -196, -110, 266, null);
+}
+
+/* ── small shared kit ── */
+function isleRock(md, x, z, r, h, seed) {
+  const y = seaHMesh(x, z);
+  latheW(md, [[r, 0], [r * 1.05, h * 0.45], [r * 0.6, h * 0.85], [0, h]],
+    { seg: 6, ex: 0.8 + (hash2(seed, 3) * 0.5 + 0.5) * 0.5, x, y: y - 0.4, z, ry: seed * 1.7,
+      flat: true, segJitter: 0.14, col: S_IROCK, cols: [S_IROCK2, S_IROCK, S_STONE2] });
+}
+/* a bell: hum-shaped bronze, a crown loop, a clapper. The shape reads BELL. */
+function bellMesh(md, x, y, z, s, ry, tone2) {
+  const c1 = tone2 ? S_VERD : S_BRONZE, c2 = tone2 ? S_BRONZE2 : S_BRONZE2;
+  latheW(md, [[0.62 * s, 0], [0.66 * s, 0.1 * s], [0.5 * s, 0.5 * s], [0.34 * s, 0.95 * s],
+              [0.36 * s, 1.05 * s], [0.14 * s, 1.15 * s], [0, 1.18 * s]],
+    { seg: 9, x, y, z, ry, flat: true, col: c1, cols: [c2, c1, c1, c1, c2, c2] });
+  latheW(md, [[0.1 * s, 1.18 * s], [0.08 * s, 1.34 * s], [0, 1.4 * s]],
+    { seg: 5, x, y, z, ry, flat: true, col: c2 });
+  latheW(md, [[0.07 * s, 0.12 * s], [0.1 * s, 0.02 * s], [0, -0.02 * s]],
+    { seg: 5, x, y, z, ry, flat: true, col: S_BRONZE2 });   // the clapper's tongue
+}
+/* a timber A-frame headstock a bell hangs in */
+function bellFrame(md, x, z, s, ry) {
+  const y = seaHMesh(x, z);
+  for (const sg of [-1, 1]) {
+    boxW(md, { x: x + Math.cos(ry) * sg * 1.5 * s, y, z: z + Math.sin(ry) * sg * 1.5 * s,
+      w: 0.22 * s, d: 0.22 * s, h: 2.5 * s, rz: -sg * 0.16, ry, col: S_TIMB, colB: S_TIMB2 });
+  }
+  boxW(md, { x, y: y + 2.4 * s, z, w: 1.7 * s, d: 0.2 * s, h: 0.22 * s, ry: ry + Math.PI / 2, col: S_TIMB2 });
+}
+
+/* ═══ WATCHSTONE — first landfall, a jetty, one silent tower ═══ */
+const WATCH_TOWER = { x: WATCHSTONE.x + 16, z: WATCHSTONE.z - 22, r: 4.6 };
+const WATCH_BELL = { x: WATCHSTONE.x + 2, z: WATCHSTONE.z + 4 };
+const JETTY = { a: 0.62, len: 30, y: WL + 0.85, hw: 2.6 };
+JETTY.rootX = WATCHSTONE.x + Math.cos(JETTY.a) * (WATCHSTONE.r * 0.82);
+JETTY.rootZ = WATCHSTONE.z + Math.sin(JETTY.a) * (WATCHSTONE.r * 0.82);
+JETTY.tipX = WATCHSTONE.x + Math.cos(JETTY.a) * (WATCHSTONE.r * 0.82 + JETTY.len);
+JETTY.tipZ = WATCHSTONE.z + Math.sin(JETTY.a) * (WATCHSTONE.r * 0.82 + JETTY.len);
+(function buildWatchstone() {
+  const md = seaChunk('watch', WATCHSTONE.x, WATCHSTONE.z, 0);
+  const rnd = mulberry32(9101);
+  /* THE TOWER — salt-white drum, an arcaded belfry with nothing in it */
+  {
+    const x = WATCH_TOWER.x, z = WATCH_TOWER.z, y = seaHMesh(x, z);
+    latheW(md, [[5.4, -1.2], [4.6, 0.6], [4.2, 15.0], [4.6, 16.2], [4.4, 17.0]],
+      { seg: 11, x, y, z, flat: true, segJitter: 0.05, col: S_STONE, cols: [S_STONE2, S_STONE, S_STONE, S_STONE2] });
+    // the belfry stage: four piers and a lintel ring — open arches, no bell
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * TAU + 0.3;
+      boxW(md, { x: x + Math.cos(a) * 3.7, y: y + 17.0, z: z + Math.sin(a) * 3.7,
+        w: 0.62, d: 0.62, h: 4.6, ry: a, col: S_STONE, colB: S_STONE2 });
+    }
+    latheW(md, [[4.5, 21.6], [4.7, 22.2], [4.3, 22.6]], { seg: 11, x, y, z, flat: true, col: S_STONE2 });
+    latheW(md, [[4.9, 22.6], [3.2, 25.4], [0, 27.4]], { seg: 11, x, y, z, flat: true, col: S_VERD, cols: [S_VERD, mix3(S_VERD, S_BRONZE2, 0.4)] });
+    // a stair-less door at the foot, dark inside
+    boxW(md, { x: x + Math.cos(2.4) * 4.5, y, z: z + Math.sin(2.4) * 4.5, w: 0.9, d: 0.3, h: 2.6, ry: 2.4, col: S_SOOT });
+    addColl(x, z, 4.9);
+    ISLE_SHADE.push({ x: x + 3.5, z: z + 4.5, r: 6.2 });
+  }
+  /* THE BELL — too great to hang, set in its cradle at the tower's foot,
+     with the striking beam still roped and ready. This is the one you ring. */
+  {
+    const x = WATCH_BELL.x, z = WATCH_BELL.z, y = seaHMesh(x, z);
+    bellFrame(md, x, z, 1.15, 0.9);
+    // the stone cradle
+    latheW(md, [[2.2, 0], [2.0, 0.5], [1.6, 0.62]], { seg: 9, x, y, z, flat: true, col: S_STONE2, cols: [S_STONE3, S_STONE2] });
+    // THE BELL herself — too great to hang, set down in her cradle, verdigris
+    // where the rain has run and bright bronze where hands have touched her
+    bellMesh(md, x, y + 0.55, z, 1.45, 0.9, false);
+    addColl(x, z, 1.9);
+    // the striking beam, slung on ropes
+    boxW(md, { x: x + 1.9, y: y + 1.5, z: z + 1.5, w: 0.16, d: 1.5, h: 0.16, ry: 0.9 + Math.PI / 2, col: S_TIMB2 });
+  }
+  /* THE JETTY — stone piers, a plank deck, bollards. Plat colliders' tops
+     ARE the rendered deck: one surface, one truth. */
+  {
+    const n = 11;
+    const ux = Math.cos(JETTY.a), uz = Math.sin(JETTY.a);
+    const px = -uz, pz = ux;
+    for (let i = 0; i <= n; i++) {
+      const t = i / n;
+      const x = lerp(JETTY.rootX, JETTY.tipX, t), z = lerp(JETTY.rootZ, JETTY.tipZ, t);
+      const gy = seaHMesh(x, z);
+      // pier legs down to the bed
+      if (i % 2 === 0) {
+        for (const sg of [-1, 1]) {
+          boxW(md, { x: x + px * sg * (JETTY.hw - 0.5), y: gy - 0.3, z: z + pz * sg * (JETTY.hw - 0.5),
+            w: 0.34, d: 0.34, h: JETTY.y - gy + 0.3, ry: JETTY.a, col: S_STONE3, colB: S_STONE3 });
+        }
+      }
+      // deck plank band
+      boxW(md, { x, y: JETTY.y - 0.22, z, w: JETTY.hw, d: (JETTY.len / n) * 0.55, h: 0.22,
+        ry: JETTY.a + Math.PI / 2, col: i % 2 ? S_TIMB : S_TIMB2 });
+      const cc = addColl(x, z, JETTY.hw * 0.92, JETTY.y);
+      cc.plat = true;
+    }
+    // bollards + a coil of rope at the tip
+    for (const sg of [-1, 1]) {
+      const bx = JETTY.tipX + px * sg * (JETTY.hw - 0.6), bz = JETTY.tipZ + pz * sg * (JETTY.hw - 0.6);
+      latheW(md, [[0.24, JETTY.y], [0.3, JETTY.y + 0.5], [0.22, JETTY.y + 0.62]], { seg: 6, x: bx, y: 0, z: bz, flat: true, col: S_TIMB2 });
+    }
+    latheW(md, [[0.5, JETTY.y], [0.55, JETTY.y + 0.16], [0.3, JETTY.y + 0.2]],
+      { seg: 8, x: JETTY.tipX - ux * 2.4, y: 0, z: JETTY.tipZ - uz * 2.4, flat: true, col: S_ROPE });
+  }
+  /* dressing: crates, a drying rack with no fish, wind-bent rocks */
+  for (let i = 0; i < 7; i++) {
+    const a = rnd() * TAU, d = WATCHSTONE.r * (0.25 + rnd() * 0.6);
+    isleRock(md, WATCHSTONE.x + Math.cos(a) * d, WATCHSTONE.z + Math.sin(a) * d, 1.1 + rnd() * 1.6, 1.4 + rnd() * 2.2, i * 3 + 1);
+  }
+  for (let i = 0; i < 3; i++) {
+    const x = JETTY.rootX - 5 + i * 2.4, z = JETTY.rootZ + 4 + (i % 2) * 1.6;
+    const y = seaHMesh(x, z);
+    boxW(md, { x, y, z, w: 0.55, d: 0.55, h: 0.9, ry: rnd() * 3, col: S_TIMB, colB: S_TIMB2 });
+    addColl(x, z, 0.6);
+  }
+  pushIsleAnchor(WATCHSTONE, JETTY.tipX + Math.cos(JETTY.a + 1.4) * 4.2, JETTY.tipZ + Math.sin(JETTY.a + 1.4) * 4.2,
+    WATCH_TOWER.x + 3.5, WATCH_TOWER.z + 4.5);
+})();
+
+/* ═══ KILN ISLE — the GREAT CAMPANILE, the kilns, and the Foundry's door ═══ */
+const CAMPANILE = { x: KILN_ISLE.x, z: KILN_ISLE.z + 8, r: 8.6, h: 88 };
+(function buildKilnIsle() {
+  const md = seaChunk('kiln', KILN_ISLE.x, KILN_ISLE.z, 0);
+  const rnd = mulberry32(4242);
+  /* THE GREAT CAMPANILE — the far landmark that pulls you the whole way.
+     A square salt-stone shaft with pilaster strips, an arcaded bell stage
+     and a verdigris pyramid. Visible from the bay mouth, 1 km off. */
+  {
+    /* her own chunk: she must draw from a kilometre out (she is the landmark
+       that pulls you the whole way) without dragging the island's entire
+       ground sheet into the frame with her */
+    const md = seaChunk('camp', CAMPANILE.x, CAMPANILE.z, 1600);
+    const x = CAMPANILE.x, z = CAMPANILE.z, y = seaHMesh(x, z);
+    const H = CAMPANILE.h;
+    // plinth
+    boxW(md, { x, y: y - 1.5, z, w: 11.5, d: 11.5, h: 3.4, tw: 10.2, td: 10.2, col: S_STONE2, colB: S_STONE3 });
+    // the shaft, in four tapering stages with string courses
+    let by = y + 1.9, bw = 8.4;
+    for (let s = 0; s < 4; s++) {
+      const hh = H * 0.2;
+      boxW(md, { x, y: by, z, w: bw, d: bw, h: hh, tw: bw - 0.5, td: bw - 0.5,
+        col: s % 2 ? S_STONE : mix3(S_STONE, S_STONE2, 0.35), colB: S_STONE2 });
+      // pilaster strips on each face
+      for (const sg of [-1, 1]) {
+        boxW(md, { x: x + sg * (bw - 0.2), y: by, z, w: 0.3, d: bw * 0.9, h: hh, col: S_STONE2 });
+        boxW(md, { x, y: by, z: z + sg * (bw - 0.2), w: bw * 0.9, d: 0.3, h: hh, col: S_STONE2 });
+      }
+      by += hh;
+      boxW(md, { x, y: by, z, w: bw + 0.5, d: bw + 0.5, h: 0.7, col: S_STONE2, colB: S_STONE3 });
+      by += 0.7;
+      bw -= 0.5;
+    }
+    // the bell stage: four great arch openings, dark inside
+    const sh = 12;
+    boxW(md, { x, y: by, z, w: bw + 0.6, d: bw + 0.6, h: sh, col: S_STONE, colB: S_STONE2 });
+    for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      boxW(md, { x: x + ox * (bw + 0.62), y: by + 2.2, z: z + oz * (bw + 0.62),
+        w: ox ? 0.16 : 2.6, d: oz ? 0.16 : 2.6, h: sh - 4.6, col: S_SOOT });
+    }
+    by += sh;
+    boxW(md, { x, y: by, z, w: bw + 1.5, d: bw + 1.5, h: 1.1, col: S_STONE2, colB: S_STONE3 });
+    by += 1.1;
+    // the verdigris pyramid + a weather bell on top
+    boxW(md, { x, y: by, z, w: bw + 1.1, d: bw + 1.1, h: 11.5, tw: 0.3, td: 0.3, col: S_VERD, colB: mix3(S_VERD, S_BRONZE2, 0.5) });
+    latheW(md, [[0.55, by + 11.5], [0, by + 12.6]], { seg: 6, x, y: 0, z, flat: true, col: S_BRONZE });
+    addColl(x, z, CAMPANILE.r);
+    ISLE_SHADE.push({ x: x + 7, z: z + 9, r: 9 });
+  }
+  /* THE FOUNDRY DOOR — in the bluff below the campanile. p6e owns what is
+     behind it; this is the portal, the threshold and the seal. */
+  {
+    const x = FOUNDRY_DOOR.x, z = FOUNDRY_DOOR.z, y = seaHMesh(x, z);
+    // the cut face of the bluff
+    boxW(md, { x, y: y - 1, z: z - 3.4, w: 9, d: 3.4, h: 9.5, tw: 8, td: 3.0, col: S_STONE2, colB: S_STONE3 });
+    // jambs + lintel
+    for (const sg of [-1, 1]) {
+      boxW(md, { x: x + sg * 2.1, y, z, w: 0.65, d: 0.7, h: 4.4, col: S_STONE, colB: S_STONE2 });
+    }
+    boxW(md, { x, y: y + 4.4, z, w: 2.9, d: 0.8, h: 0.9, col: S_STONE, colB: S_STONE2 });
+    // a bell in relief on the lintel
+    bellMesh(md, x, y + 4.6, z + 0.5, 0.45, 0, true);
+    // the doorway itself: dark, and barred with a bronze bar until it rings
+    boxW(md, { x, y, z: z - 0.35, w: 1.55, d: 0.3, h: 4.2, col: S_SOOT });
+    // p6e owns what is behind it AND the seal itself, which is save-derived
+    // from SAVE.watchBell. Born OFF: an unconditional plug here walled the
+    // Foundry shut forever, and left p6e hunting this collider by coordinate
+    // to undo it.
+    window.__foundryDoorColl = addColl(x, z - 0.3, 2.0);
+    window.__foundryDoorColl.off = true;
+    ISLE_SHADE.push({ x, z: z + 1.6, r: 3.4 });
+  }
+  /* the KILNS — bottle kilns where the bells were cast, soot-mouthed */
+  for (let i = 0; i < 3; i++) {
+    const a = 2.1 + i * 0.55;
+    const x = KILN_ISLE.x + Math.cos(a) * KILN_ISLE.r * 0.62;
+    const z = KILN_ISLE.z + Math.sin(a) * KILN_ISLE.r * 0.62;
+    const y = seaHMesh(x, z);
+    latheW(md, [[3.4, 0], [3.6, 2.2], [2.4, 6.4], [1.5, 8.0], [1.6, 8.6]],
+      { seg: 9, x, y, z, flat: true, segJitter: 0.06, col: S_STONE2, cols: [S_STONE3, S_STONE2, S_STONE2, S_SOOT] });
+    boxW(md, { x: x + Math.cos(a + Math.PI) * 3.4, y, z: z + Math.sin(a + Math.PI) * 3.4,
+      w: 1.0, d: 0.5, h: 2.0, ry: a, col: S_SOOT });
+    addColl(x, z, 3.5);
+  }
+  /* a slipway and the moulds yard */
+  for (let i = 0; i < 6; i++) {
+    const x = KILN_ISLE.x - 30 + i * 9 + rnd() * 4, z = KILN_ISLE.z + 46 + rnd() * 10;
+    const y = seaHMesh(x, z);
+    if (y < WL + 0.3) continue;
+    latheW(md, [[1.5, 0], [1.55, 0.7], [1.1, 1.0]], { seg: 8, x, y, z, flat: true, col: mix3(S_STONE2, S_SOOT, 0.35) });
+    addColl(x, z, 1.4);
+  }
+  for (let i = 0; i < 9; i++) {
+    const a = rnd() * TAU, d = KILN_ISLE.r * (0.3 + rnd() * 0.65);
+    isleRock(md, KILN_ISLE.x + Math.cos(a) * d, KILN_ISLE.z + Math.sin(a) * d, 1.4 + rnd() * 2.2, 1.8 + rnd() * 3.4, i * 5 + 2);
+  }
+  pushIsleAnchor(KILN_ISLE, KILN_ISLE.x + 40, KILN_ISLE.z + KILN_ISLE.r + 22, FOUNDRY_DOOR.x, FOUNDRY_DOOR.z + 1.6);
+})();
+window.__foundryDoor = { x: FOUNDRY_DOOR.x, z: FOUNDRY_DOOR.z, facing: Math.PI, get y() { return groundH(FOUNDRY_DOOR.x, FOUNDRY_DOOR.z); } };
+
+/* ═══ THE DROWNED SPIRE — sail in through the broken arch ═══ */
+const SPIRE_LEDGE = { x: DROWNED_SPIRE.x - 4.2, z: DROWNED_SPIRE.z - 2.6, r: 3.0, y: WL + 0.55 };
+(function buildSpire() {
+  const md = seaChunk('spire', DROWNED_SPIRE.x, DROWNED_SPIRE.z, 0);
+  const x = DROWNED_SPIRE.x, z = DROWNED_SPIRE.z;
+  const R0 = SPIRE_WALL.r0, R1 = SPIRE_WALL.r1;
+  const base = WL - 3.4, lip = WL + 7.6;
+  // the shell, built as a ring of stone segments with the arch left OUT —
+  // the same arc the solid test opens
+  const seg = 26;
+  for (let i = 0; i < seg; i++) {
+    const a0 = i / seg * TAU, a1 = (i + 1) / seg * TAU;
+    const am = (a0 + a1) / 2;
+    if (spireArchOpen(am)) continue;
+    const rm = (R0 + R1) / 2, w = (R1 - R0) / 2;
+    const cx = x + Math.cos(am) * rm, cz = z + Math.sin(am) * rm;
+    const hh = lip - base - (Math.abs(((am - SPIRE_WALL.archA + Math.PI * 3) % TAU) - Math.PI) < 0.75 ? 2.6 : 0);
+    boxW(md, { x: cx, y: base, z: cz, w: w, d: rm * TAU / seg * 0.62, h: hh,
+      ry: am + Math.PI / 2, col: i % 2 ? S_STONE : S_STONE2, colB: S_STONE3 });
+  }
+  // the bell-lip cornice, and the belfry arcade stubs above the water
+  latheW(md, [[R1 + 0.4, lip], [R1 + 0.7, lip + 0.7], [R1, lip + 1.0]],
+    { seg: 14, x, y: 0, z, flat: true, col: S_STONE2, cols: [S_STONE3, S_STONE2] });
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * TAU + 0.2;
+    if (spireArchOpen(a)) continue;
+    boxW(md, { x: x + Math.cos(a) * (R0 + R1) / 2, y: lip + 1.0, z: z + Math.sin(a) * (R0 + R1) / 2,
+      w: 0.5, d: 0.5, h: 2.4, ry: a, col: S_STONE });
+  }
+  // THE LEDGE inside: a fallen floor slab you can step out onto
+  {
+    const lx = SPIRE_LEDGE.x, lz = SPIRE_LEDGE.z;
+    latheW(md, [[SPIRE_LEDGE.r + 0.4, WL - 1.4], [SPIRE_LEDGE.r + 0.2, SPIRE_LEDGE.y - 0.25],
+                [SPIRE_LEDGE.r, SPIRE_LEDGE.y]], { seg: 9, x: lx, y: 0, z: lz, flat: true, col: S_STONE2, cols: [S_STONE3, S_STONE2, S_STONE] });
+    const cc = addColl(lx, lz, SPIRE_LEDGE.r * 0.92, SPIRE_LEDGE.y);
+    cc.plat = true;
+    // the spire's own bell, down off its headstock, half in the water
+    bellMesh(md, lx + 1.8, SPIRE_LEDGE.y - 0.2, lz + 1.6, 1.5, 0.7, true);
+  }
+  ISLE_SHADE.push({ x, z, r: R0 + 0.6 });
+  pushIsleAnchor(DROWNED_SPIRE, x + Math.cos(SPIRE_WALL.archA) * 15, z + Math.sin(SPIRE_WALL.archA) * 15,
+    SPIRE_LEDGE.x, SPIRE_LEDGE.z);
+  // a couple of rocks outside, breaking the swell
+  isleRock(md, x + 14, z + 11, 2.6, 3.2, 7);
+  isleRock(md, x - 13, z + 15, 2.0, 2.4, 11);
+})();
+
+/* ═══ NETMENDER'S ROCK — the Bellwright's ═══ */
+const NETMEND_HUT = { x: NETMENDER.x + 2, z: NETMENDER.z + 3 };
+const BELLWRIGHT_POS = { x: NETMENDER.x + 4.6, z: NETMENDER.z + 6.2 };
+(function buildNetmender() {
+  const md = seaChunk('net', NETMENDER.x, NETMENDER.z, 0);
+  const rnd = mulberry32(77);
+  const x = NETMEND_HUT.x, z = NETMEND_HUT.z, y = seaHMesh(x, z);
+  // a lean-to of bleached timber and net
+  for (const sg of [-1, 1]) {
+    boxW(md, { x: x + sg * 2.4, y, z: z - 1.8, w: 0.18, d: 0.18, h: 2.6, col: S_TIMB2 });
+    boxW(md, { x: x + sg * 2.4, y, z: z + 1.8, w: 0.18, d: 0.18, h: 1.7, col: S_TIMB2 });
+  }
+  boxW(md, { x, y: y + 1.7, z: z + 0.4, w: 2.7, d: 2.3, h: 0.22, shz: 0, rx: -0.32, col: S_TIMB, colB: S_TIMB2 });
+  // the workbench with a bell part-oiled on it
+  boxW(md, { x: x - 0.4, y, z: z + 0.6, w: 1.3, d: 0.6, h: 0.85, col: S_TIMB, colB: S_TIMB2 });
+  bellMesh(md, x - 0.4, y + 0.85, z + 0.6, 0.7, 0.4, false);
+  addColl(x, z, 1.6);
+  // oil jars, rope coils, a whetstone
+  for (let i = 0; i < 4; i++) {
+    const jx = x + 2.2 + rnd() * 2, jz = z + 1.4 + rnd() * 2.4;
+    latheW(md, [[0.24, 0], [0.3, 0.3], [0.14, 0.5], [0.18, 0.56]], { seg: 6, x: jx, y: seaHMesh(jx, jz), z: jz, flat: true, col: mix3(S_BRONZE2, S_TIMB, 0.4) });
+  }
+  latheW(md, [[0.55, 0], [0.6, 0.18], [0.32, 0.22]], { seg: 8, x: x - 2.6, y: seaHMesh(x - 2.6, z + 1.4), z: z + 1.4, flat: true, col: S_ROPE });
+  for (let i = 0; i < 5; i++) {
+    const a = rnd() * TAU, d = NETMENDER.r * (0.4 + rnd() * 0.5);
+    isleRock(md, NETMENDER.x + Math.cos(a) * d, NETMENDER.z + Math.sin(a) * d, 1.0 + rnd() * 1.4, 1.2 + rnd() * 1.8, i * 7 + 3);
+  }
+  ISLE_SHADE.push({ x, z: z + 0.4, r: 3.4 });
+  pushIsleAnchor(NETMENDER, NETMENDER.x + NETMENDER.r + 12, NETMENDER.z + 8, x, z + 0.6);
+})();
+
+/* ═══ GANNET STACK — the gull road, and a chest on the crown ═══ */
+(function buildGannet() {
+  const md = seaChunk('gannet', GANNET_STACK.x, GANNET_STACK.z, 0);
+  const rnd = mulberry32(313);
+  // guano-streaked ledges around the stack
+  for (let i = 0; i < 10; i++) {
+    const a = rnd() * TAU, d = GANNET_STACK.r * (0.45 + rnd() * 0.5);
+    const x = GANNET_STACK.x + Math.cos(a) * d, z = GANNET_STACK.z + Math.sin(a) * d;
+    const y = seaHMesh(x, z);
+    if (y < WL + 0.4) continue;
+    latheW(md, [[1.6 + rnd(), 0], [1.3, 0.5], [0, 0.62]], { seg: 6, ex: 0.7, x, y, z, ry: rnd() * 3,
+      flat: true, col: i % 3 ? S_IROCK : S_GUANO, cols: [S_IROCK2, i % 2 ? S_GUANO : S_IROCK] });
+  }
+  // wind-scoured spires on the crown
+  for (let i = 0; i < 4; i++) {
+    const a = rnd() * TAU, d = rnd() * 8;
+    isleRock(md, GANNET_STACK.x + Math.cos(a) * d, GANNET_STACK.z + Math.sin(a) * d, 1.4 + rnd() * 1.2, 3.5 + rnd() * 4, i * 9 + 5);
+  }
+  ISLE_SHADE.push({ x: GANNET_STACK.x + 4, z: GANNET_STACK.z + 5, r: 4.4 });
+  const ax = GANNET_STACK.x + Math.cos(GANNET_STACK.ramp) * (GANNET_STACK.r + 16);
+  const az = GANNET_STACK.z + Math.sin(GANNET_STACK.ramp) * (GANNET_STACK.r + 16);
+  pushIsleAnchor(GANNET_STACK, ax, az,
+    GANNET_STACK.x + Math.cos(GANNET_STACK.ramp) * GANNET_STACK.r * 0.55,
+    GANNET_STACK.z + Math.sin(GANNET_STACK.ramp) * GANNET_STACK.r * 0.55);
+})();
+
+/* ═══ THE LONG STRAND — beach, salt seams, and a heart container ═══ */
+(function buildStrand() {
+  const md = seaChunk('strand', LONG_STRAND.x, LONG_STRAND.z, 0);
+  const rnd = mulberry32(5150);
+  // driftwood: whole trunks the sea carried a very long way
+  for (let i = 0; i < 9; i++) {
+    const a = rnd() * TAU, d = LONG_STRAND.r * (0.55 + rnd() * 0.42);
+    const x = LONG_STRAND.x + Math.cos(a) * d, z = LONG_STRAND.z + Math.sin(a) * d;
+    const y = seaHMesh(x, z);
+    if (y < WL + 0.1) continue;
+    boxW(md, { x, y: y + 0.25, z, w: 0.34, d: 2.6 + rnd() * 3, h: 0.5, tw: 0.2, td: 2.2,
+      ry: rnd() * TAU, rz: 0.1, col: S_TIMB, colB: S_TIMB2, warm: true });
+    addColl(x, z, 1.0);
+  }
+  // the salt seams: crusted white rock shelves
+  for (let i = 0; i < 5; i++) {
+    const a = 1.1 + i * 0.5, d = LONG_STRAND.r * 0.42;
+    const x = LONG_STRAND.x + Math.cos(a) * d, z = LONG_STRAND.z + Math.sin(a) * d;
+    const y = seaHMesh(x, z);
+    latheW(md, [[2.6, 0], [2.3, 0.5], [1.2, 0.66]], { seg: 7, ex: 0.7, x, y, z, ry: a, flat: true, col: C_SALT, cols: [S_STONE2, C_SALT] });
+    addColl(x, z, 2.2);
+  }
+  // the driftwood arch over the dune chest
+  {
+    const x = LONG_STRAND.x - 12, z = LONG_STRAND.z - 16, y = seaHMesh(x, z);
+    for (const sg of [-1, 1]) {
+      boxW(md, { x: x + sg * 1.6, y, z, w: 0.26, d: 0.26, h: 2.6, rz: -sg * 0.22, col: S_TIMB2, warm: true });
+    }
+    boxW(md, { x, y: y + 2.5, z, w: 2.1, d: 0.22, h: 0.24, col: S_TIMB, warm: true });
+    ISLE_SHADE.push({ x, z, r: 3.2 });
+  }
+  for (let i = 0; i < 8; i++) {
+    const a = rnd() * TAU, d = LONG_STRAND.r * (0.3 + rnd() * 0.6);
+    isleRock(md, LONG_STRAND.x + Math.cos(a) * d, LONG_STRAND.z + Math.sin(a) * d, 0.9 + rnd() * 1.5, 1.0 + rnd() * 1.6, i * 11 + 7);
+  }
+  pushIsleAnchor(LONG_STRAND, LONG_STRAND.x + LONG_STRAND.r + 20, LONG_STRAND.z + 30, LONG_STRAND.x - 12, LONG_STRAND.z - 16);
+})();
+
+/* ═══ CHIME REEF — half-drowned bells that ring in the swell ═══ */
+const REEF_BELLS = [];
+(function buildReef() {
+  const md = seaChunk('reef', CHIME_REEF.x, CHIME_REEF.z, 0);
+  const rnd = mulberry32(1212);
+  for (let i = 0; i < REEF_HEADS.length; i++) {
+    const rh = REEF_HEADS[i];
+    isleRock(md, rh.x, rh.z, rh.r * 0.8, Math.max(0.6, rh.h - seaHMesh(rh.x, rh.z)) + 0.4, i * 13 + 2);
+    // a bell, tilted, hung in a broken frame beside the rock
+    const a = rnd() * TAU;
+    const bx = rh.x + Math.cos(a) * (rh.r + 2.4), bz = rh.z + Math.sin(a) * (rh.r + 2.4);
+    const by = WL - 0.35 + rnd() * 0.9;
+    const g = new THREE.Group();
+    const mdB = MD();
+    bellMesh(mdB, 0, 0, 0, 1.3 + rnd() * 0.7, 0, i % 2 === 0);
+    // the broken headstock it still hangs from
+    boxW(mdB, { x: 0, y: 1.5, z: 0, w: 0.14, d: 1.5, h: 0.14, ry: rnd() * 3, col: S_TIMB2 });
+    const m = mdMesh(mdB, WORLD_MAT, false);
+    m.frustumCulled = false;
+    g.add(m);
+    g.position.set(bx, by, bz);
+    g.rotation.z = (rnd() - 0.5) * 0.5;
+    g.visible = false;
+    scene.add(g);
+    REEF_BELLS.push({ g, x: bx, z: bz, y: by, tone: 0.6 + i * 0.19, ph: rnd() * TAU, rang: 0 });
+  }
+})();
+
+/* ── scrub: salt-burnt tussocks, shell grit and low thorn, scattered by the
+   SAME height field the ground uses, so nothing floats ── */
+(function isleScrub() {
+  for (const is of ISLE_LIST) {
+    if (is.id === 'spire') continue;
+    const md = seaChunk(is.id, is.x, is.z, 0);
+    const rnd = mulberry32(is.seed * 1000 + 17);
+    const n = Math.round(is.r * 1.5);
+    const C_TUSS = mix3(S_ITURF, S_ISAND, 0.25), C_TUSS2 = mix3(S_ITURF2, [0, 0, 0], 0.12);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * TAU, dd = is.r * Math.sqrt(rnd()) * 0.96;
+      const x = is.x + Math.cos(a) * dd, z = is.z + Math.sin(a) * dd;
+      const y = seaHMesh(x, z);
+      if (y < WL + 1.1) continue;
+      const t = rnd();
+      if (t < 0.62) {
+        // a tussock: three blades from one root
+        for (let b = 0; b < 3; b++) {
+          const ba = rnd() * TAU;
+          boxW(md, { x, y: y - 0.05, z, w: 0.05, d: 0.05, h: 0.35 + rnd() * 0.4,
+            tw: 0.008, td: 0.008, rx: Math.cos(ba) * 0.4, rz: Math.sin(ba) * 0.4,
+            warm: true, col: b % 2 ? C_TUSS : C_TUSS2 });
+        }
+      } else if (t < 0.86) {
+        // shell grit / small stones
+        latheW(md, [[0.12 + rnd() * 0.16, 0], [0.1, 0.07 + rnd() * 0.08], [0, 0.1]],
+          { seg: 5, x, y: y - 0.03, z, ry: rnd() * TAU, flat: true, col: rnd() < 0.5 ? S_ISAND : S_IROCK });
+      } else {
+        // a wind-flattened thorn
+        latheW(md, [[0.5 + rnd() * 0.4, 0.3], [0.34, 0.55], [0, 0.62]],
+          { seg: 5, ex: 0.55, x, y, z, ry: rnd() * TAU, flat: true, warm: true,
+            col: C_TUSS2, cols: [C_TUSS2, C_TUSS] });
+      }
+    }
+  }
+})();
+
+/* ── finalise every isle chunk into one mesh apiece ── */
+for (const c of seaChunks) {
+  if (!c.md.p.length) { c.md = null; continue; }
+  c.mesh = mdMesh(c.md, WORLD_MAT, false);
+  c.mesh.matrixAutoUpdate = false; c.mesh.updateMatrix();
+  c.mesh.visible = false;
+  scene.add(c.mesh);
+  c.md = null;
+}
+</script>
+<script>
+/* ═══════════ p6d/4 — the sound of the place, the finds, and the Bellwright ═══════════ */
+
+/* ── bells must sound like bells: an inharmonic partial series (hum, prime,
+   tierce, quint, nominal) over a strike transient, with a long tail ── */
+SFX.bellIsle = function (mul, vol) {
+  if (!AC) return;
+  const t = AC.currentTime, f = 196 * (mul || 1), v = vol === undefined ? 1 : vol;
+  noiseBurst(t, 0.05, 0.09 * v, 2600, 900, 1.4);
+  [[0.5, 5.6, 0.30], [1.0, 4.8, 0.22], [1.19, 3.6, 0.13], [1.5, 3.0, 0.09],
+   [2.0, 2.4, 0.075], [2.5, 1.5, 0.04], [3.0, 1.1, 0.025]]
+    .forEach(p => tone(f * p[0], t, p[1], p[2] * v, 'sine'));
+};
+SFX.bellSmall = function (mul) {
+  if (!AC) return;
+  const t = AC.currentTime, f = 620 * (mul || 1);
+  noiseBurst(t, 0.03, 0.05, 3400, 1600, 2);
+  [[1, 1.6, 0.05], [1.21, 1.2, 0.03], [2.02, 0.9, 0.018]].forEach(p => tone(f * p[0], t, p[1], p[2], 'sine'));
+};
+SFX.clang = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 0.05, 0.05, 1800, 900, 2.2);
+  tone(430, t, 0.22, 0.028, 'triangle');
+  tone(517, t, 0.16, 0.016, 'sine');
+};
+SFX.gullCry = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  tone(1250, t, 0.16, 0.045, 'sawtooth', null, 780);
+  tone(1660, t + 0.13, 0.14, 0.03, 'sawtooth', null, 1020);
+  noiseBurst(t, 0.1, 0.03, 2600, 1400, 1.6);
+};
+SFX.gullDive = function () {
+  if (!AC) return;
+  noiseBurst(AC.currentTime, 0.34, 0.09, 900, 2600, 1.1);
+};
+SFX.garWake = function () {
+  if (!AC) return;
+  noiseBurst(AC.currentTime, 0.5, 0.07, 420, 900, 0.8, 'lowpass');
+};
+SFX.garBreach = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 0.4, 0.2, 1400, 400, 0.9, 'lowpass');
+  tone(150, t, 0.3, 0.1, 'triangle', null, 70);
+};
+SFX.swellRise = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 2.6, 0.1, 90, 260, 0.7, 'lowpass');
+  tone(38, t, 2.4, 0.09, 'sine', null, 54);
+};
+SFX.swellBreak = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 1.1, 0.26, 700, 180, 0.8, 'lowpass');
+  noiseBurst(t + 0.05, 0.7, 0.16, 2400, 700, 1.1);
+  tone(44, t, 0.8, 0.2, 'sine', null, 32);
+};
+SFX.wash = function (str) {
+  if (!AC) return;
+  noiseBurst(AC.currentTime, 1.5, 0.02 + 0.05 * str, 380, 1100, 0.7, 'lowpass');
+};
+SFX.keelPry = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 0.55, 0.1, 260, 130, 1.4, 'lowpass');
+  tone(96, t + 0.1, 0.5, 0.06, 'triangle', null, 62);
+  noiseBurst(t + 0.5, 0.16, 0.2, 1600, 500, 1.2);
+};
+SFX.hammer = function () {
+  if (!AC) return;
+  const t = AC.currentTime;
+  noiseBurst(t, 0.06, 0.14, 1500, 600, 1.6);
+  tone(210, t, 0.09, 0.07, 'triangle', null, 130);
+};
+
+/* ── the isles' finds ── */
+const spireChest = { x: SPIRE_LEDGE.x + 0.9, z: SPIRE_LEDGE.z - 1.4, opened: false, lid: null, group: null };
+{ const m = buildChestMesh(spireChest.x, spireChest.z, 2.6); spireChest.group = m.group; spireChest.lid = m.lid;
+  spireChest.group.position.y = SPIRE_LEDGE.y; spireChest.group.visible = false; }
+const gannetChest = { x: GANNET_STACK.x + 3.4, z: GANNET_STACK.z - 2.2, opened: false, lid: null, group: null };
+{ const m = buildChestMesh(gannetChest.x, gannetChest.z, 1.2); gannetChest.group = m.group; gannetChest.lid = m.lid;
+  gannetChest.group.position.y = seaHMesh(gannetChest.x, gannetChest.z); gannetChest.group.visible = false; }
+const strandChest = { x: LONG_STRAND.x - 12, z: LONG_STRAND.z - 16, opened: false, lid: null, group: null, heart: null };
+{ const m = buildChestMesh(strandChest.x, strandChest.z, 0.4); strandChest.group = m.group; strandChest.lid = m.lid;
+  strandChest.group.position.y = seaHMesh(strandChest.x, strandChest.z); strandChest.group.visible = false;
+  const h = buildHeartItem(); h.visible = false; scene.add(h); strandChest.heart = h; }
+const ICHESTS = [
+  { ch: spireChest, key: 'spireChest', salt: 5, big: 'SALT CACHE',
+    small: 'Five crystals, dry inside a tower the sea walked into.' },
+  { ch: gannetChest, key: 'gannetChest', salt: 4, big: 'SALT CRYSTALS',
+    small: 'Four, in a nest of wire and rope. Gulls keep what shines.' },
+];
+/* isle salt pickups — the same unmistakable collectible language */
+const iSalt = [
+  [LONG_STRAND.x + 18, LONG_STRAND.z - 6], [LONG_STRAND.x + 24, LONG_STRAND.z - 12],
+  [LONG_STRAND.x + 14, LONG_STRAND.z - 16], [LONG_STRAND.x - 26, LONG_STRAND.z + 12],
+  [WATCHSTONE.x - 18, WATCHSTONE.z + 14], [WATCHSTONE.x - 24, WATCHSTONE.z + 6],
+  [KILN_ISLE.x + 26, KILN_ISLE.z + 34], [KILN_ISLE.x - 34, KILN_ISLE.z + 18],
+  [NETMENDER.x - 8, NETMENDER.z - 6],
+].map((p, i) => {
+  const m = new THREE.Mesh(SALT_GEO, SALT_MAT);
+  m.frustumCulled = false; m.visible = false;
+  const y = seaHMesh(p[0], p[1]) + 0.16;
+  m.position.set(p[0], y, p[1]);
+  scene.add(m);
+  return { x: p[0], z: p[1], got: false, mesh: m, baseY: y, ph: i * 1.1, chimed: false };
+});
+let iChestAnims = [], strandAnimT = -1, strandHeartT = -1;
+function openIsleChest(e) {
+  e.ch.opened = true;
+  SAVE[e.key] = true; storeSave();
+  iChestAnims.push({ ch: e.ch, t: 0, salt: e.salt, big: e.big, small: e.small });
+  SFX.chestOpen();
+}
+function openStrandChest() {
+  strandChest.opened = true;
+  SAVE.strandHeart = true; storeSave();
+  strandAnimT = 0;
+  SFX.chestOpen();
+}
+function tickIsleChests() {
+  for (let i = iChestAnims.length - 1; i >= 0; i--) {
+    const a = iChestAnims[i];
+    a.t += DT;
+    a.ch.lid.rotation.x = -smoothstep(clamp(a.t / 0.5, 0, 1)) * 1.9;
+    if (a.t > 0.65) {
+      iChestAnims.splice(i, 1);
+      P.salt += a.salt;
+      SAVE.salt = P.salt; storeSave();
+      itemToast(a.big, a.small);
+      SFX.pickup();
+      burst(psSparkle, a.ch.x, a.ch.group.position.y + 0.9, a.ch.z, 14, 1.2, 1.3, 0.9);
+    }
+  }
+  if (strandAnimT >= 0) {
+    strandAnimT += DT;
+    strandChest.lid.rotation.x = -smoothstep(clamp(strandAnimT / 0.5, 0, 1)) * 1.9;
+    if (strandAnimT > 0.4 && strandHeartT < 0) { strandHeartT = 0; strandChest.heart.visible = true; }
+    if (strandHeartT >= 0) {
+      strandHeartT += DT;
+      const y0 = seaHMesh(strandChest.x, strandChest.z) + 0.5;
+      if (strandHeartT < 1.0) {
+        strandChest.heart.position.set(strandChest.x, y0 + strandHeartT * 0.9, strandChest.z);
+        strandChest.heart.rotation.y += DT * 3;
+      } else if (strandHeartT < 1.7) {
+        const t = (strandHeartT - 1.0) / 0.7;
+        strandChest.heart.position.set(lerp(strandChest.x, P.x, t), lerp(y0 + 0.9, P.fy + 1.9, t), lerp(strandChest.z, P.z, t));
+        strandChest.heart.rotation.y += DT * 6;
+      } else {
+        strandChest.heart.visible = false;
+        strandAnimT = -1; strandHeartT = -1;
+        P.maxHearts = Math.min(8, P.maxHearts + 1);
+        P.hearts = P.maxHearts;
+        SAVE.mh = P.maxHearts; storeSave();
+        itemGetT = 0;
+        itemToast('HEART CONTAINER', 'The strand keeps what the sea is finished with.');
+        SFX.heart();
+        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      }
+    }
+  }
+}
+function tickIsleSalt() {
+  for (const s of iSalt) {
+    if (s.got) continue;
+    const d = Math.hypot(P.x - s.x, P.z - s.z);
+    if (d < 2.0 && !s.chimed) { s.chimed = true; SFX.chime(1.6); }
+    else if (d > 4.5) s.chimed = false;
+    if (d < 1.1) {
+      s.got = true; s.mesh.visible = false;
+      P.salt++;
+      SAVE.salt = P.salt; storeSave();
+      SFX.pickup();
+      burst(psSparkle, s.x, s.baseY + 0.4, s.z, 14, 1.2, 1.6, 0.8);
+    }
+  }
+}
+
+/* ═══ THE BELLWRIGHT — an old bell-founder who never left ═══ */
+function buildBellwright() {
+  return buildHumanoid({
+    h: 1.62, stoop: true,
+    skin: col(0xa9764f), hair: col(0xc9c3b4), hairStyle: 'bun',
+    coat: col(0x4d5d63), top: col(0x4d5d63),
+    sleeve: col(0x415056), sleeve2: col(0xa9764f),
+    pants: col(0x37403f), boot: col(0x2f3230),
+    belt: col(0x6f5a34),
+  });
+}
+const bellwright = placeNPC(buildBellwright, BELLWRIGHT_POS.x, BELLWRIGHT_POS.z, -1.1, 0);
+bellwright.char.root.visible = false;
+DLG.bell1 = { name: 'THE BELLWRIGHT', lines: [
+  'The towers rang the hour from island to island. Then there were no hours.',
+  'I oil them anyway. Bronze doesn’t mind what o’clock it is.',
+], onDone: () => { SAVE.bellwrightTalked = Math.max(SAVE.bellwrightTalked || 0, 1); storeSave(); } };
+DLG.bell2 = { name: 'THE BELLWRIGHT', lines: [
+  'Ring Watchstone and the Foundry hears it. A bell always answers its own.',
+], onDone: () => { SAVE.bellwrightTalked = 2; storeSave(); } };
+DLG.bell3 = { name: 'THE BELLWRIGHT', lines: [
+  'Strike a tone and HOLD it — held, a tone opens; struck, it only knocks.',
+], onDone: () => { SAVE.bellwrightTalked = 3; storeSave(); } };
+
+/* ═══ CLAPPER CRABS — the Scorch Crab family, wearing a bronze bell ═══
+   They CLANG as they move (a telegraph a six-year-old reads instantly) and
+   the bell RINGS when you hit it. They ride the crab brain wholesale: same
+   array, same tick, same respawn districts, same save reset. */
+const CLAPPERS = [];
+function makeClapper(x, z, area) {
+  const c = buildScorchCrab();
+  const mdB = MD();
+  bellMesh(mdB, 0, 0.14, 0, 0.34, 0.4, false);
+  const bell = mdMesh(mdB, TOON);
+  bell.frustumCulled = false;
+  bell.position.set(0, 0.12, -0.02);
+  c.body.add(bell);
+  c.root.position.set(x, groundH(x, z), z);
+  c.root.visible = false;
+  scene.add(c.root);
+  const cr = {
+    c, sx: x, sz: z, x, z, hp: 3, st: 'patrol', t: Math.random() * 2, ang: 0,
+    dir: [0, 0], dead: false, area, lungeCD: 0, flash: 0,
+    clapper: true, bell, clangT: 0, ring: 0,
+  };
+  crabs.push(cr);
+  CLAPPERS.push(cr);
+  return cr;
+}
+for (const [x, z, a] of [
+  [WATCHSTONE.x - 26, WATCHSTONE.z + 20, 'isle_watch'],
+  [WATCHSTONE.x - 12, WATCHSTONE.z + 34, 'isle_watch'],
+  [WATCHSTONE.x + 30, WATCHSTONE.z + 18, 'isle_watch'],
+  [KILN_ISLE.x + 44, KILN_ISLE.z + 52, 'isle_kiln'],
+  [KILN_ISLE.x - 40, KILN_ISLE.z + 30, 'isle_kiln'],
+  [KILN_ISLE.x + 8, KILN_ISLE.z + 74, 'isle_kiln'],
+  [LONG_STRAND.x + 22, LONG_STRAND.z + 24, 'isle_strand'],
+  [LONG_STRAND.x - 30, LONG_STRAND.z - 6, 'isle_strand'],
+  [LONG_STRAND.x + 6, LONG_STRAND.z - 34, 'isle_strand'],
+  [NETMENDER.x - 14, NETMENDER.z + 12, 'isle_net'],
+]) makeClapper(x, z, a);
+/* the bell rings when the shell is struck — one wrap, no second hit path */
+const _n2HitCrab = hitCrab;
+hitCrab = function (cr) {
+  _n2HitCrab(cr);
+  if (cr.clapper) { SFX.bellIsle(2.4, 0.5); cr.ring = 0.45; }
+};
+
+/* ═══ SUN GULLS — sun-mad seabirds that dive in PAIRS ═══ */
+function buildSunGull() {
+  const root = new THREE.Group();
+  const parts = [];
+  const white = [0.90, 0.89, 0.83], grey = [0.68, 0.69, 0.66], gold = [0.85, 0.66, 0.28],
+        dark = [0.2, 0.18, 0.16];
+  const mdB = MD();
+  lathe(mdB, [[0, -0.44], [0.17, -0.2], [0.2, 0.12], [0.13, 0.36], [0, 0.46]],
+    { seg: 7, ex: 2.3, col: white, cols: [grey, white, white, white] });
+  // head + beak
+  lathe(mdB, [[0, 0.34], [0.12, 0.44], [0.1, 0.56], [0, 0.62]], { seg: 6, x: 0, y: 0.16, z: 0.44, col: white });
+  box(mdB, { x: 0, y: 0.34, z: 0.62, w: 0.035, d: 0.16, h: 0.05, tw: 0.012, td: 0.02, rx: 1.45, col: gold });
+  for (const s of [-1, 1]) {
+    lathe(mdB, [[0, 0], [0.032, 0.016], [0, 0.03]], { seg: 5, x: s * 0.07, y: 0.42, z: 0.56, col: dark });
+  }
+  // tail
+  box(mdB, { x: 0, y: 0.02, z: -0.52, w: 0.14, d: 0.24, h: 0.03, tw: 0.06, td: 0.1, rx: 0.2, col: grey });
+  const bodyM = mdMesh(mdB, TOON); bodyM.frustumCulled = false; parts.push(bodyM);
+  root.add(bodyM);
+  const wing = (side) => {
+    const n = node(root, side * 0.14, 0.14, 0.04);
+    const md = MD();
+    // a swept gull wing: long, tapered, black tip
+    box(md, { x: side * 0.5, y: 0, z: 0, w: 0.5, d: 0.24, h: 0.04, tw: 0.34, td: 0.1, shz: -0.16, col: white });
+    box(md, { x: side * 1.06, y: 0.005, z: -0.14, w: 0.14, d: 0.12, h: 0.03, tw: 0.05, td: 0.05, col: dark });
+    const m = mdMesh(md, TOON); m.frustumCulled = false; parts.push(m);
+    n.add(m);
+    return n;
+  };
+  const wingL = wing(-1), wingR = wing(1);
+  // the sun-madness: an ember glow behind the eyes
+  const mdG = MD();
+  for (const s of [-1, 1]) box(mdG, { x: s * 0.075, y: 0.41, z: 0.56, w: 0.05, d: 0.03, h: 0.045, col: [1, 0.6, 0.2] });
+  const glow = mdMesh(mdG, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+  }), false);
+  glow.frustumCulled = false;
+  root.add(glow);
+  root.visible = false;
+  scene.add(root);
+  return { root, wingL, wingR, glow, parts };
+}
+const GULLS = [];
+function addGull(x, z, area, pair, home) {
+  const g = {
+    m: buildSunGull(), sx: x, sz: z, x, z, y: 0, face: 0,
+    st: 'wheel', t: Math.random() * 3, dead: false, area, pair, ph: Math.random() * TAU,
+    dir: [0, 0, 0], home: home || { x, z }, cd: 0,
+  };
+  g.y = Math.max(seaHMesh(x, z), WL) + 10;
+  GULLS.push(g);
+  return g;
+}
+/* five sea pockets along the crossing + the Gannet Stack nests ashore */
+const GULL_POCKETS = [
+  [-330, -30, 'sea'], [-700, -150, 'sea'], [-1080, -430, 'sea'],
+  [-1400, -230, 'sea'], [-1830, -560, 'sea'],
+  [GANNET_STACK.x + 10, GANNET_STACK.z + 12, 'isle_gannet'],
+  [GANNET_STACK.x - 14, GANNET_STACK.z - 8, 'isle_gannet'],
+  [WATCHSTONE.x + 40, WATCHSTONE.z - 40, 'isle_watch'],
+];
+GULL_POCKETS.forEach((p, i) => {
+  addGull(p[0] - 6, p[1] - 4, p[2], i * 2 + 1, { x: p[0], z: p[1] });
+  addGull(p[0] + 6, p[1] + 4, p[2], i * 2 + 1, { x: p[0], z: p[1] });
+});
+function popGull(g) {
+  g.dead = true;
+  impPops.push({ m: g.m, t: 0 });
+  burst(psSpark, g.x, g.y, g.z, 14, 1.9, 1.0, 0.7);
+  burst(psSparkle, g.x, g.y, g.z, 14, 1.6, 0.8, 1.0);
+  SFX.pop(); SFX.gullCry();
+  rumble({ duration: 60, strong: 0.25, weak: 0.35 });
+  gullsPopped++;
+}
+let gullsPopped = 0;
+
+/* ═══ REEF GAR — it runs at the hull showing ONLY A WAKE ═══
+   The Silt Wyrm's visibility contract, at sea: if it can hit you, its wake
+   is on screen. Miss the breach and it rams — speed, heading, one heart.
+   Nothing dies: a cured gar dives away. */
+function buildReefGar() {
+  const wakeRoot = new THREE.Group();
+  const mdW = MD();
+  const foam = [0.86, 0.93, 0.94], foam2 = [0.62, 0.79, 0.82];
+  // the V: two long foam wings trailing the fin
+  for (const s of [-1, 1]) {
+    pushQuad(mdW, [0, 0, 1.2], [s * 2.6, 0, -3.6], [s * 3.3, 0, -3.9], [s * 0.4, 0, 1.0], foam2);
+  }
+  // the dorsal fin cutting the surface — the thing you actually read
+  pushQuad(mdW, [0, 0, 0.7], [0, 0.62, -0.1], [0, 0.5, -0.5], [0, 0, -0.7], foam);
+  pushQuad(mdW, [0.02, 0, 0.7], [0.02, 0.62, -0.1], [0.02, 0.5, -0.5], [0.02, 0, -0.7], foam);
+  const wm = mdMesh(mdW, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.82, depthWrite: false, side: THREE.DoubleSide,
+  }), false);
+  wm.frustumCulled = false;
+  wakeRoot.add(wm);
+  wakeRoot.visible = false;
+  scene.add(wakeRoot);
+  // the fish itself, seen only in the breach
+  const root = new THREE.Group();
+  const md = MD();
+  const back = [0.24, 0.33, 0.31], flank = [0.45, 0.55, 0.5], belly = [0.83, 0.85, 0.74],
+        fin = [0.3, 0.4, 0.42];
+  // a long narrow pike of a fish: dark back, pale belly, a needle snout
+  lathe(md, [[0, -1.35], [0.09, -0.9], [0.155, -0.1], [0.135, 0.62], [0.06, 1.15], [0, 1.45]],
+    { seg: 7, ex: 0.62, col: flank, cols: [back, flank, flank, belly, belly] });
+  box(md, { x: 0, y: 0.01, z: 1.34, w: 0.032, d: 0.44, h: 0.05, tw: 0.012, td: 0.26, rx: 1.55, col: belly });  // snout
+  box(md, { x: 0, y: 0.12, z: -0.15, w: 0.022, d: 0.42, h: 0.26, tw: 0.014, td: 0.16, col: back });            // dorsal
+  box(md, { x: 0, y: -0.1, z: -0.35, w: 0.02, d: 0.22, h: 0.16, tw: 0.012, td: 0.1, rx: 3.14, col: fin });     // anal fin
+  box(md, { x: 0, y: 0, z: -1.36, w: 0.03, d: 0.3, h: 0.46, tw: 0.02, td: 0.12, rx: 0.25, col: fin });         // tail
+  for (const s of [-1, 1]) box(md, { x: s * 0.13, y: -0.04, z: 0.42, w: 0.02, d: 0.16, h: 0.18, rz: s * 1.0, col: fin });
+  for (const s of [-1, 1]) lathe(md, [[0, 0], [0.04, 0.015], [0, 0.03]], { seg: 5, x: s * 0.105, y: 0.075, z: 0.98, col: [1, 0.62, 0.24] });
+  const m = mdMesh(md, TOON);
+  m.frustumCulled = false;
+  root.add(m);
+  root.visible = false;
+  scene.add(root);
+  return { root, wakeRoot, m };
+}
+const GARS = [];
+for (const [x, z] of [[-300, 10], [-620, -100], [-900, -260], [-1250, -180], [-1600, -420], [-2000, -520]]) {
+  const g = buildReefGar();
+  GARS.push({
+    c: g, sx: x, sz: z, x, z, ang: Math.random() * TAU, st: 'cruise', t: Math.random() * 4,
+    hp: 2, cured: false, area: 'sea', wakeT: 0, ph: Math.random() * TAU, breachY: 0,
+  });
+}
+let garsCured = 0, garRams = 0;
+</script>
+<script>
+/* ═══════════ p6d/5 — THE KEEL, THE REFIT, THE DOUBLE SAIL, THE BIG SETS ═══════════ */
+
+/* ── the keel timber: a great curved backbone with its iron straps still on ── */
+function buildKeelItem() {
+  const g = new THREE.Group();
+  const md = MD();
+  const oak = [0.42, 0.33, 0.24], oak2 = [0.31, 0.24, 0.18], iron = [0.3, 0.31, 0.33];
+  for (let i = 0; i < 7; i++) {
+    const t = i / 6 - 0.5;
+    box(md, { x: 0, y: -Math.abs(t) * Math.abs(t) * 0.55, z: t * 3.0, w: 0.13, d: 0.26, h: 0.36,
+      rx: t * 0.22, col: i % 2 ? oak : oak2 });
+  }
+  for (const t of [-0.32, 0.06, 0.4]) {
+    box(md, { x: 0, y: -Math.abs(t) * Math.abs(t) * 0.55 - 0.02, z: t * 3.0, w: 0.16, d: 0.05, h: 0.42, col: iron });
+  }
+  const m = mdMesh(md, WORLD_MAT, false);
+  m.frustumCulled = false;
+  g.add(m);
+  g.visible = false;
+  scene.add(g);
+  return g;
+}
+const keelItem = buildKeelItem();
+/* The drowned wreck RENDERS as an 11 m hull but only two 2 m discs of her
+   were ever standable, so stepping aboard dropped you straight back into the
+   water. Her deck now follows her own long axis (ry 0.85 in propWreck), and
+   the keel timber sits on it — flood-only, like the deck it extends. */
+const WRECK_AX = [Math.sin(0.85), Math.cos(0.85)];
+const keelDeck = [];
+for (const t of [-4.2, -2.8, -1.4, 0, 1.4, 2.8, 4.2]) {
+  const c = addColl(WRECK.x + WRECK_AX[0] * t, WRECK.z + WRECK_AX[1] * t, 2.6, WL + 0.28);
+  c.plat = true; c.off = true;
+  keelDeck.push(c);
+}
+{
+  const c = addColl(KEEL_SPOT.x, KEEL_SPOT.z, 2.4, WL + 0.28);
+  c.plat = true; c.off = true;
+  keelDeck.push(c);
+}
+
+/* ── THE DOUBLE SAIL: a second mast, a second sail, and the keel under her.
+   Bolted onto the existing boat group so ONE boat exists, always. ── */
+let mast2 = null, sail2 = null, keelFin = null, furl1 = null, furl2 = null;
+(function upgradeBoat() {
+  const C_HULL2 = mix3(C_WOOD2, [0, 0, 0], 0.15);
+  // the mizzen mast, aft of the helm
+  const mdM = MD();
+  boxW(mdM, { x: 0, y: 0.45, z: -1.42, w: 0.055, d: 0.055, h: 2.15, col: C_HULL2 });
+  boxW(mdM, { x: 0, y: 0.95, z: -1.9, w: 0.04, d: 0.5, h: 0.04, col: C_HULL2 });
+  mast2 = mdMesh(mdM, WORLD_MAT, false);
+  mast2.frustumCulled = false;
+  mast2.visible = false;
+  sailboat.group.add(mast2);
+  // her sail
+  const mdS = MD();
+  pushQuad(mdS, [0, 0.95, -1.44], [0, 0.95, -2.15], [0, 2.25, -1.95], [0, 2.4, -1.44], [0.87, 0.84, 0.75]);
+  pushQuad(mdS, [0.005, 1.3, -1.6], [0.005, 1.3, -1.95], [0.005, 1.7, -1.9], [0.005, 1.7, -1.62], [0.7, 0.66, 0.58]);
+  sail2 = mdMesh(mdS, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  sail2.frustumCulled = false;
+  sail2.scale.y = 0.12;
+  sail2.visible = false;
+  sailboat.group.add(sail2);
+  // THE KEEL, under her — the upgrade you can see from the beach
+  const mdK = MD();
+  const oak = mix3(C_WOOD2, [0, 0, 0], 0.3);
+  boxW(mdK, { x: 0, y: -0.5, z: 0, w: 0.1, d: 2.05, h: 0.52, tw: 0.13, td: 2.3, col: oak });
+  boxW(mdK, { x: 0, y: -0.62, z: 0, w: 0.14, d: 1.5, h: 0.14, col: mix3(oak, [0.3, 0.31, 0.33], 0.5) });
+  keelFin = mdMesh(mdK, WORLD_MAT, false);
+  // the furled bundles on both booms — canvas rolled and roped, so a glance
+  // from the beach counts TWO sails whether they are set or not
+  const mdF = MD();
+  const canvas = [0.84, 0.81, 0.72], rope2 = [0.55, 0.47, 0.36];
+  boxW(mdF, { x: 0, y: 1.0, z: -0.32, w: 0.08, d: 0.62, h: 0.16, tw: 0.05, td: 0.56, warm: true, col: canvas });
+  for (const t of [-0.5, 0.5]) boxW(mdF, { x: 0, y: 0.995, z: -0.32 + t * 0.62, w: 0.086, d: 0.022, h: 0.172, warm: true, col: rope2 });
+  furl1 = mdMesh(mdF, WORLD_MAT, false);
+  furl1.frustumCulled = false;
+  sailboat.group.add(furl1);
+  const mdF2 = MD();
+  boxW(mdF2, { x: 0, y: 0.89, z: -1.9, w: 0.07, d: 0.48, h: 0.145, tw: 0.045, td: 0.43, warm: true, col: canvas });
+  for (const t of [-0.55, 0.55]) boxW(mdF2, { x: 0, y: 0.885, z: -1.9 + t * 0.48, w: 0.076, d: 0.02, h: 0.155, warm: true, col: rope2 });
+  furl2 = mdMesh(mdF2, WORLD_MAT, false);
+  furl2.frustumCulled = false;
+  furl2.visible = false;
+  sailboat.group.add(furl2);
+  keelFin.frustumCulled = false;
+  keelFin.visible = false;
+  sailboat.group.add(keelFin);
+})();
+function showRefit(on) {
+  mast2.visible = on; sail2.visible = on; keelFin.visible = on; furl2.visible = on;
+  if (!on) sail2.scale.y = 0.12;
+}
+
+/* ═══ THE BIG SETS ═══
+   Every 18-34 s a real set rolls through, telegraphed as a dark crest line
+   with a rising rumble. Bow-on at full sail = you stall, the sail spills.
+   Angled, or timed into the trough = you keep your way. It NEVER costs
+   hearts — it costs SPEED. (Maria's rules: warned before harm, the counter
+   is taught in the same breath, and safety gets its own reward.) */
+let setLineT = 0, setKeepPulse = 0, setCapT = -999;
+function spawnBigSet() {
+  const a = 0.32 + (Math.random() - 0.5) * 0.5;              // heading wanders
+  SET.nx = Math.cos(a) * 0.94 + Math.sin(a) * 0.34;
+  SET.nz = Math.sin(a) * 0.94 - Math.cos(a) * 0.34;
+  const l = Math.hypot(SET.nx, SET.nz) || 1;
+  SET.nx /= l; SET.nz /= l;
+  SET.on = true; SET.t = 0; SET.hit = false; SET.warned = false;
+  SET.amp = 1.55 + Math.random() * 0.85;
+  SET.spd = 15 + Math.random() * 3;
+  SET.c = BOAT.x * SET.nx + BOAT.z * SET.nz - 160;
+}
+function bigSetCaption(txt, ms, gapS) {
+  if (seaClock - setCapT < (gapS || 14)) return;
+  setCapT = seaClock;
+  showCaption(txt, ms || 3600);
+}
+function resolveBigSet() {
+  SET.hit = true; SET.passes++;
+  const fx = Math.sin(BOAT.ang), fz = Math.cos(BOAT.ang);
+  const bowOn = Math.abs(fx * SET.nx + fz * SET.nz);
+  const bx = BOAT.x + fx * 1.4, bz = BOAT.z + fz * 1.4;
+  if (bowOn > 0.72 && BOAT.spd > 4.6) {
+    /* met her square, under full canvas: the bow buries, the sail spills */
+    SET.stalls++;
+    BOAT.spd *= 0.2;
+    SET.spillT = 1.6;
+    BOAT.sailK = 0.12;
+    CAM.shake = 0.46;
+    SFX.swellBreak();
+    rumble({ duration: 430, strong: 0.95, weak: 0.72 }, 'bigset-stall');
+    burst(psSpray, bx, WL + 1.4, bz, 34, 3.4, 3.2, 0.95);
+    burst(psSpray, bx, WL + 0.6, bz, 20, 2.4, 2.4, 0.7);
+    bigSetCaption('BIG SET — take it at an ANGLE, or drop into the trough.', 4200, 12);
+  } else {
+    /* cut across her, or timed into the trough: you keep your way */
+    SET.keeps++;
+    BOAT.spd *= 0.94;
+    setKeepPulse = 10;
+    SFX.wash(1); SFX.bellSmall(1.5);
+    rumble({ duration: 80, strong: 0.16, weak: 0.42 }, 'bigset-keep');
+    burst(psSpray, bx, WL + 0.7, bz, 14, 2.2, 2.0, 0.6);
+    if (SET.keeps <= 2) bigSetCaption('Cut clean — you kept your way.', 3000, 9);
+  }
+}
+function tickBigSets() {
+  if (setKeepPulse > 0 && --setKeepPulse === 0) {
+    rumble({ duration: 90, strong: 0.2, weak: 0.5 }, 'bigset-keep');
+  }
+  if (SET.spillT > 0) SET.spillT = Math.max(0, SET.spillT - DT);
+  const live = P.sailing && seaOpen() && atSeaQ(BOAT.x, BOAT.z) && state === 'play';
+  if (!live) {
+    if (SET.on && !atSeaQ(BOAT.x, BOAT.z)) SET.on = false;
+    return;
+  }
+  if (!SET.on) {
+    SET.next -= DT;
+    if (SET.next <= 0) { spawnBigSet(); SET.next = 18 + Math.random() * 16; }
+    return;
+  }
+  SET.t += DT;
+  SET.c += SET.spd * DT;
+  const u = BOAT.x * SET.nx + BOAT.z * SET.nz - SET.c;
+  SET.u = u;
+  if (!SET.warned && u < 96) {
+    /* WARNING BEFORE HARM: you see the dark line and feel the ground note
+       long before it reaches you */
+    SET.warned = true;
+    SFX.swellRise();
+    rumble({ duration: 950, strong: 0.2, weak: 0.55 }, 'bigset-warn');
+    if (SAVE && !SAVE.bigSetSeen) {
+      SAVE.bigSetSeen = true; storeSave();
+      bigSetCaption('A BIG SET is running — meet it at an angle.', 4200, 0);
+    } else bigSetCaption('A big set is running.', 2600, 22);
+  }
+  if (!SET.hit && u < 11) resolveBigSet();
+  if (u < -150) { SET.on = false; SET.warned = false; }
+}
+
+/* ═══ SUN GULLS aloft ═══ */
+function gullSurfaceY(x, z) {
+  const g = groundH(x, z);
+  return Math.max(g, WL);
+}
+function tickGulls() {
+  for (let i = 0; i < GULLS.length; i++) {
+    const g = GULLS[i];
+    if (g.dead) continue;
+    const d2p = Math.hypot(P.x - g.x, P.z - g.z);
+    if (d2p > 95) continue;                       // asleep past the fog
+    g.t += DT;
+    if (g.cd > 0) g.cd -= DT;
+    const surf = gullSurfaceY(g.x, g.z);
+    if (g.st === 'wheel') {
+      g.ph += DT * 0.75;
+      const r = 8.5 + Math.sin(g.t * 0.4) * 2.5;
+      g.x = g.home.x + Math.cos(g.ph) * r;
+      g.z = g.home.z + Math.sin(g.ph) * r;
+      g.y += ((surf + 11.5 + Math.sin(g.t * 0.9) * 1.2) - g.y) * 0.05;
+      g.face = g.ph + Math.PI / 2;
+      if (d2p < 27 && g.cd <= 0 && state === 'play') {
+        // the PAIR goes together: one rears, the other a half-beat later
+        for (const o of GULLS) {
+          if (o.dead || o.pair !== g.pair || o.st !== 'wheel') continue;
+          o.st = 'tele'; o.t = o === g ? 0 : -0.42; o.cd = 6;
+        }
+        SFX.gullCry();
+      }
+    } else if (g.st === 'tele') {
+      // rear up, brighten, cry — the telegraph is unmistakable
+      g.y += ((surf + 13.5) - g.y) * 0.06;
+      if (g.t > 0.72) {
+        g.st = 'dive'; g.t = 0;
+        const ty = P.fy + 1.1;
+        const dx = P.x - g.x, dy = ty - g.y, dz = P.z - g.z;
+        const l = Math.hypot(dx, dy, dz) || 1;
+        g.dir = [dx / l * 12.5, dy / l * 12.5, dz / l * 12.5];
+        g.face = Math.atan2(dx, dz);
+        SFX.gullDive();
+      }
+    } else if (g.st === 'dive') {
+      g.x += g.dir[0] * DT; g.y += g.dir[1] * DT; g.z += g.dir[2] * DT;
+      if (Math.hypot(P.x - g.x, P.z - g.z) < 1.05 && Math.abs(g.y - (P.fy + 1.0)) < 1.25) {
+        hurtPlayer(1, g.x, g.z, g.m.root);
+        if (P.sailing) { BOAT.spd *= 0.82; }
+        g.st = 'climb'; g.t = 0;
+      }
+      if (g.y < surf + 0.7 || g.t > 1.15) { g.st = 'climb'; g.t = 0; }
+    } else if (g.st === 'climb') {
+      const hx = g.home.x - g.x, hz = g.home.z - g.z;
+      const l = Math.hypot(hx, hz) || 1;
+      g.x += hx / l * 7 * DT; g.z += hz / l * 7 * DT;
+      g.y += ((surf + 12.5) - g.y) * 0.05;
+      g.face = Math.atan2(hx, hz);
+      if (g.t > 1.4) { g.st = 'wheel'; g.t = 0; g.ph = Math.atan2(g.z - g.home.z, g.x - g.home.x); }
+    }
+  }
+}
+
+/* ═══ REEF GAR — wake first, always ═══ */
+function tickGars() {
+  const sailing = P.sailing && state === 'play';
+  for (let i = 0; i < GARS.length; i++) {
+    const g = GARS[i];
+    const d2p = Math.hypot(P.x - g.x, P.z - g.z);
+    if (g.cured) {
+      if (g.st !== 'gone') {
+        g.t += DT;
+        g.x += Math.sin(g.ang) * 9 * DT; g.z += Math.cos(g.ang) * 9 * DT;
+        if (g.t > 3) g.st = 'gone';
+      }
+      continue;
+    }
+    if (!sailing || d2p > 110) { g.st = 'cruise'; continue; }
+    g.t += DT;
+    if (g.st === 'cruise') {
+      // it holds off the quarter, circling, showing only the fin
+      g.ph += DT * 0.5;
+      const tx = BOAT.x + Math.cos(g.ph) * 34, tz = BOAT.z + Math.sin(g.ph) * 34;
+      const dx = tx - g.x, dz = tz - g.z, l = Math.hypot(dx, dz) || 1;
+      g.x += dx / l * 6.5 * DT; g.z += dz / l * 6.5 * DT;
+      g.ang = Math.atan2(dx, dz);
+      if ((simTick % 90) === 0 && d2p < 60) SFX.garWake();
+      if (g.t > 4.5 && d2p < 55) { g.st = 'run'; g.t = 0; SFX.garWake(); }
+    } else if (g.st === 'run') {
+      const dx = BOAT.x - g.x, dz = BOAT.z - g.z, l = Math.hypot(dx, dz) || 1;
+      g.ang = Math.atan2(dx, dz);
+      g.x += dx / l * 10.5 * DT; g.z += dz / l * 10.5 * DT;
+      if ((simTick % 26) === 0) {
+        psSpray.spawn(g.x, WL + 0.15, g.z, (Math.random() - 0.5) * 0.8, 0.7, (Math.random() - 0.5) * 0.8, 0.5);
+      }
+      if (l < 7.5 || g.t > 6) {
+        g.st = 'breach'; g.t = 0;
+        SFX.garBreach();
+        rumble({ duration: 140, strong: 0.3, weak: 0.5 }, 'gar');
+        burst(psSpray, g.x, WL + 0.4, g.z, 16, 2.2, 2.4, 0.7);
+        if (SAVE && !SAVE.garSeen) {
+          SAVE.garSeen = true; storeSave();
+          showCaption('REEF GAR — cut it down when it breaches.', 3800);
+        }
+      }
+    } else if (g.st === 'breach') {
+      // it arcs out of the water alongside: THE swing window
+      const dx = BOAT.x - g.x, dz = BOAT.z - g.z, l = Math.hypot(dx, dz) || 1;
+      g.x += dx / l * 3.2 * DT; g.z += dz / l * 3.2 * DT;
+      g.ang = Math.atan2(dx, dz);
+      g.breachY = WL + Math.sin(clamp(g.t / 1.15, 0, 1) * Math.PI) * 2.1;
+      if (g.t > 1.15) {
+        // missed: it rams. Speed, heading, one heart — never a drowning.
+        garRams++;
+        hurtPlayer(1, g.x, g.z, g.c.wakeRoot);
+        BOAT.spd *= 0.35;
+        BOAT.ang += (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.3);
+        CAM.shake = 0.34;
+        SFX.thump(true);
+        rumble({ duration: 260, strong: 0.8, weak: 0.6 }, 'gar-ram');
+        burst(psSpray, g.x, WL + 0.5, g.z, 22, 2.6, 2.2, 0.8);
+        g.st = 'flee'; g.t = 0;
+      }
+    } else if (g.st === 'flee') {
+      g.x -= Math.sin(g.ang) * 8 * DT; g.z -= Math.cos(g.ang) * 8 * DT;
+      if (g.t > 5) { g.st = 'cruise'; g.t = 0; g.ph = Math.random() * TAU; }
+    }
+  }
+}
+function hitGar(g) {
+  g.hp--;
+  SFX.hit();
+  P.hitstop = 3;
+  CAM.shake = 0.14;
+  rumble({ duration: 80, strong: 0.4, weak: 0.3 });
+  burst(psSpark, g.x, g.breachY + 0.8, g.z, 12, 2.0, 1.6, 0.5);
+  burst(psSpray, g.x, WL + 0.3, g.z, 10, 1.8, 1.6, 0.5);
+  if (g.hp <= 0) {
+    // nothing dies out here either: the madness lifts and it dives away
+    g.cured = true; g.st = 'dive'; g.t = 0;
+    garsCured++;
+    g.ang = Math.atan2(g.x - BOAT.x, g.z - BOAT.z);
+    SFX.splash(); SFX.chime(1.2);
+    burst(psSparkle, g.x, WL + 1.0, g.z, 16, 1.6, 1.4, 1.0);
+  }
+}
+
+/* ═══ COMBAT AFLOAT — the same swing, a braced stance over the gunwale ═══ */
+const BATK = { on: false, t: 0, total: 0.34, n: 0, hitDone: false, cool: 0 };
+function startBoatAttack() {
+  BATK.n = (BATK.cool > 0 && BATK.n < 3) ? BATK.n + 1 : 1;
+  BATK.total = BATK.n === 3 ? 0.4 : 0.34;
+  BATK.on = true; BATK.t = BATK.total; BATK.hitDone = false; BATK.cool = 0.6;
+  if (!P.drawn) { P.drawn = true; SFX.draw(); } else SFX[BATK.n === 3 ? 'swing3' : 'sword']();
+  rumble({ duration: 55, strong: 0.12, weak: 0.26 });
+}
+function boatSwingHits() {
+  let any = false;
+  const range = BATK.n === 3 ? 5.0 : 4.4;
+  for (const g of GULLS) {
+    if (g.dead) continue;
+    if (Math.hypot(P.x - g.x, P.z - g.z) < range && Math.abs(g.y - (WL + 1.2)) < 3.4 &&
+        (inSwingArc(g.x, g.z, range, 2.4) || Math.hypot(P.x - g.x, P.z - g.z) < 2.4)) {
+      popGull(g); any = true;
+    }
+  }
+  for (const g of GARS) {
+    if (g.cured || g.st !== 'breach') continue;
+    if (Math.hypot(P.x - g.x, P.z - g.z) < range + 0.8) { hitGar(g); any = true; }
+  }
+  return any;
+}
+function tickBoatAttack() {
+  if (BATK.cool > 0) BATK.cool -= DT;
+  if (!BATK.on) return;
+  BATK.t -= DT;
+  const ph = 1 - BATK.t / BATK.total;
+  if (!BATK.hitDone && ph > 0.36) { BATK.hitDone = true; boatSwingHits(); }
+  if (BATK.t <= 0) BATK.on = false;
+}
+</script>
+<script>
+/* ═══════════ p6d/6 — cinematics: the keel, THE REFIT, the bell, THE CROSSING ═══════════ */
+
+const SEAFX = { heave: 0, pitch: 0, roll: 0, deckY: 0 };
+const _sq = new THREE.Quaternion(), _sq2 = new THREE.Quaternion(), _se = new THREE.Euler();
+const _sv = new THREE.Vector3();
+function updateSeaFrame(dtv) {
+  seaClock += dtv;
+  if (!P.sailing) { SEAFX.heave = 0; SEAFX.pitch = 0; SEAFX.roll = 0; SEAFX.deckY = WL - 0.42; return; }
+  const f = 1.5, s = 0.9;
+  const fx = Math.sin(BOAT.ang), fz = Math.cos(BOAT.ang);
+  const hM = swellAt(BOAT.x, BOAT.z);
+  const hB = swellAt(BOAT.x + fx * f, BOAT.z + fz * f);
+  const hS = swellAt(BOAT.x - fx * f, BOAT.z - fz * f);
+  const hP = swellAt(BOAT.x - fz * s, BOAT.z + fx * s);
+  const hT = swellAt(BOAT.x + fz * s, BOAT.z - fx * s);
+  SEAFX.heave = hM;
+  SEAFX.pitch = Math.atan2(hB - hS, f * 2) * 0.85;
+  SEAFX.roll = Math.atan2(hT - hP, s * 2) * 0.75;
+  SEAFX.deckY = WL - 0.42 + hM;
+}
+/* the boat's visual transform: heave, pitch and roll off the swell gradient
+   at the hull. Composed as a quaternion so pitch/roll stay in the HULL's
+   frame at any heading. */
+function poseBoatOnSwell(now) {
+  if (!sailboat || !sailboat.group.visible) return;
+  const bob = Math.sin(BOAT.bobPh) * 0.05;
+  sailboat.group.position.set(BOAT.x, WL - 0.42 + SEAFX.heave + bob, BOAT.z);
+  _se.set(0, BOAT.ang, 0); _sq.setFromEuler(_se);
+  _se.set(SEAFX.pitch + BOAT.spd * 0.008, 0, SEAFX.roll - BOAT.heel);
+  _sq2.setFromEuler(_se);
+  _sq.multiply(_sq2);
+  sailboat.group.quaternion.copy(_sq);
+}
+
+/* ── the keel: pried free of the drowned wreck, then carried home ── */
+function startKeelCine() { startCine('keel'); }
+function tickKeelCine(t) {
+  const kx = KEEL_SPOT.x, kz = KEEL_SPOT.z, ky = WL + 0.35;
+  const a = Math.atan2(P.x - kx, P.z - kz);
+  const k = smoothstep(clamp(t / 3.6, 0, 1));
+  cineCam(kx + Math.sin(a + 0.6 - k * 0.5) * (3.6 - k * 0.9), ky + lerp(1.5, 1.0, k), kz + Math.cos(a + 0.6 - k * 0.5) * (3.6 - k * 0.9),
+    kx, ky + lerp(0.3, 0.7, k), kz);
+  if (CINE.step === 0 && t > 0.5) { CINE.step = 1; SFX.keelPry(); }
+  if (CINE.step === 1 && t > 2.0) {
+    CINE.step = 2;
+    SFX.creakBoat();
+    burst(psSpray, kx, ky + 0.2, kz, 16, 2.0, 1.8, 0.7);
+    burst(psDust, kx, ky + 0.4, kz, 10, 1.4, 1.2, 0.6);
+    rumble({ duration: 260, strong: 0.7, weak: 0.5 });
+    CAM.shake = 0.26;
+  }
+  if (CINE.step === 2 && t > 2.5) {
+    CINE.step = 3;
+    SAVE.keelFound = true; SAVE.keelCarried = true; storeSave();
+    P.carryKeel = true;
+    if (QUEST.q < 8) setQuest(8);
+    itemToast('THE KEEL TIMBER', 'Oak, iron-strapped, and stubborn. She was built for the open sea.');
+    SFX.itemGet();
+    burst(psSparkle, kx, ky + 1.2, kz, 18, 1.4, 1.2, 1.0);
+  }
+  if (t > 4.1) { markCineSeen('keel'); endCine(); }
+}
+
+/* ── THE REFIT — Finn steps a second mast with you. Warm, wordless. ── */
+const REFIT = { finnHome: null, mastK: 0, sailK: 0, keelK: 0 };
+function tickRefitCine(t) {
+  const bx = BOAT.x, bz = BOAT.z;
+  if (cineSeen('refit') && t > 0.9 && IN.confirm) { finishRefit(); endCine(); return; }
+  /* ONE continuous arc from the beach, ending low on two masts and sky */
+  const A = [bx + 7.5, WL + 3.4, bz - 6.5], LA = [bx, WL + 0.9, bz];
+  const B = [bx + 5.0, WL + 2.2, bz + 5.5], LB = [bx, WL + 1.4, bz];
+  const C = [bx - 3.4, WL + 1.1, bz + 6.2], LC = [bx, WL + 2.6, bz];
+  let p, l;
+  if (t < 5.2) {
+    const k = smoothstep(clamp(t / 5.2, 0, 1));
+    p = [lerp(A[0], B[0], k), lerp(A[1], B[1], k), lerp(A[2], B[2], k)];
+    l = [lerp(LA[0], LB[0], k), lerp(LA[1], LB[1], k), lerp(LA[2], LB[2], k)];
+  } else {
+    const k = smoothstep(clamp((t - 5.2) / 5.4, 0, 1));
+    p = [lerp(B[0], C[0], k), lerp(B[1], C[1], k), lerp(B[2], C[2], k)];
+    l = [lerp(LB[0], LC[0], k), lerp(LB[1], LC[1], k), lerp(LB[2], LC[2], k)];
+  }
+  cineCam(p[0], p[1], p[2], l[0], l[1], l[2]);
+  /* FINN comes down the beach with the hammer */
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    REFIT.finnHome = { x: finn.x, z: finn.z, ry: finn.char.root.rotation.y };
+    P.carryKeel = false;
+    keelItem.visible = true;
+    REFIT.mastK = 0; REFIT.sailK = 0; REFIT.keelK = 0;
+    showRefit(true);
+    mast2.scale.set(1, 0.04, 1);
+    sail2.scale.y = 0.02;
+    keelFin.visible = false;
+  }
+  {
+    const fk = smoothstep(clamp((t - 0.6) / 2.6, 0, 1));
+    finn.x = lerp(REFIT_BEACH.x + 6.5, REFIT_BEACH.x + 1.4, fk);
+    finn.z = lerp(REFIT_BEACH.z - 7.5, REFIT_BEACH.z + 0.9, fk);
+    finn.baseY = groundH(finn.x, finn.z);
+    finn.char.root.position.set(finn.x, finn.baseY, finn.z);
+    finn.char.root.rotation.y = Math.atan2(bx - finn.x, bz - finn.z);
+  }
+  /* the keel goes under her */
+  {
+    const kk = smoothstep(clamp((t - 2.9) / 2.4, 0, 1));
+    keelItem.visible = kk < 0.98;
+    keelItem.position.set(lerp(REFIT_BEACH.x + 1.2, bx, kk), lerp(groundH(REFIT_BEACH.x, REFIT_BEACH.z) + 0.3, WL - 0.9, kk),
+      lerp(REFIT_BEACH.z + 0.4, bz, kk));
+    keelItem.rotation.set(0, lerp(1.2, BOAT.ang, kk), 0);
+    if (kk > 0.97 && !keelFin.visible) { keelFin.visible = true; SFX.splashSm(); }
+  }
+  if (CINE.step === 1 && t > 3.4) { CINE.step = 2; SFX.hammer(); }
+  if (CINE.step === 2 && t > 4.1) { CINE.step = 3; SFX.hammer(); }
+  if (CINE.step === 3 && t > 4.8) { CINE.step = 4; SFX.hammer(); SFX.creakBoat(); }
+  /* the second mast is stepped */
+  {
+    const mk = smoothstep(clamp((t - 5.4) / 2.6, 0, 1));
+    mast2.scale.set(1, Math.max(0.04, mk), 1);
+    if (mk > 0.02 && CINE.step === 4) { CINE.step = 5; SFX.creakBoat(); }
+  }
+  if (CINE.step === 5 && t > 7.6) { CINE.step = 6; SFX.hammer(); rumble({ duration: 120, strong: 0.3, weak: 0.4 }); }
+  /* she bends the sail on, and it furls */
+  {
+    const sk = smoothstep(clamp((t - 8.2) / 1.9, 0, 1));
+    sail2.scale.y = lerp(0.02, 0.12, sk);
+    if (sk > 0.9 && CINE.step === 6) {
+      CINE.step = 7;
+      SFX.chime(1.1);
+      burst(psSparkle, bx, WL + 2.2, bz, 12, 1.2, 1.0, 1.0);
+      SFX.creakBoat();
+    }
+  }
+  if (t > 11.6) { finishRefit(); endCine(); }
+}
+function finishRefit() {
+  SAVE.boatRefit = true; SAVE.keelCarried = false; storeSave();
+  P.carryKeel = false;
+  keelItem.visible = false;
+  showRefit(true);
+  mast2.scale.set(1, 1, 1);
+  sail2.scale.y = 0.12;
+  keelFin.visible = true;
+  if (REFIT.finnHome) {
+    finn.x = REFIT.finnHome.x; finn.z = REFIT.finnHome.z;
+    finn.baseY = groundH(finn.x, finn.z);
+    finn.char.root.position.set(finn.x, finn.baseY, finn.z);
+    finn.char.root.rotation.y = REFIT.finnHome.ry;
+  }
+  if (QUEST.q < 9) setQuest(9);
+  markCineSeen('refit');
+}
+
+/* ── WATCHSTONE'S BELL: the first hour struck in a year, and the towers
+   across the water hearing it ── */
+function tickBellCine(t) {
+  const bx = WATCH_BELL.x, bz = WATCH_BELL.z, by = groundH(bx, bz);
+  if (cineSeen('watchbell') && t > 0.8 && IN.confirm) { finishWatchBell(); endCine(); return; }
+  const k = smoothstep(clamp(t / 5.6, 0, 1));
+  cineCam(bx + lerp(5.6, 9.5, k), by + lerp(2.0, 7.0, k), bz + lerp(5.0, 11.0, k),
+    lerp(bx, KILN_ISLE.x, k * 0.2), by + lerp(1.2, 3.2, k), lerp(bz, KILN_ISLE.z, k * 0.2));
+  if (CINE.step === 0 && t > 0.9) {
+    CINE.step = 1;
+    SFX.bellIsle(1, 1);
+    CAM.shake = 0.18;
+    rumble({ duration: 700, strong: 0.6, weak: 0.8 });
+    burst(psSparkle, bx, by + 1.6, bz, 16, 1.4, 1.0, 1.2);
+  }
+  /* the answer, tower after tower, across the water */
+  if (CINE.step === 1 && t > 2.4) { CINE.step = 2; SFX.bellIsle(0.75, 0.35); }
+  if (CINE.step === 2 && t > 3.5) { CINE.step = 3; SFX.bellIsle(1.5, 0.25); }
+  if (CINE.step === 3 && t > 4.6) { CINE.step = 4; SFX.bellIsle(0.5, 0.18); showCaption('Somewhere west, a door hears its own note.', 3600); }
+  if (t > 6.4) { finishWatchBell(); endCine(); }
+}
+function finishWatchBell() {
+  if (!SAVE.watchBell) { SAVE.watchBell = true; storeSave(); }
+  markCineSeen('watchbell');
+}
+
+/* ═══ THE CROSSING — the water goes clear, and you pass over THE DROWNED
+   MOON. Then the bell towers ahead start ringing BY THEMSELVES, and the
+   Great Campanile comes out of the haze. Control returns as a DISCOVERY. ═══ */
+const CROSS = { on: false, fog: 0, bells: 0 };
+const SEA_RUN_PATH = [[-760, -150], [-900, -195], [WATCHSTONE.x + 120, WATCHSTONE.z + 30]];
+function beginSeaHandoff(lookAt) {
+  HANDOFF.k = 0; HANDOFF.fast = false; HANDOFF.fired = false;
+  HANDOFF.startTick = simTick; HANDOFF.doneTick = 0;
+  HANDOFF.from = [camera.position.x, camera.position.y, camera.position.z];
+  HANDOFF.look = lookAt.slice();
+  CAM.mode = 'handoff';
+  CAM.yaw = BOAT.ang + Math.PI;
+  CAM.pitch = 0.32;
+  CAM.ready = false;
+  CINE.id = null;
+  setState('play');
+  AUTORUN.active = true; AUTORUN.player = false;
+  AUTORUN.path = SEA_RUN_PATH.slice(); AUTORUN.idx = 0; AUTORUN.ease = 0;
+  AUTORUN.startedAt = simTick;
+}
+function tickCrossingCine(t) {
+  /* the boat sails ON through the whole shot — authored way, real heading */
+  BOAT.spd = lerp(BOAT.spd, 8.6, 0.02);
+  BOAT.x += Math.sin(BOAT.ang) * BOAT.spd * DT;
+  BOAT.z += Math.cos(BOAT.ang) * BOAT.spd * DT;
+  P.x = BOAT.x; P.z = BOAT.z; P.fy = WL + 0.45;
+  P.heading = BOAT.ang;
+  if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; SAVE.boatAng = BOAT.ang; }
+  const skip = cineSeen('crossing') && t > 0.9 && IN.confirm;
+  const mx = MOON_SITE.x, mz = MOON_SITE.z;
+  const fx = Math.sin(BOAT.ang), fz = Math.cos(BOAT.ang);
+  /* the water goes clear and deep */
+  waterClarity = clamp(t / 2.6, 0, 1) * (t > 11.5 ? clamp((13.6 - t) / 2.1, 0, 1) : 1);
+  CROSS.fog = waterClarity;
+  const crown = -MOON_BOWL_D + SEA_FLOOR + MOON_SITE.r * 0.42 + MOON_SITE.r * 0.93;   // her pale crown
+  let p, l;
+  if (t < 2.6) {
+    // behind her quarter, dropping toward the water she is about to cross
+    const k = smoothstep(clamp(t / 2.6, 0, 1));
+    p = [BOAT.x - fx * lerp(7.5, 5.0, k) - fz * lerp(1.0, 3.4, k), WL + lerp(3.4, 6.0, k),
+         BOAT.z - fz * lerp(7.5, 5.0, k) + fx * lerp(1.0, 3.4, k)];
+    l = [BOAT.x + fx * lerp(14, 6, k), WL + lerp(1.0, -5.0, k), BOAT.z + fz * lerp(14, 6, k)];
+  } else if (t < 8.4) {
+    /* STAND OFF HER. She is 330m across with her crown ~10m under the
+       surface, so a camera riding over the top can only ever fill the frame
+       with pale stone — which reads as an abstract wall, not as something
+       enormous. Scale comes from CONTRAST: hold her flank in frame together
+       with the lit surface above and the murk falling away beyond, and keep
+       the boat's small silhouette on the water for reference. */
+    const k = smoothstep(clamp((t - 2.6) / 5.8, 0, 1));
+    p = [BOAT.x + fz * lerp(30, 86, k) - fx * lerp(12, 46, k), WL + lerp(12, 44, k),
+         BOAT.z - fx * lerp(30, 86, k) - fz * lerp(12, 46, k)];
+    l = [lerp(BOAT.x, mx, 0.42 + k * 0.22), lerp(-18, -52, k), lerp(BOAT.z, mz, 0.42 + k * 0.22)];
+  } else if (t < 12.2) {
+    // up out of the water, turning to the horizon: THE CAMPANILE
+    const k = smoothstep(clamp((t - 8.4) / 3.8, 0, 1));
+    p = [BOAT.x - fx * lerp(7.5, 11.0, k) + fz * lerp(10.0, 0, k), WL + lerp(27.0, 8.5, k),
+         BOAT.z - fz * lerp(7.5, 11.0, k) - fx * lerp(10.0, 0, k)];
+    l = [lerp(mx, KILN_ISLE.x, k), lerp(crown - 62, WL + 74, k), lerp(mz, KILN_ISLE.z, k)];
+  } else {
+    const k = smoothstep(clamp((t - 12.2) / 1.6, 0, 1));
+    p = [BOAT.x - fx * lerp(11.0, 7.2, k), WL + lerp(8.5, 3.2, k), BOAT.z - fz * lerp(11.0, 7.2, k)];
+    l = [lerp(KILN_ISLE.x, BOAT.x + fx * 40, k * 0.75), lerp(WL + 74, WL + 8, k), lerp(KILN_ISLE.z, BOAT.z + fz * 40, k * 0.75)];
+  }
+  cineCam(p[0], p[1], p[2], l[0], l[1], l[2]);
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    SAVE.moonSeen = true; storeSave();
+    CROSS.bells = 0;
+    el('cineBars').classList.add('on');
+    SFX.wash(1);
+  }
+  if (CINE.step === 1 && t > 3.4) { CINE.step = 2; SFX.hum(); rumble({ duration: 1200, strong: 0.12, weak: 0.3 }); }
+  /* THE BELLS START BY THEMSELVES — one tower after another, west of us */
+  if (t > 8.2 && CROSS.bells < 4 && t > 8.2 + CROSS.bells * 1.05) {
+    SFX.bellIsle([0.75, 1.0, 0.6, 1.5][CROSS.bells], [0.5, 0.42, 0.32, 0.24][CROSS.bells]);
+    CROSS.bells++;
+    if (CROSS.bells === 1) rumble({ duration: 500, strong: 0.25, weak: 0.55 });
+  }
+  if (skip || t > 13.8) {
+    waterClarity = 0; CROSS.fog = 0;
+    if (skip) { BOAT.x = MOON_SITE.x - 240; BOAT.z = MOON_SITE.z - 90; }
+    beginSeaHandoff(l);
+  }
+}
+</script>
+<script>
+/* ═══════════ p6d/7 — the wiring: wraps, world state, telemetry, debug ═══════════ */
+
+const OUTER = { x: -1250, z: -400, r: 1320 };     // the chart's soft edge
+const ISLE_NAMES = { watch: 'WATCHSTONE', kiln: 'KILN ISLE', spire: 'THE DROWNED SPIRE',
+  net: 'NETMENDER’S ROCK', gannet: 'GANNET STACK', strand: 'THE LONG STRAND' };
+ISLE_ANCHORS.unshift({ x: 8.5, z: 6.0, sx: 4, sz: -2, id: 'bay' });
+P.carryKeel = false;
+let isleSeen = {}, outerCd = 0, landfallCd = 0;
+
+/* ── Finn's part in it ── */
+DLG.finnKeel = { name: 'KEEPER FINN', lines: [
+  'That wreck out in the bay still has her KEEL in her. Ocean oak. Pry it out.',
+  'Bring it to the beach and I’ll step you a second mast. Open water wants both.',
+], onDone: () => { if (QUEST.q < 7) setQuest(7); } };
+DLG.finnKeel2 = { name: 'KEEPER FINN', lines: [
+  'That’s the one. Down to the beach by your boat — I’ll fetch the hammer.',
+], onDone: () => { if (QUEST.q < 8) setQuest(8); } };
+DLG.finnSea = { name: 'KEEPER FINN', lines: [
+  'Two masts. Hold ○ and she’ll show you what she was built for.',
+  'Mind the big sets out there — meet them at an angle, never bow-on.',
+] };
+
+/* ── the region tick ── */
+let stuckT = 0;
+function tickSea() {
+  /* THE FOOTING INVARIANT. The tide's dunk-bounce returns you to `lastDry`,
+     which is recorded whenever your FEET are above the waterline — including
+     the frame you step off a platform's edge, while your feet are still up
+     there. Land in the water at that spot and the bounce sends you back to a
+     place with no footing, forever: a silent soft-lock, found by walking the
+     drowned wreck's deck with the keel. Here the footing is VALIDATED before
+     it is remembered, and a player who somehow ends up treading water is put
+     back on the nearest real ground. */
+  if (!P.sailing && flooded() && state === 'play') {
+    const sup = supportYAt(P.x, P.z, P.fy + 0.25);
+    if (!P.air && sup > WL - 0.25 && P.fy >= sup - 0.06) {
+      lastDry[0] = P.x; lastDry[1] = P.z;
+      stuckT = 0;
+    } else if (waterDepthAt(P.x, P.z) > 0.8 && !P.air) {
+      if (++stuckT > 40) {
+        stuckT = 0;
+        const a = nearestIsleAnchor(P.x, P.z);
+        const gx = a && P.x < -96 ? a.sx : 4, gz = a && P.x < -96 ? a.sz : -2;
+        lastDry[0] = gx; lastDry[1] = gz;
+        P.x = gx; P.z = gz;
+        P.fy = supportYAt(gx, gz, WL + 3); P.air = false; P.vx = 0; P.vz = 0;
+      }
+    } else stuckT = 0;
+  } else stuckT = 0;
+  tickBigSets();
+  tickBoatAttack();
+  tickGulls();
+  tickGars();
+  tickIsleChests();
+  if (P.x < -96) tickIsleSalt();
+  /* the anchor you would wake at */
+  {
+    let bi = -1, bd = 1e9;
+    for (let i = 0; i < ISLE_ANCHORS.length; i++) {
+      const a = ISLE_ANCHORS[i];
+      const d = Math.hypot(P.x - a.sx, P.z - a.sz);
+      if (d < bd) { bd = d; bi = i; }
+    }
+    if (bd < 70) lastIsleAnchor = bi;
+  }
+  /* LANDFALL */
+  if (!P.sailing && landfallCd <= 0) {
+    const is = ashoreOnIsle(P.x, P.z);
+    if (is && !isleSeen[is.id]) {
+      isleSeen[is.id] = true;
+      landfallCd = 180;
+      if (SAVE && !SAVE.isleLandfall) {
+        SAVE.isleLandfall = true; storeSave();
+        showCaption('THE HOURLESS ISLES — ' + ISLE_NAMES[is.id], 5000);
+        if (QUEST.q < 10) setQuest(10);
+      } else showCaption(ISLE_NAMES[is.id], 3400);
+      SFX.bellSmall(0.8);
+    }
+  }
+  if (landfallCd > 0) landfallCd--;
+  /* THE CROSSING: ~350 m out, the sea shows you what it is keeping */
+  if (P.sailing && seaOpen() && SAVE && !SAVE.moonSeen && state === 'play' &&
+      Math.hypot(BOAT.x - MOON_SITE.x, BOAT.z - MOON_SITE.z) < 205) {
+    startCine('crossing');
+  }
+}
+const _n2TickPlayer = tickPlayer;
+tickPlayer = function () {
+  _n2TickPlayer();
+  tickSea();
+};
+
+/* ── SAILING: the double sail, the opened sea, the chart's edge ── */
+const _n2TickSailing = tickSailing;
+tickSailing = function () {
+  /* ✕ afloat: context first (exactly like on foot), otherwise SWING */
+  if (IN.atk && !VOYAGE.active && state === 'play' && !BATK.on) {
+    const ctx = currentInteract();
+    if (!ctx) { startBoatAttack(); IN.atk = false; }
+  }
+  const spd0 = BOAT.spd;
+  const r0 = SEA_EDGE.r;
+  if (seaOpen()) SEA_EDGE.r = 1e7;      // refit: the sea stops turning you back
+  try { _n2TickSailing(); } finally { SEA_EDGE.r = r0; }
+  if (!P.sailing) return;
+  /* THE DOUBLE SAIL — ○ held raises BOTH: 6.8 → 9.6, and you feel it */
+  if (refitDone() && !VOYAGE.active) {
+    const mag = moveVec();
+    const full = IN.sprintHeld && mag > 0.1;
+    let tgt = mag > 0.1 ? (full ? 9.6 : 4.2) : 0;
+    if (SET.spillT > 0) tgt = Math.min(tgt, 2.2);
+    BOAT.spd = spd0 + (tgt - spd0) * (tgt > spd0 ? 0.024 : 0.045);
+    BOAT.sailK = (full && SET.spillT <= 0) ? Math.min(1, BOAT.sailK + DT * 2.4)
+                                           : Math.max(0.12, BOAT.sailK - DT * 1.8);
+    // she is heavier and louder under two sails
+    if (BOAT.spd > 5.5 && (simTick % 3) === 0) {
+      const bx = BOAT.x + Math.sin(BOAT.ang) * 1.35, bz = BOAT.z + Math.cos(BOAT.ang) * 1.35;
+      psSpray.spawn(bx + (Math.random() - 0.5) * 1.1, WL + 0.3 + SEAFX.heave,
+        bz + (Math.random() - 0.5) * 1.1,
+        Math.sin(BOAT.ang) * 2.2 + (Math.random() - 0.5) * 2.2, 2.0 + Math.random() * 1.2,
+        Math.cos(BOAT.ang) * 2.2 + (Math.random() - 0.5) * 2.2, 0.55);
+    }
+    if (BOAT.spd > 8.4 && (simTick % 26) === 0) {
+      SFX.wash(0.8);
+      rumble({ duration: 90, strong: 0.16, weak: 0.34 }, 'fullsail');
+    }
+    /* the chart's soft edge — the same courtesy the bay showed you */
+    const de = Math.hypot(BOAT.x - OUTER.x, BOAT.z - OUTER.z);
+    if (de > OUTER.r) {
+      const push = (de - OUTER.r) + 0.6;
+      BOAT.x -= (BOAT.x - OUTER.x) / de * push * 0.3;
+      BOAT.z -= (BOAT.z - OUTER.z) / de * push * 0.3;
+      BOAT.spd *= 0.9;
+      if (outerCd <= 0) {
+        outerCd = 480;
+        showCaption('Nothing out here but water. The Bellwright says it goes on.', 3600);
+        SFX.splash();
+        rumble({ duration: 220, strong: 0.3, weak: 0.55 });
+      }
+    }
+  }
+  if (outerCd > 0) outerCd--;
+};
+
+/* ── interactions ── */
+const _n2Interact = currentInteract;
+currentInteract = function () {
+  const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
+  if (P.sailing) {
+    if (!VOYAGE.active && !spireChest.opened && near(spireChest.x, spireChest.z, 4.0)) {
+      return { id: 'ichest', e: ICHESTS[0], label: '✕ OPEN' };
+    }
+    // the keel can also be pried from alongside — no one should have to
+    // balance on a drowned deck to start the phase
+    if (!VOYAGE.active && SAVE && !SAVE.keelFound && flooded() && near(KEEL_SPOT.x, KEEL_SPOT.z, 6.0)) {
+      return { id: 'keel', label: '✕ PRY THE KEEL FREE' };
+    }
+    return _n2Interact();
+  }
+  if (SAVE) {
+    if (P.carryKeel && !refitDone() && near(REFIT_BEACH.x, REFIT_BEACH.z, 4.4)) {
+      return { id: 'refitBoat', label: '✕ FIT THE KEEL' };
+    }
+    if (!SAVE.keelFound && flooded() && near(KEEL_SPOT.x, KEEL_SPOT.z, 2.0)) {
+      return { id: 'keel', label: '✕ PRY THE KEEL FREE' };
+    }
+  }
+  if (P.x < -96) {
+    if (near(WATCH_BELL.x, WATCH_BELL.z, 4.2)) return { id: 'watchbell', label: '✕ RING THE BELL' };
+    if (near(bellwright.x, bellwright.z, 2.8)) return { id: 'bwTalk', label: '✕ TALK' };
+    for (let i = 0; i < ICHESTS.length; i++) {
+      const e = ICHESTS[i];
+      if (!e.ch.opened && near(e.ch.x, e.ch.z, 1.8)) return { id: 'ichest', e, label: '✕ OPEN' };
+    }
+    if (!strandChest.opened && near(strandChest.x, strandChest.z, 1.8)) return { id: 'strandChest', label: '✕ OPEN' };
+  }
+  return _n2Interact();
+};
+const _n2DoInteract = doInteract;
+doInteract = function (ctx) {
+  if (ctx.id === 'keel') startKeelCine();
+  else if (ctx.id === 'refitBoat') startCine('refit');
+  else if (ctx.id === 'watchbell') startCine('watchbell');
+  else if (ctx.id === 'bwTalk') {
+    const n = (SAVE && SAVE.bellwrightTalked) || 0;
+    startDialog(n === 0 ? 'bell1' : n === 1 ? 'bell2' : 'bell3', bellwright);
+  } else if (ctx.id === 'ashore') {
+    /* the tide's disembark takes its floor from Brightharbor's own ground
+       function, which knows nothing of the isles — stepping onto Watchstone
+       dropped Wick in from 30 m up. Land him on the ground he can see. */
+    _n2DoInteract(ctx);
+    if (!P.sailing && P.x < -96) {
+      P.fy = supportYAt(P.x, P.z, WL + 3.5);
+      P.air = false; P.jvy = 0;
+    }
+  } else if (ctx.id === 'ichest') openIsleChest(ctx.e);
+  else if (ctx.id === 'strandChest') openStrandChest();
+  else if (ctx.id === 'talk' && ctx.tag === 'finn' && QUEST.q >= 6 && SAVE && !SAVE.boatRefit) {
+    startDialog(P.carryKeel ? 'finnKeel2' : 'finnKeel', ctx.npc);
+  } else if (ctx.id === 'talk' && ctx.tag === 'finn' && SAVE && SAVE.boatRefit) {
+    startDialog('finnSea', ctx.npc);
+  } else _n2DoInteract(ctx);
+};
+
+/* ── swings ashore also take gulls out of the air ── */
+const _n2SwingHits = swingHits;
+swingHits = function () {
+  let any = _n2SwingHits();
+  for (const g of GULLS) {
+    if (g.dead) continue;
+    if (inSwingArc(g.x, g.z, 3.0, 1.6) && g.y < P.fy + 3.4) { popGull(g); any = true; }
+  }
+  return any;
+};
+/* ── respawn districts ── */
+const _n2Respawn = respawnLeftBehind;
+respawnLeftBehind = function () {
+  _n2Respawn();
+  const cur = P.area;
+  for (const g of GULLS) {
+    if (g.dead && g.area !== cur) {
+      g.dead = false; g.st = 'wheel'; g.t = 0; g.cd = 0;
+      g.x = g.sx; g.z = g.sz; g.y = Math.max(seaHMesh(g.x, g.z), WL) + 11;
+      g.m.root.visible = false; g.m.root.scale.setScalar(1);
+    }
+  }
+  for (const g of GARS) {
+    if (g.cured && cur !== 'sea') {
+      g.cured = false; g.hp = 2; g.st = 'cruise'; g.t = 0;
+      g.x = g.sx; g.z = g.sz;
+    }
+  }
+};
+/* ── the objective beacon through the phase-3 thread ── */
+const _n2ObjPoint = objectivePoint;
+objectivePoint = function () {
+  if (SAVE) {
+    if (QUEST.q === 7) return { x: KEEL_SPOT.x, z: KEEL_SPOT.z };
+    if (QUEST.q === 8) return { x: REFIT_BEACH.x, z: REFIT_BEACH.z };
+    if (QUEST.q === 9) return SAVE.isleLandfall ? { x: WATCH_BELL.x, z: WATCH_BELL.z } : { x: WATCHSTONE.x, z: WATCHSTONE.z };
+    if (QUEST.q === 10) return SAVE.watchBell ? { x: FOUNDRY_DOOR.x, z: FOUNDRY_DOOR.z } : { x: WATCH_BELL.x, z: WATCH_BELL.z };
+  }
+  return _n2ObjPoint();
+};
+/* ── the camera rides the swell too, a little ── */
+const _n2UpdateCamera = updateCamera;
+updateCamera = function (dtv) {
+  _n2UpdateCamera(dtv);
+  if (P.sailing && CAM.mode === 'follow' && atSeaQ(BOAT.x, BOAT.z) && state !== 'title') {
+    camera.position.y += SEAFX.heave * 0.42;
+    /* never let a crest close over the lens: the follow-cam's target height
+       is fixed at the waterline, which puts it INSIDE the swell in a trough */
+    const wy = WL + swellAt(camera.position.x, camera.position.z) + 1.25;
+    if (camera.position.y < wy) camera.position.y = wy;
+    _sv.set(BOAT.x + Math.sin(BOAT.ang) * 1.2, WL + 1.35 + SEAFX.heave * 0.8, BOAT.z + Math.cos(BOAT.ang) * 1.2);
+    camera.lookAt(_sv);
+  }
+};
+
+/* ── cinematics dispatch ── */
+const _n2StartCine = startCine;
+startCine = function (id) {
+  if (id === 'sunstruck' && P.sailing) {
+    /* sunstruck at sea: you wake at the last island or shore WITH the boat.
+       No drowning, no loss, no death word. Ever. */
+    const a = nearestIsleAnchor(BOAT.x, BOAT.z);
+    if (a) {
+      BOAT.x = a.x; BOAT.z = a.z; BOAT.spd = 0; BOAT.sailK = 0.12;
+      sailboat.group.position.set(BOAT.x, WL - 0.42, BOAT.z);
+      sailboatColl.off = false; sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z;
+      if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
+    }
+    P.sailing = false;
+    BATK.on = false;
+    SET.on = false;
+  }
+  _n2StartCine(id);
+  if (id === 'keel' || id === 'refit' || id === 'watchbell' || id === 'crossing') {
+    CAM.mode = 'cine';
+    dlgBox.classList.remove('on');
+    if (id === 'crossing') CROSS.on = true;
+  }
+};
+const _n2TickCine = tickCine;
+tickCine = function () {
+  if (CINE.id === 'keel') { CINE.t += DT; tickKeelCine(CINE.t); return; }
+  if (CINE.id === 'refit') { CINE.t += DT; tickRefitCine(CINE.t); return; }
+  if (CINE.id === 'watchbell') { CINE.t += DT; tickBellCine(CINE.t); return; }
+  if (CINE.id === 'crossing') { CINE.t += DT; tickCrossingCine(CINE.t); return; }
+  _n2TickCine();
+};
+
+/* ── Wick: carrying the keel, riding the deck, swinging over the gunwale ── */
+const _n2AnimateWick = animateWick;
+animateWick = function (dtv, now) {
+  updateSeaFrame(dtv);
+  _n2AnimateWick(dtv, now);
+  const c = wick;
+  if (P.carryKeel && (state === 'play' || state === 'dialog' || state === 'pause')) {
+    keelItem.visible = true;
+    keelItem.scale.setScalar(0.6);
+    keelItem.position.set(P.x - Math.sin(P.heading) * 0.34, P.fy + 1.18, P.z - Math.cos(P.heading) * 0.34);
+    keelItem.rotation.set(0.12, P.heading + Math.PI / 2, 0.22);
+  }
+  if (state === 'cine' && CINE.id === 'keel') {
+    // braced on the deck, both hands under the timber, hauling
+    const k = clamp(CINE.t / 2.5, 0, 1);
+    c.root.position.set(KEEL_SPOT.x + 0.9, WL + 0.28, KEEL_SPOT.z + 0.6);
+    c.root.rotation.y = Math.atan2(KEEL_SPOT.x - (KEEL_SPOT.x + 0.9), KEEL_SPOT.z - (KEEL_SPOT.z + 0.6));
+    c.torso.rotation.x = 0.55 - k * 0.35;
+    c.hipL.rotation.x = -0.5; c.kneeL.rotation.x = 0.85;
+    c.hipR.rotation.x = 0.2; c.kneeR.rotation.x = 0.5;
+    c.shL.rotation.x = -0.9 + k * 0.3; c.shR.rotation.x = -0.9 + k * 0.3;
+    c.elL.rotation.x = -1.1; c.elR.rotation.x = -1.1;
+    keelItem.visible = true;
+    keelItem.scale.setScalar(1);
+    keelItem.position.set(KEEL_SPOT.x, WL + 0.3 + k * 0.5, KEEL_SPOT.z);
+    keelItem.rotation.set(0, 0.8, 0.1 - k * 0.3);
+    return;
+  }
+  if (!P.sailing) return;
+  /* ride the deck: heave, pitch and roll under his feet */
+  const fx = Math.sin(BOAT.ang), fz = Math.cos(BOAT.ang);
+  const ox = BATK.on ? 0.15 : -0.45;
+  c.root.position.set(BOAT.x + fx * ox - fz * (BATK.on ? 0.42 : 0),
+    SEAFX.deckY + 0.72 + SEAFX.pitch * ox, BOAT.z + fz * ox + fx * (BATK.on ? 0.42 : 0));
+  c.root.rotation.set(SEAFX.pitch * 0.7, BOAT.ang, SEAFX.roll * 0.6);
+  if (BATK.on) {
+    /* THE BRACED BOAT STANCE — half-risen off the thwart, one foot on the
+       gunwale, the same swing carried out over the water. Never capsizes. */
+    const ph = 1 - BATK.t / BATK.total;
+    poseHumanoid(c, 'idle', dtv, 0, { armsOverride: true, wind: 0.8 });
+    c.pelvis.position.y = (c.pelvis.userData.y0 !== undefined ? c.pelvis.userData.y0 : 0) - 0.1;
+    c.hipL.rotation.x = -0.62; c.kneeL.rotation.x = 0.66;
+    c.hipR.rotation.x = 0.26; c.kneeR.rotation.x = 0.3;
+    c.torso.rotation.x = 0.16;
+    poseAttack(c, BATK.n, ph);
+    swordToHand(true);
+    updateTrail(ph);
+  }
+};
+
+/* ═══ the render frame: visibility, the sea, the creatures, the fog ═══ */
+const FOGS = { col: col(0xd6dee2), near: 250, far: 1500 };
+const FOG_CLEAR = { col: col(0x7fb0bb), near: 520, far: 2200 };
+let seaFogT = 0, seaClockR = performance.now(), seaDbgDone = false;
+const _n2CullChunks = cullChunks;
+cullChunks = function (ccx, ccz) {
+  _n2CullChunks(ccx, ccz);
+  const now = performance.now();
+  const dtv = Math.min(0.1, (now - seaClockR) / 1000);
+  seaClockR = now;
+  const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
+  const west = ccx < -60;
+  /* the isles' chunks */
+  for (let i = 0; i < seaChunks.length; i++) {
+    const c = seaChunks[i];
+    if (!c.mesh) continue;
+    const R = c.id === 'camp' ? 1600 : c.id === 'kiln' ? 720 : c.id === 'coast' ? 460 : 640;
+    c.mesh.visible = west && near2(c.x, c.z, R);
+  }
+  seamMesh.visible = west && near2(-110, CHAN.z, 300);
+  farSeaMesh.visible = flooded() && ccx < 40;
+  /* THE SWELL GRID — written in place, only where there is open sea to see.
+     West of the headland it owns the surface; inside the bay, the bay's own
+     plane does, and the harbour gap gets its static patch. */
+  const gridOn = flooded() && ccx < -78;
+  waveMesh.visible = gridOn;
+  if (gridOn) updateWaveGrid();
+  chanWaterMesh.visible = flooded() && !gridOn && ccx < 60;
+  /* THE DROWNED MOON: only ever seen from above it */
+  const dMoon = Math.hypot(ccx - MOON_SITE.x, ccz - MOON_SITE.z);
+  const moonVis = west && dMoon < 900;
+  moonMesh.visible = moonVis; moonChainMesh.visible = moonVis;
+  moonSiltMesh.visible = west && dMoon < MOON_BOWL_R + 320;
+  /* the chime reef: bells that ring in the swell — the sound of the place */
+  for (let i = 0; i < REEF_BELLS.length; i++) {
+    const b = REEF_BELLS[i];
+    const vis = west && near2(b.x, b.z, 220);
+    b.g.visible = vis;
+    if (!vis) continue;
+    const h = swellAt(b.x, b.z);
+    b.g.position.y = b.y + h * 0.55;
+    b.g.rotation.z = Math.sin(seaClock * 1.4 + b.ph) * 0.16 + h * 0.09;
+    b.rang -= dtv;
+    if (h > 0.45 && b.rang <= 0 && near2(b.x, b.z, 150)) {
+      b.rang = 2.2 + Math.random() * 2.4;
+      const d = Math.hypot(ccx - b.x, ccz - b.z);
+      SFX.bellIsle(b.tone, clamp(1 - d / 150, 0.08, 0.55));
+    }
+  }
+  /* chests, salt, the Bellwright */
+  spireChest.group.visible = west && near2(spireChest.x, spireChest.z, 90);
+  gannetChest.group.visible = west && near2(gannetChest.x, gannetChest.z, 90);
+  strandChest.group.visible = west && near2(strandChest.x, strandChest.z, 90);
+  for (const s of iSalt) {
+    if (s.got) { s.mesh.visible = false; continue; }
+    const sv = west && near2(s.x, s.z, 38);
+    s.mesh.visible = sv;
+    if (sv) {
+      s.mesh.position.y = s.baseY + 0.15 + Math.sin(now / 420 + s.ph * 4) * 0.09;
+      s.mesh.rotation.y += dtv * 1.7;
+      if (!LOWFX && Math.random() < 0.05) {
+        psSparkle.spawn(s.x + (Math.random() - 0.5) * 0.5, s.mesh.position.y + 0.3, s.z + (Math.random() - 0.5) * 0.5, 0, 0.45, 0, 0.7);
+      }
+    }
+  }
+  bellwright.char.root.visible = west && near2(bellwright.x, bellwright.z, 40);
+  /* the boat on the swell, and her keel under her */
+  poseBoatOnSwell(now);
+  if (sailboat.group.visible && refitDone()) {
+    sail2.scale.y += (((P.sailing && BOAT.sailK > 0.5) ? 1 : 0.12) - sail2.scale.y) * Math.min(1, dtv * 3);
+  }
+  /* the keel timber, waiting on the wreck */
+  if (!P.carryKeel && state !== 'cine') {
+    const waiting = !!(SAVE && !SAVE.keelFound && flooded());
+    keelItem.visible = waiting && near2(KEEL_SPOT.x, KEEL_SPOT.z, 70);
+    if (keelItem.visible) {
+      keelItem.scale.setScalar(1);
+      keelItem.position.set(KEEL_SPOT.x, WL + 0.34, KEEL_SPOT.z);
+      keelItem.rotation.set(0, 0.8, 0.1);
+    }
+  }
+  /* SUN GULLS */
+  for (let i = 0; i < GULLS.length; i++) {
+    const g = GULLS[i];
+    const vis = !g.dead && west && near2(g.x, g.z, 90);
+    g.m.root.visible = vis;
+    if (!vis) continue;
+    g.m.root.position.set(g.x, g.y, g.z);
+    g.m.root.rotation.y = g.face;
+    const flap = g.st === 'dive' ? 0.1 : Math.sin(now / (g.st === 'tele' ? 90 : 210) + g.ph) * (g.st === 'tele' ? 0.9 : 0.55);
+    g.m.wingL.rotation.z = flap; g.m.wingR.rotation.z = -flap;
+    g.m.root.rotation.x = g.st === 'dive' ? 0.7 : g.st === 'tele' ? -0.6 : 0;
+    g.m.glow.material.opacity = g.st === 'tele' ? 0.55 + 0.45 * Math.sin(now / 60) : 0.85;
+  }
+  /* REEF GAR: the wake is the contract */
+  for (let i = 0; i < GARS.length; i++) {
+    const g = GARS[i];
+    const live = !g.cured && west && near2(g.x, g.z, 110) && flooded();
+    const wakeOn = live && (g.st === 'cruise' || g.st === 'run' || g.st === 'breach');
+    g.c.wakeRoot.visible = wakeOn;
+    if (wakeOn) {
+      g.c.wakeRoot.position.set(g.x, WL + 0.06 + swellAt(g.x, g.z), g.z);
+      g.c.wakeRoot.rotation.y = g.ang;
+      if (g.st === 'run' && !LOWFX && Math.random() < 0.35) {
+        psSpray.spawn(g.x, WL + 0.2, g.z, (Math.random() - 0.5), 0.9, (Math.random() - 0.5), 0.4);
+      }
+    }
+    const bodyOn = live && g.st === 'breach';
+    g.c.root.visible = bodyOn || (g.cured && g.st === 'dive' && west && near2(g.x, g.z, 110));
+    if (g.c.root.visible) {
+      const by = g.st === 'breach' ? g.breachY : WL - 0.4;
+      g.c.root.position.set(g.x, by, g.z);
+      g.c.root.rotation.set(g.st === 'breach' ? Math.cos(clamp(g.t / 1.15, 0, 1) * Math.PI) * 0.8 : -0.5, g.ang, Math.sin(now / 120) * 0.12);
+    }
+  }
+  /* clapper crabs: they CLANG as they walk, and their bell rings when hit */
+  for (let i = 0; i < CLAPPERS.length; i++) {
+    const cr = CLAPPERS[i];
+    if (cr.dead || !cr.c.root.visible) continue;
+    cr.clangT -= dtv;
+    const moving = cr.st === 'patrol' || cr.st === 'aggro' || cr.st === 'stagger';
+    if (moving && cr.clangT <= 0) {
+      cr.clangT = cr.st === 'aggro' ? 0.34 : 0.62;
+      const d = Math.hypot(ccx - cr.x, ccz - cr.z);
+      if (d < 34) SFX.clang();
+    }
+    if (cr.ring > 0) {
+      cr.ring -= dtv;
+      cr.bell.rotation.z = Math.sin(now / 28) * 0.3 * clamp(cr.ring / 0.45, 0, 1);
+    } else cr.bell.rotation.z *= 0.9;
+  }
+  /* the ocean's own voice */
+  if (west && flooded() && state === 'play' && (simTick % 150) === 0) {
+    SFX.wash(clamp(Math.abs(SEAFX.heave) * 0.7 + (P.sailing ? BOAT.spd / 12 : 0.2), 0.1, 1));
+  }
+  /* fog: a long pale sea haze — and it goes CLEAR over the moon */
+  const wantSea = west ? 1 : 0;
+  seaFogT += (wantSea - seaFogT) * Math.min(1, dtv * 1.6);
+  if (seaFogT > 0.004) {
+    const cl = CROSS.fog;
+    const tn = lerp(FOGS.near, FOG_CLEAR.near, cl), tf = lerp(FOGS.far, FOG_CLEAR.far, cl);
+    scene.fog.near = lerp(scene.fog.near, tn, seaFogT);
+    scene.fog.far = lerp(scene.fog.far, tf, seaFogT);
+    const fc = scene.fog.color;
+    const cc = mix3(FOGS.col, FOG_CLEAR.col, cl);
+    fc.setRGB(lerp(fc.r, cc[0], seaFogT), lerp(fc.g, cc[1], seaFogT), lerp(fc.b, cc[2], seaFogT));
+  }
+  extendSeaDebugOnce();
+};
+
+/* ═══ THE ONE DERIVATION — every phase-3 fact flows from the save, BOTH
+   ways. A NEW GAME un-refits the boat, un-sees the moon, closes every
+   chest, re-hangs the keel on the wreck and silences Watchstone. ═══ */
+window.__worldStateHooks.push(function (S) {
+  const refit = !!S.boatRefit;
+  showRefit(refit);
+  mast2.scale.set(1, 1, 1);
+  sail2.scale.y = 0.12;
+  P.carryKeel = !!S.keelCarried && !refit;
+  for (const c of keelDeck) c.off = !(S.sky >= 2);
+  keelItem.visible = false;
+  keelItem.scale.setScalar(1);
+  keelItem.rotation.set(0, 0.8, 0.1);
+  keelItem.position.set(KEEL_SPOT.x, WL + 0.34, KEEL_SPOT.z);
+  spireChest.opened = !!S.spireChest;
+  spireChest.lid.rotation.x = S.spireChest ? -1.9 : 0;
+  gannetChest.opened = !!S.gannetChest;
+  gannetChest.lid.rotation.x = S.gannetChest ? -1.9 : 0;
+  strandChest.opened = !!S.strandHeart;
+  strandChest.lid.rotation.x = S.strandHeart ? -1.9 : 0;
+  strandChest.heart.visible = false;
+  iChestAnims.length = 0; strandAnimT = -1; strandHeartT = -1;
+  for (const s of iSalt) { s.got = false; s.chimed = false; s.mesh.visible = false; }
+  for (const g of GULLS) {
+    g.dead = false; g.st = 'wheel'; g.t = Math.random() * 3; g.cd = 0;
+    g.x = g.sx; g.z = g.sz; g.y = Math.max(seaHMesh(g.x, g.z), WL) + 11;
+    g.m.root.visible = false; g.m.root.scale.setScalar(1);
+  }
+  for (const g of GARS) {
+    g.cured = false; g.hp = 2; g.st = 'cruise'; g.t = Math.random() * 4;
+    g.x = g.sx; g.z = g.sz;
+    g.c.root.visible = false; g.c.wakeRoot.visible = false;
+  }
+  gullsPopped = 0; garsCured = 0; garRams = 0;
+  SET.on = false; SET.warned = false; SET.hit = false; SET.spillT = 0;
+  SET.next = 12 + Math.random() * 10;
+  SET.passes = 0; SET.stalls = 0; SET.keeps = 0;
+  BATK.on = false; BATK.n = 0; BATK.cool = 0;
+  waterClarity = 0; CROSS.on = false; CROSS.fog = 0;
+  isleSeen = {}; lastIsleAnchor = -1; outerCd = 0; landfallCd = 0;
+  if (REFIT.finnHome) {
+    finn.x = REFIT.finnHome.x; finn.z = REFIT.finnHome.z;
+    finn.baseY = groundH(finn.x, finn.z);
+    finn.char.root.position.set(finn.x, finn.baseY, finn.z);
+    finn.char.root.rotation.y = REFIT.finnHome.ry;
+    REFIT.finnHome = null;
+  }
+});
+
+/* ── telemetry: everything a harness needs to assert the crossing ── */
+window.__telemetryHooks.push(function (T) {
+  const west = P.x < -96;
+  T.seaRegion = west ? (ashoreOnIsle(P.x, P.z) ? 'isles' : 'sea') : 'bay';
+  T.atSea = west;
+  T.isleHere = (() => { const is = isleAt(P.x, P.z); return is ? is.id : null; })();
+  T.swellH = Math.round(swellAt(P.x, P.z) * 1000) / 1000;
+  T.swellAmp = Math.round(swellAmpAt(P.x, P.z) * 100) / 100;
+  T.boatHeave = Math.round(SEAFX.heave * 1000) / 1000;
+  T.boatPitch = Math.round(SEAFX.pitch * 1000) / 1000;
+  T.boatRoll = Math.round(SEAFX.roll * 1000) / 1000;
+  T.sailCount = refitDone() ? 2 : 1;
+  T.boatRefit = refitDone();
+  T.keelFound = !!(SAVE && SAVE.keelFound);
+  T.keelCarried = !!P.carryKeel;
+  T.moonSeen = !!(SAVE && SAVE.moonSeen);
+  T.moonVis = moonMesh.visible;
+  T.waterClarity = Math.round(waterClarity * 100) / 100;
+  T.isleLandfall = !!(SAVE && SAVE.isleLandfall);
+  T.watchBell = !!(SAVE && SAVE.watchBell);
+  T.foundrySealed = window.__foundrySealed();
+  T.bellwrightTalked = SAVE ? (SAVE.bellwrightTalked || 0) : 0;
+  T.spireChest = spireChest.opened;
+  T.gannetChest = gannetChest.opened;
+  T.strandHeart = strandChest.opened;
+  T.iSaltGot = iSalt.filter(s => s.got).length;
+  T.gullsAlive = GULLS.filter(g => !g.dead).length;
+  T.gullsPopped = gullsPopped;
+  T.garsAlive = GARS.filter(g => !g.cured).length;
+  T.garsCured = garsCured; T.garRams = garRams;
+  let gd = 999, gst = '', gv = false;
+  for (const g of GARS) {
+    if (g.cured) continue;
+    const d = Math.hypot(P.x - g.x, P.z - g.z);
+    if (d < gd) { gd = d; gst = g.st; gv = g.c.wakeRoot.visible; }
+  }
+  T.nearGarDist = gd; T.nearGarState = gst; T.nearGarWakeVis = gv;
+  let hd = 999, hst = '';
+  for (const g of GULLS) {
+    if (g.dead) continue;
+    const d = Math.hypot(P.x - g.x, P.z - g.z);
+    if (d < hd) { hd = d; hst = g.st; }
+  }
+  T.nearGullDist = hd; T.nearGullState = hst;
+  T.setOn = SET.on; T.setU = Math.round(SET.u * 10) / 10; T.setAmp = SET.amp;
+  T.setWarned = SET.warned; T.setPasses = SET.passes;
+  T.setStalls = SET.stalls; T.setKeeps = SET.keeps; T.setSpill = SET.spillT > 0;
+  T.boatAtk = BATK.on; T.boatAtkN = BATK.n;
+  T.seaCine = (CINE.id === 'keel' || CINE.id === 'refit' || CINE.id === 'watchbell' || CINE.id === 'crossing') ? CINE.id : null;
+  T.seaChunksVis = seaChunks.filter(c => c.mesh && c.mesh.visible).length;
+  T.chanCarve = window.__chanCarve;
+});
+
+/* ── debug (lazy — __fmDebug is born in p7) ── */
+function extendSeaDebugOnce() {
+  if (seaDbgDone || !window.__fmDebug) return;
+  seaDbgDone = true;
+  Object.assign(window.__fmDebug, {
+    /* put the player AT SEA, in the boat, at a real sailing spot */
+    warpSea(x, z, ang) {
+      if (!P.sailing) {
+        BOAT.x = x; BOAT.z = z;
+        boardBoat();
+      }
+      BOAT.x = x; BOAT.z = z;
+      if (ang !== undefined) BOAT.ang = ang;
+      BOAT.spd = 0;
+      P.x = x; P.z = z; P.fy = WL + 0.45; P.air = false;
+      sailboat.group.position.set(x, WL - 0.42, z);
+      P.area = areaAt(x, z);
+      CAM.ready = false;
+      return { x: BOAT.x, z: BOAT.z, depth: waterDepthAt(x, z) };
+    },
+    isleInfo() {
+      return {
+        extent: { w: ISLES.x1 - ISLES.x0, h: ISLES.z1 - ISLES.z0 },
+        crossing: Math.round(Math.hypot(CROSS_LANE.toX - CROSS_LANE.fromX, CROSS_LANE.toZ - CROSS_LANE.fromZ)),
+        isles: ISLE_LIST.map(is => ({ id: is.id, x: is.x, z: is.z, r: is.r, top: is.top })),
+        anchors: ISLE_ANCHORS.length,
+        gulls: GULLS.length, gars: GARS.length, clappers: CLAPPERS.length,
+        carve: window.__chanCarve,
+      };
+    },
+    swellAt(x, z) {
+      return { h: swellAt(x, z), amp: swellAmpAt(x, z), set: bigSetHeight(x, z), clock: seaClock };
+    },
+    bigSetNow() { spawnBigSet(); return { c: SET.c, n: [SET.nx, SET.nz], amp: SET.amp }; },
+    seaGround(x, z) { return { g: groundH(x, z), depth: waterDepthAt(x, z), solid: worldSolidAt(x, z) }; },
+  });
+}
+</script>

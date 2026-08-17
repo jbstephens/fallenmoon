@@ -1443,6 +1443,73 @@ const HORNETS = [];
     HORNETS.push(h);
   }
 })();
+
+/* ── MOB POCKETS IN THE TREES (John, 8/16) ──────────────────────────────
+   The forest's two safety systems become a real TRADE. The Silverrun
+   riverbed is the road, and the road is SUN; the trees are shade, and
+   shade was free. Now the canopy holds pockets of hostiles, so taking
+   the safe route costs you a fight and taking the fast route costs you
+   hearts. Zelda-sparse on purpose — six pockets across 2km, never a wall
+   of enemies. Every spot is >100m off the riverbed, clear of every
+   FCLUSTER and spring, and under real canopy. */
+(function placeMobPockets() {
+  /* canopy shade here is per-tree and only a few metres across, so a fixed
+     spawn offset lands most of a pocket back out in the sun — which would
+     mean fighting AND burning, and that is not the trade. Snap each spawn to
+     the nearest genuinely shaded spot instead. */
+  const snapTo = (x, z, wantShade) => {
+    if (inShadeAt(x, z) === wantShade) return [x, z];
+    for (let r = 1.5; r <= 9; r += 1.5) {
+      for (let i = 0; i < 12; i++) {
+        const a = i * TAU / 12;
+        const sx = x + Math.cos(a) * r, sz = z + Math.sin(a) * r;
+        if (inShadeAt(sx, sz) === wantShade) return [sx, sz];
+      }
+    }
+    return [x, z];
+  };
+  /* WHO GOES WHERE, and why it is not interchangeable: hornets are the imp
+     family and SHADE FIZZLES THEM (tickHornet pops any non-hollow hornet
+     standing in shade). Snapping them into the canopy killed all twelve at
+     spawn — the same failure that once made the King-Crab's phase-3 adds
+     vanish. So the shady tree pockets are BOARS, and the hornet pockets sit
+     in off-road SUN. The trade still holds and gets richer: duck into the
+     trees and beasts are waiting; cut across open ground and it is hornets
+     plus the swelter. */
+  /* each centre verified in canopy shade (inShadeAt true), >90m off the
+     riverbed, clear of every cluster and spring */
+  const BOAR_POCKETS = [[378, 296], [1088, 326], [1438, 784]];
+  const HORNET_POCKETS = [[760, 182], [882, 864], [1700, 1226]];
+  for (const [cx, cz] of BOAR_POCKETS) {
+    for (const [ox, oz] of [[-3.5, -2], [3.5, 2.5], [0, 4.5]]) {
+      const [x, z] = snapTo(cx + ox, cz + oz, true);    // boars: canopy shade
+      const b = {
+        c: buildCinderBoar(), sx: x, sz: z, x, z,
+        hp: 3, st: 'graze', t: Math.random() * 3, ang: Math.random() * TAU,
+        dir: [0, 1], dead: false, cured: false, flash: 0, cd: 0,
+        area: areaOfForest(x),
+      };
+      b.c.root.position.set(b.x, groundH(b.x, b.z), b.z);
+      scene.add(b.c.root);
+      BOARS.push(b);
+    }
+  }
+  let pairSeed = 10;
+  for (const [cx, cz] of HORNET_POCKETS) {
+    const pair = pairSeed++;
+    for (const [ox, oz] of [[-2.5, -1.5], [2, 2], [3.5, -2.5], [-1.5, 3.5]]) {
+      const [x, z] = snapTo(cx + ox, cz + oz, false);   // hornets: open sun
+      const h = {
+        m: buildEmberHornet(), sx: x, sz: z, x, z, y: groundH(x, z) + 2.2, face: 0,
+        st: 'drift', t: Math.random() * 2, dir: [0, 0, 0], dead: false, pair,
+        area: areaOfForest(x),
+      };
+      h.m.root.position.set(h.x, h.y, h.z);
+      scene.add(h.m.root);
+      HORNETS.push(h);
+    }
+  }
+})();
 /* the pass on-ramp: familiar bay creatures range the saddle */
 for (const s of [{ x: 152, z: 34 }, { x: 216, z: 50 }]) {
   const cr = {

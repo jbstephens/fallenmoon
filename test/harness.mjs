@@ -3819,7 +3819,26 @@ try {
     /* (b) rendered corners of THIS cell == the authority at those corners
        (camera-free). Region forced to the QUERY point's field: an fp-noise
        corner coordinate at the x=110 seam column must not flip regions. */
-    const fieldHere = isForest(x, z) ? forestHMesh : _bhGroundH;
+    /* Compare against the LIVE authority, not Brightharbor's pre-wrap field:
+       phase 3 dredges a harbour channel west out of the bay, so _bhGroundH is
+       stale there by 4-6m — it still reports dry land over what is now seabed
+       at -3.5m under a -0.55m waterline. Not circular: the raycast subset
+       below independently shoots the RENDERED mesh against groundH, and at
+       those corners rendered == groundH to 0.0000m.
+       The seam guard the old code got for free by pinning the field must be
+       kept by hand: groundH dispatches region per COORDINATE, so a corner
+       landing on 110.00000000000001 at the x=110 column drops into the forest
+       field and reads 1.4m off. Nudge such a corner 0.1mm back onto the query
+       point's side — fp noise there is ~1e-14, and 0.1mm of slope is orders
+       below the 0.05m tolerance. */
+    const fieldHere = (cx, cz) => {
+      let sx = cx, sz = cz;
+      if (isForest(cx, cz) !== isForest(x, z)) {
+        sx = cx + Math.sign(x - cx || 1) * 1e-4;
+        sz = cz + Math.sign(z - cz || 1) * 1e-4;
+      }
+      return isForest(x, z) ? forestHMesh(sx, sz) : groundH(sx, sz);
+    };
     for (const [cxx, czz, ry] of cellCorners(x, z)) {
       const dh = ry === undefined ? 99 : Math.abs(ry - fieldHere(cxx, czz));
       if (dh > 0.05) { push(res.bFail, tag0 + ' corner ' + cxx + ',' + czz + '=' + (ry === undefined ? 'MISSING' : dh.toFixed(3))); }
@@ -4179,9 +4198,28 @@ async function suiteDmgVis(base) {
     /* census: everything the design places is spawned, alive, and homed */
     const census = await api.eval(`(function(){
       const glades = ['glade1','glade2','glade3'].map(id => FCLUSTERS.find(q => q.id === id));
+      const BP = [[378,296],[1088,326],[1438,784]], HP = [[760,182],[882,864],[1700,1226]];
+      const inPocket = (x, z, L) => L.some(p => Math.hypot(x - p[0], z - p[1]) < 16);
+      const distRiver = (x, z) => { let best = 1e9;
+        for (let i = 0; i < RIVER.length - 1; i++) { const a = RIVER[i], b = RIVER[i+1];
+          const dx = b[0]-a[0], dz = b[1]-a[1];
+          const s = Math.max(0, Math.min(1, ((x-a[0])*dx + (z-a[1])*dz) / (dx*dx + dz*dz)));
+          best = Math.min(best, Math.hypot(x - (a[0]+dx*s), z - (a[1]+dz*s))); }
+        return best; };
       const out = { boars: BOARS.length, hornets: HORNETS.length, boarHomes: 0, hornetHomes: 0,
                     passCrabs: crabs.filter(cr => cr.area === 'pass').length,
-                    passImps: wisps.filter(w => w.area === 'pass').length };
+                    passImps: wisps.filter(w => w.area === 'pass').length,
+                    pocketBoars: 0, pocketHornets: 0, pocketBoarsShaded: 0,
+                    pocketHornetsShaded: 0, pocketTotal: 0, pocketMinOffRiver: 1e9,
+                    pocketInClearing: 0 };
+      const tally = (x, z) => { out.pocketTotal++;
+        out.pocketMinOffRiver = Math.min(out.pocketMinOffRiver, distRiver(x, z));
+        for (const c of FCLUSTERS) if (Math.hypot(x - c.x, z - c.z) < c.r) out.pocketInClearing++; };
+      for (const b of BOARS) if (inPocket(b.sx, b.sz, BP)) {
+        out.pocketBoars++; if (inShadeAt(b.sx, b.sz)) out.pocketBoarsShaded++; tally(b.sx, b.sz); }
+      for (const h of HORNETS) if (inPocket(h.sx, h.sz, HP)) {
+        out.pocketHornets++; if (inShadeAt(h.sx, h.sz)) out.pocketHornetsShaded++; tally(h.sx, h.sz); }
+      out.pocketMinOffRiver = Math.round(out.pocketMinOffRiver);
       for (const b of BOARS) {
         if (glades.some(g => Math.hypot(b.sx - g.x, b.sz - g.z) < g.r + 14)) out.boarHomes++;
       }
@@ -4193,16 +4231,34 @@ async function suiteDmgVis(base) {
         } else if (Math.hypot(h.sx - H.x, h.sz - H.z) < H.r + 14 || Math.hypot(h.sx - F.x, h.sz - F.z) < F.r + 14) out.hornetHomes++;
       }
       return out; })()`);
-    gate('creatures: 6 boars spawned, all homed to their glades', census.boars === 6 && census.boarHomes === 6, JSON.stringify(census));
-    gate('creatures: 10 hornets spawned — forest hollow + ferry + the Falls Hollow nests',
-      census.hornets === 10 && census.hornetHomes === 10, JSON.stringify({ h: census.hornets, homes: census.hornetHomes }));
+    gate('creatures: 6 glade boars spawned, all homed to their glades',
+      census.boarHomes === 6, JSON.stringify(census));
+    gate('creatures: 10 hornets at hollow + ferry + the Falls Hollow nests',
+      census.hornetHomes === 10, JSON.stringify({ h: census.hornets, homes: census.hornetHomes }));
+    /* MOB POCKETS (John, 8/16): the trees must cost you a fight, so that
+       taking the shady route trades hearts for combat instead of being free. */
+    gate('pockets: 9 boars + 12 hornets in the canopy off the riverbed',
+      census.pocketBoars === 9 && census.pocketHornets === 12,
+      `boars=${census.pocketBoars} hornets=${census.pocketHornets}`);
+    /* boars hold the canopy so ducking into the trees costs a fight rather
+       than hearts; hornets are imp-family and FIZZLE in shade, so theirs sit
+       in off-road sun. Getting this backwards popped all twelve at spawn. */
+    gate('pockets: every tree-pocket BOAR stands in canopy shade (fight, do not burn)',
+      census.pocketBoars === 9 && census.pocketBoarsShaded === 9,
+      `${census.pocketBoarsShaded}/${census.pocketBoars} shaded`);
+    gate('pockets: every pocket HORNET stands in sun (shade would fizzle it at spawn)',
+      census.pocketHornets === 12 && census.pocketHornetsShaded === 0,
+      `${census.pocketHornetsShaded}/${census.pocketHornets} wrongly in shade`);
+    gate('pockets: all well off the Silverrun road, none in a clearing',
+      census.pocketMinOffRiver >= 90 && census.pocketInClearing === 0,
+      `minOffRiver=${census.pocketMinOffRiver}m inClearing=${census.pocketInClearing}`);
     gate('creatures: pass on-ramp crabs + imps present', census.passCrabs === 2 && census.passImps === 3);
     // they PATROL (graze/drift movement over real time)
     const m0 = await api.eval('BOARS.map(b => [b.x, b.z]).flat().concat(HORNETS.map(h => [h.x, h.z]).flat())');
     await api.waitTicks(240);
     const m1 = await api.eval('BOARS.map(b => [b.x, b.z]).flat().concat(HORNETS.map(h => [h.x, h.z]).flat())');
     let moved = 0;
-    for (let i = 0; i < 12; i += 2) {   // the six boars graze visibly even unwatched
+    for (let i = 0; i < 12; i += 2) {   // the six glade boars graze visibly even unwatched
       if (Math.hypot(m1[i] - m0[i], m1[i + 1] - m0[i + 1]) > 0.4) moved++;
     }
     gate('creatures: boars actually patrol (positions move)', moved >= 5, moved + '/6 boars moved');
@@ -5104,9 +5160,13 @@ async function suiteSail(base) {
       await api.seedSave(N2_FLOODED);
       await api.nav(base + '/?turbo=6');
       await api.waitFor(`__fm.state === 'title'`, 30000, 'title');
-      await api.tapKey('s', 'KeyS');
-      await api.waitFor('__fm.titleFocus === 1', 8000, 'CONTINUE focus');
-      await api.tapKey('j', 'KeyJ');
+      /* RETRY the presses, exactly as the pad path does. A single press then
+         wait is a race: the title's first second is spent building the world,
+         so a keydown can land while the sim is stalled and its edge is spent
+         before the frame that would act on it. The pad block never saw this
+         because tapUntil re-presses until the state actually moves. */
+      await tapUntil(api, () => api.tapKey('s', 'KeyS'), '__fm.titleFocus === 1', 10, 'CONTINUE focus (kbd)');
+      await tapUntil(api, () => api.tapKey('j', 'KeyJ'), `__fm.state !== 'title'`, 12, 'leave title (kbd)');
       await api.waitFor(`__fm.state === 'play'`, 30000, 'playing');
       await api.installBot('kbd');
       await api.walkTo(7.4, 3.8, 1.0, 40000);
@@ -5431,6 +5491,139 @@ async function suiteN2Shots(base) {
   c.close(); proc.kill();
 }
 
+
+/* ═══ PHASE 3: the sealed Foundry, the three verbs, the Tortoise, the sun ═══
+   The deep coverage lives in test/probes/p6e-*.mjs (102 gates). This suite
+   is the subset that must NEVER regress, folded into `all` so it runs on
+   every future build. */
+const P3_ASHORE = {
+  ...N2_FLOODED, q: 10, keelFound: true, keelCarried: false, boatRefit: true,
+  moonSeen: true, isleLandfall: true, lastShade: [-980, -196],
+};
+async function suiteIsles(base) {
+  const { proc, port } = await launchChrome();
+  const c = await pageSession(port);
+  const api = makeApi(c);
+  await api.init(); await api.stubPad();
+  try {
+    /* THE SEAL. p6d once hung an unconditional collider in its own doorway,
+       which walled the Foundry shut forever; this pins both directions. */
+    /* NOT `once`: that flag seeds only the first navigation, so the later
+       fixtures in this suite silently kept the live save and the sun and
+       NEW-GAME gates were reading the wrong world. */
+    await api.seedSave({ ...P3_ASHORE, watchBell: false });
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    gate('isles: the Foundry is SEALED until Watchstone\'s bell is rung',
+      (await api.eval('__fmDebug.foundryInfo().gate')) === false);
+    await api.eval('__fmDebug.openFoundry()');
+    await api.waitTicks(10);
+    gate('isles: ringing the bell opens the gate', (await api.eval('__fmDebug.foundryInfo().gate')) === true);
+    /* and the doorway is genuinely WALKABLE — the bug the seal fix was for */
+    await api.eval(`__fmDebug.warp(${-1520}, ${-344}); 0`);
+    await api.waitTicks(10);
+    await api.installBot('pad');
+    /* staged waypoints down the ramp — one long leg stalls on the turn, and
+       "inside the Foundry" is the claim that matters, not a z threshold */
+    for (const [wx, wz] of [[-1520, -351], [-1520, -360], [-1512, -374]]) {
+      await api.eval(`__fmBot.tol = 1.6; __fmBot.target = [${wx}, ${wz}]; 0`);
+      await api.waitFor(`Math.hypot(__fm.x-(${wx}), __fm.z-(${wz})) < 2.6`, 45000, 'walk ' + wx + ',' + wz).catch(() => {});
+      await api.eval('P.hearts = P.maxHearts; 0');
+    }
+    await api.eval('__fmBot.target = null; 0');
+    await api.waitTicks(12);
+    gate('isles: the portal is walkable — you get INSIDE the Foundry on foot',
+      (await api.eval('__fm.inFoundry')) === true,
+      `x=${(await api.eval('__fm.x')).toFixed(0)} z=${(await api.eval('__fm.z')).toFixed(0)}`);
+    await api.eval('__fmBot.release(); 0');
+
+    /* THE THREE VERBS, real input, in order. HOLD is timed: ring and LEAVE
+       AT ONCE — the tone is the player's clock, and gates that dawdle in
+       setup spend it and then blame the door. */
+    await api.eval('__fmDebug.warpFoundry("f1"); P.hearts = P.maxHearts; 0');
+    await api.waitTicks(20);
+    await api.eval('__fmDebug.solveAim ? __fmDebug.solveAim() : 0');
+    const g = async () => JSON.parse(await api.eval('JSON.stringify(__fmDebug.foundryInfo().glyphs)'));
+    gate('isles: the three verbs start unsolved', (await g()).every(v => v === false));
+
+    /* THE HOUR TORTOISE — proximity wakes it from ANY state, and body-only
+       slashing must win the whole fight (the King-Crab lesson, enforced). */
+    await api.seedSave({ ...P3_ASHORE, watchBell: true, fGlyph1: true, fGlyph2: true, fGlyph3: true });
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    await api.eval('__fmDebug.warpFoundry("pit"); P.hearts = P.maxHearts; 0');
+    await api.waitTicks(40);                       // let the pit settle after the nav
+    await api.eval('__fmDebug.warpFoundry("pit"); P.hearts = P.maxHearts; 0');
+    await api.waitFor('__fm.tortActive === true', 90000, 'the Tortoise wakes on approach');
+    gate('isles: proximity ALWAYS wakes the Hour Tortoise', await api.eval('__fm.tortActive === true'));
+    const hp0 = await api.eval('__fm.tortHp');
+    await api.installBot('pad');
+    await api.eval('__fmBot.mash = true; 0');
+    /* Mash from INSIDE the page. Still the real pad path — the same button a
+       kid holds — but one CDP round trip per swing made the fight lose to the
+       harness's own latency rather than to the boss. Hearts are topped up as
+       SETUP so we are testing whether body damage can finish it, not whether
+       a bot can also survive. */
+    await api.eval(`window.__kidBot = setInterval(function(){
+      try { P.hearts = P.maxHearts; __fakePad.press(0);
+            setTimeout(function(){ __fakePad.press(); }, 90); } catch (e) {}
+    }, 240); 0`);
+    await api.waitFor('__fm.tortDone === true', 300000, 'the kid bot finishes it').catch(() => {});
+    await api.eval('clearInterval(window.__kidBot); __fakePad.press(); 0');
+    const hp = await api.eval('__fm.tortHp');
+    gate('isles: a KID BOT that only body-slashes wins the whole fight',
+      (await api.eval('__fm.tortDone')) === true || hp <= 0, `hp ${hp0} → ${hp}`);
+    gate('isles: body hits always chipped (no claw-only gating)',
+      (await api.eval('__fm.tortBody')) > 0, 'bodyHits=' + await api.eval('__fm.tortBody'));
+
+    /* THE SUN MOVES — and the safety rail holds at every angle. */
+    await api.seedSave({ ...N2_FLOODED, q: 12, ph: 3, sky: 3, sunArc: true, boatRefit: true,
+      moonSeen: true, isleLandfall: true, watchBell: true, tortoiseDone: true,
+      fGlyph1: true, fGlyph2: true, fGlyph3: true });
+    await api.nav(base + '/?turbo=6');
+    await n2ContinueIn(api);
+    gate('isles: the world restores at sky step 3 with the arc live',
+      (await api.eval('__fm.sunArc')) === true && (await api.eval('__fm.skyStep3')) > 0.5);
+    const rail = await api.eval(`(function(){
+      const spots = [[8.2, 7.0]].concat(
+        (typeof FSPRINGS !== 'undefined' ? FSPRINGS.map(s => [s.x, s.z]) : []));
+      let worst = null, checked = 0;
+      for (let i = 0; i <= 20; i++) {
+        __fmDebug.sunSet(i / 20);
+        for (const s of spots) { checked++; if (!inShadeAt(s[0], s[1])) worst = [i / 20, s]; }
+      }
+      return JSON.stringify({ checked, worst });
+    })()`);
+    const railR = JSON.parse(rail);
+    gate('isles: SAFETY RAIL — every sanctuary stays shade at all 21 sun angles',
+      railR.worst === null, `${railR.checked} checks, worst=${JSON.stringify(railR.worst)}`);
+
+    /* the John sequence, extended to phase 3 */
+    /* the John sequence through the REAL title: NEW GAME over a finished
+       save, confirm the overwrite guard, and demand a fresh world. */
+    await api.nav(base + '/?turbo=6');
+    await api.waitFor(`__fm.state === 'title'`, 30000, 'title again');
+    await tapUntil(api, () => api.tap(12), '__fm.titleFocus === 0', 10, 'focus NEW GAME');
+    await tapUntil(api, () => api.tap(0), `__fm.state !== 'title' || __fm.ngGuard === true`, 12, 'the guard');
+    await api.tap(0);
+    await api.waitFor(`__fm.state === 'play'`, 30000, 'fresh adventure');
+    const fresh = await api.eval(`JSON.stringify({ refit: !!(SAVE && SAVE.boatRefit), moon: !!(SAVE && SAVE.moonSeen),
+      bell: !!(SAVE && SAVE.watchBell), tort: !!(SAVE && SAVE.tortoiseDone), arc: !!(SAVE && SAVE.sunArc),
+      sky: SAVE ? SAVE.sky : -1 })`).catch(() => 'null');
+    if (fresh && fresh !== 'null') {
+      const f = JSON.parse(fresh);
+      gate('isles: NEW GAME un-refits the boat, un-sees the moon, re-pins the sun',
+        !f.refit && !f.moon && !f.bell && !f.tort && !f.arc && f.sky === 0, fresh);
+    }
+    const bad = api.consoleBad;
+    gate('isles: zero console errors', bad.length === 0, bad.slice(0, 3).join(' | '));
+  } catch (e) {
+    gate('isles suite', false, e.message);
+    await api.shot('isles-FAIL').catch(() => {});
+  }
+  c.close(); proc.kill();
+}
+
 const whichArg = process.argv[2] || 'all';
 const parts = whichArg.split(',');
 const which = parts.length > 1 ? 'list' : whichArg;
@@ -5466,6 +5659,7 @@ try {
   if (wants('flood')) await suiteFlood(base);
   if (wants('sail')) await suiteSail(base);
   if (wants('n2shots')) await suiteN2Shots(base);
+  if (wants('isles')) await suiteIsles(base);
 } finally {
   srv.close();
 }

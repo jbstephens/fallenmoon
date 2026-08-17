@@ -837,3 +837,205 @@ sliding away at that exact instant. No-input path: Wick eases to a
 stop, so the "wait, is this me?" discovery works both ways.
 Principle for all future cinematic-to-play moments: handoff is a
 DISCOVERY, not a transition.
+
+---
+
+# PHASE 3 — THE CROSSING & THE HOURLESS ISLES (locked 2026-08-16 with
+John, built in one night at his direction: "build all of this tonight,
+high fidelity, you have the reins")
+
+John's notes drove every choice here. The through-line: the sailing
+region has to EARN its size — a visible upgrade, a sea that behaves
+like a sea, things to fight on the water, and one reveal that resets
+what the player thinks this game is about.
+
+## THE REVEAL (the reason this rev exists) — THE DROWNED MOON
+Partway across the open ocean the water goes clear and deep, and you
+sail over a colossal pale sphere resting on the seabed, WRAPPED IN
+CHAINS, half-buried in silt — too big to fit in frame. You cannot
+reach it, fight it, or touch it. As you pass, the bell towers ahead
+begin ringing BY THEMSELVES, one after another across the water,
+because the moon is close.
+
+What it means (locked, and it spends the chain mystery John reserved —
+he approved this on 8/16): the moon did not only break. A piece of it
+was LOWERED and left there, deliberately, and the islanders built bell
+towers above it to keep vigil. Their hours were never for people. The
+eighth phase — the NEW COIN, the one that brings the night — is down
+there, and the player knows it from region three onward and cannot
+have it for five more phases. WHO chained it and WHY stays unanswered.
+
+Cost is near-zero: one dark sphere + chain rings under the existing
+alpha water plane, seen once, inside an authored camera move.
+
+## THE KEEL (John: the upgrade must be VISIBLE — a keel is under the boat)
+Chicken-and-egg solved: the keel is salvaged INSIDE the bay, with the
+boat you already have.
+- The DROWNED SHIPWRECK in Brightharbor bay — the one you looted on
+  foot when the bay was dry — is the only ocean-going hull anyone has.
+  Sailing to it and disembarking onto its deck is already built + gated.
+- ✕ on its keel timber → Wick pries it free (micro-cinematic ~4s) →
+  carry it (Half-Shield carry rules) to the beach by the wake-boat.
+- THE REFIT (authored cinematic ≤12s, skippable after first view):
+  FINN steps a second mast with you, bends on a second sail, fits the
+  keel. Ends on the boat rocking, two sails furled. Warm, wordless.
+- Save: keelFound → keelCarried → boatRefit.
+
+## THE DOUBLE SAIL (John's own idea; ○-hold full sail is his favourite
+thing in the game, so the upgrade lands ON that button)
+Second mast + second sail, deeper hull, visible at rest as two furled
+sails. ○ held now raises BOTH: top speed 6.8 → 9.6, louder whoosh,
+heavier spray, stronger rumble. The upgrade is felt through the
+control he already loves, not read in a menu.
+
+## THE OCEAN MUST FEEL LIKE OCEAN (John: not monotonous; sometimes a
+big wave, sometimes not; a little challenge threading them)
+- Bay stays calm. Outside SEA_EDGE the SWELL turns on.
+- SWELL = sum of 3 sine components (different amplitude, period and
+  heading) so it never reads metronomic, on a coarse displaced grid
+  (≤48x48 verts) written in place into a pooled Float32Array — zero
+  per-frame allocation, budgets unchanged.
+- The boat HEAVES, PITCHES and ROLLS off the swell gradient at the
+  hull. Spray scales with speed into the face of a wave.
+- BIG SETS every 18-34s: telegraphed as a dark crest line on the water
+  with a rising rumble. Bow-on at full sail = you stall, the sail
+  spills, spray, hard rumble. Angled, or timed into the trough = you
+  keep way. NEVER costs hearts — it costs SPEED. That is the challenge
+  and it is kid-fair.
+
+## THINGS TO FIGHT ON THE WATER (John: "I have no way to attack and
+nothing to attack")
+- ATTACK AFLOAT: ✕ while sailing swings from a braced boat stance over
+  the gunwale — same swing, new pose, generous arc. Attack buffers and
+  never capsizes you.
+- SUN GULLS — sun-mad seabirds, dive in PAIRS from above with a clear
+  rear-up + cry telegraph, pop into a feather-and-sparkle burst. The
+  imp/hornet flier lineage, at sea.
+- REEF GAR — runs at the hull showing ONLY A WAKE (the Silt Wyrm's
+  visibility contract: if it can hit you, its wake is on screen), then
+  breaches alongside into a swing window. Miss it and it rams: speed
+  loss, knocked off heading, 1 heart. Nothing dies — cured gar dive
+  away.
+- Sunstruck at sea = wake at the last island or shore WITH the boat.
+  No drowning, no loss, no death word. Ever.
+
+## THE ISLES (region scale mandate applies: sea counts as playable)
+THE HOURLESS ISLES — an archipelago WEST/SOUTHWEST of Brightharbor
+(deliberately opposite the Parched Forest so no far-tier land ever
+intrudes on the crossing). Playable extent ≥2.2km x 1.5km including
+open water. Crossing from the bay mouth to first landfall ~900m.
+Sightline discipline comes free: islands and haze block vision, and
+the GREAT CAMPANILE is the far landmark that pulls you the whole way.
+
+An old bell-keeping culture rang the hours from tower to tower, the
+hour passing across the water like a wave. Silent for a year, because
+there are no hours any more. Bleached timber, verdigris bronze,
+salt-white stone, gull-streaked.
+
+Islands (7 + the reef):
+1. WATCHSTONE — first landfall, a jetty, one silent tower, the
+   region's save/shade anchor.
+2. KILN ISLE — the GREAT CAMPANILE and, beneath it, THE FOUNDRY
+   (the dungeon). Sealed until you have rung Watchstone's bell.
+3. THE DROWNED SPIRE — a tower standing up to its bell-lip in water;
+   you sail INTO its belfry through a broken arch. Chest.
+4. NETMENDER'S ROCK — tiny; the region's one NPC.
+5. GANNET STACK — sea stack, the gull combat pocket.
+6. THE LONG STRAND — beach, salt seams, a heart container.
+7. CHIME REEF — half-drowned bells that ring in the swell as you pass.
+   Pure atmosphere, no combat. The sound of the place.
+
+ONE NPC: THE BELLWRIGHT — an old bell-founder who never left. She
+oils towers that will never be rung. ≤2 lines per beat. She teaches
+the tone-holding verb in one line and nothing else.
+
+Island hostiles: CLAPPER CRABS (Scorch Crab family, wearing a small
+bronze bell as a shell — they CLANG as they move, an audible
+telegraph a six-year-old reads instantly, and the bell RINGS when you
+hit it) and SUN GULLS ashore as well as at sea.
+
+## THE FOUNDRY (dungeon) — the puzzle ESCALATES BY KIND, not by count
+John: one shell, then two or three, so this one must combine
+DIFFERENT verbs, not more of the same. Three kinds, one solution:
+1. AIM — swing a mirror-shell to put a sun shaft down a casting
+   channel (the grotto's language, third generation).
+2. STRIKE — the lit channel reveals an ORDER; strike the hanging
+   bells in it. Each bell flashes its own colour and tone when struck.
+   Wrong order = a dull clank and it resets, no punishment.
+3. HOLD — hold ✕ on the great bell to SUSTAIN a tone while the
+   resonance door stands open, and walk through before it dies.
+Colour + sound + a door visibly opening: solvable without reading.
+Two hornet-class fight beats (gull nests). One hidden side chamber
+(Ben bait): a bell-founder's mould room with a heart container and a
+carving of the chained moon being lowered — the mural from the Falls
+Hollow, from the OTHER side.
+
+## THE GUARDIAN — THE HOUR TORTOISE
+An ancient tortoise whose shell IS the GIBBOUS BELL (crab and wyrm
+precedent: the guardian WEARS the phase). Sun-mad, in the casting pit.
+- HP 84, phases 84 / 56 / 28. Boss HP bar + phase notches per the
+  standing convention. Body hits ALWAYS chip. Proximity ALWAYS wakes.
+- P1 signature (the learnable): it withdraws into the bell and ROLLS
+  at you — a rolling, ringing bell, loud and telegraphed. Sidestep;
+  it wobbles to a stop DIZZY with the bell's open mouth facing you =
+  the weak point, 5x damage, glowing telegraph.
+- P2 adds: slams the bell down → a shockwave RING across the floor →
+  JUMP it (reuses the jump verb, as the wyrm's tail sweep did).
+- P3: rings a TONE that calls gulls.
+- Kid-bot gate: body-slashing alone must win the whole fight.
+- THE CURE: it stops, withdraws, sets the bell down gently, and the
+  bell TOLLS BY ITSELF — the first hour struck in a year — then the
+  tortoise trundles into the sea. Nothing dies.
+
+## THE PAYOFF — THE SUN MOVES (authored cinematic, the phase's crown)
+Sail the Gibbous Bell home; slot it at the Moonwheel (✕):
+1. Wheel turns the third notch, the bell tolls, sky dims a third
+   eighth, THIRD star.
+2. Then the sun — pinned at noon for the entire game — MOVES. It
+   slides down the sky over ~8s and every shadow in the world swings
+   and lengthens with it. The light goes gold. The first sunset
+   anyone has seen in a year.
+3. Granny Tock, from below: her clocks might finally mean something.
+
+PERMANENT WORLD CHANGE (sky=3): a slow PARTIAL DAY ARC — the sun
+travels noon → low gold → back on a long cycle (~6 real minutes).
+Never full dark; that is phase 8's alone.
+
+SAFETY RAIL (non-negotiable, protects every shipped gate): springs,
+canopy shade, authored shade circles, grottos and interiors stay
+PERMANENTLY safe regardless of sun angle. Only directional prop/rock
+shadows swing. Swelter rules, shade healing and every existing shade
+gate are unchanged. The sun moving must be spectacle plus flavour,
+never a new way to die.
+Sailing at gold hour is the compounding reward the sailing spine
+promised.
+
+## THE END CARD (John, explicitly, twice)
+TO BE CONTINUED returns, and the missing one is retrofitted:
+- PHASE 2 gets the card it never had — the Half Shield arc currently
+  just stops. Teases the open sea and a keel worth it.
+- PHASE 3 ends on its own card teasing the WAXING SLIVER: cool winds,
+  the Parched Forest re-greening.
+Card style is unchanged — John called it "fantastic"; never regress.
+
+## FOREST MOB POCKETS (John: the boys want more to slash)
+The Parched Forest's two safety systems become a real trade: the
+Silverrun road is SUN, the trees are SHADE — and the trees now hold
+~6 hostile pockets (2-3 boars or 3-4 hornets each) in the canopy
+shade off the riverbed. Zelda-sparse, never a wall of enemies:
+safety costs you a fight, exposure costs you hearts. Respawn on area
+re-entry like everything else.
+
+## PROCESS LAW (unchanged, all of it applies)
+ONE ground authority via makeMeshField for every new walkable surface
+(island shores, foundry floors, the spire belfry, boat decks);
+rendered == physics, gated. No impression geometry in playable space.
+Wrap-and-delegate for the new region parts, in build.sh order. Every
+new save flag carried by applyWorldState BOTH ways, with the John
+sequence (completed save → NEW GAME → world fully fresh) extended to
+keel, refit, moon, isles and sun-arc state. Maria's hazard rules for
+the big sets. Cinematics skippable after first view; handoff is a
+DISCOVERY. Budgets ≤80 draw calls / ≤120k tris measured under full
+sail in the big sets and in the foundry. Build-unique deploy marker
+verified absent from the previous bundle. The family save must
+continue seamlessly into all of it.

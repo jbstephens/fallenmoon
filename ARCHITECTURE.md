@@ -26,7 +26,41 @@ readable lines.
 | `p6-game.html` | 5492–7099 | quests, dialogue, enemies, boss, cinematics |
 | `p6b-forest.html` | 7100–9566 | Phase 2 night one — the Parched Forest |
 | `p6c-tide.html` | 9567–12333 | Phase 2 night two — Falls Hollow, Wyrm, tide, sailing |
-| `p7-flow.html` | 12334–13062 | state flow, HUD, telemetry, main loop |
+| `p6d-sea.html` | (after p6c) | **Phase 3** — ocean swell, the keel + refit + double sail, combat afloat, the crossing and the DROWNED MOON, the Hourless Isles |
+| `p6e-isles.html` | (after p6d) | **Phase 3** — the Foundry, the three-verb puzzle, the Hour Tortoise, the sun-moves payoff, both end cards |
+| `p7-flow.html` | (last) | state flow, HUD, telemetry, main loop |
+
+Phase 3 line numbers are deliberately omitted: p6d and p6e are ~3,000 lines
+each and shift every rebuild. Grep by symbol instead — the pinned constants
+below are stable.
+
+## Phase 3 at a glance
+
+**Geography is pinned in `p6d-sea.html` and read by `p6e-isles.html`:**
+`ISLES` (2.2km x 1.5km, west/southwest so the Parched Forest's far tier can
+never intrude on the crossing), `CROSS_LANE`, `MOON_SITE`, `WATCHSTONE`,
+`KILN_ISLE`, `DROWNED_SPIRE`, `NETMENDER`, `GANNET_STACK`, `LONG_STRAND`,
+`CHIME_REEF`, `ISLE_LIST`, `FOUNDRY_DOOR`, `REFIT_BEACH`, `KEEL_SPOT`.
+
+**The two parts do NOT edit p7.** They each push one hook to
+`window.__worldStateHooks` (save → world, both directions) and one to
+`window.__telemetryHooks`. Any future region part should do the same rather
+than editing `applyWorldState`/`syncTelemetry` in place.
+
+**Content tables:** `SWELL`/`SET` (ocean), `FBELLS`/`FORDER` (the strike
+order), `FKILNS`, `TORT` (HP 84, phases 84/56/28), `SKY3`/`SKYGOLD`,
+`REEF_BELLS`, `ISLE_ANCHORS`, `ISLE_SHADE`.
+
+**Debug helpers:** `__fmDebug.warpSea(x,z,ang) · isleInfo() · swellAt(x,z) ·
+bigSetNow() · seaGround(x,z) · warpFoundry(where) · foundryInfo() ·
+sunInfo() · sunSet(k) · openFoundry()`.
+
+**The sun arc safety rail (non-negotiable):** once `SAVE.sunArc` is live the
+sun travels noon → low gold → back on a ~6 minute cycle and shadows swing
+with it, but springs, canopy, authored shade circles, grottos and interiors
+stay shade at EVERY angle. The `isles` suite asserts this across 21 sun
+angles; total shade may grow, never shrink. The sun moving must never become
+a new way to die.
 
 Each part is its own top-level `<script>` block. `const`/`let`/`function`
 share page scope across blocks, which is what makes the wrap pattern
@@ -234,6 +268,10 @@ physics come from one function. Solidity = `worldSolidAt` /
 - **Read back** `applyWorldState()` 12377, bidirectional (chests open
   *or* closed, kelp cut *or* regrown). Gated by `suiteWorld`'s John
   sequence: completed save → NEW GAME → world fully fresh.
+- **Phase 3 flags:** `keelFound keelCarried boatRefit moonSeen isleLandfall
+  bellwrightTalked watchBell spireChest strandHeart gannetChest fGlyph1/2/3
+  fMouldHeart fMouldMural tortoiseDone sunArc bossHint3 bigSetSeen garSeen
+  tbc2Seen tbc3Seen`. Quest steps run 7–12.
 - **Second namespace** `fm_seen_<cineId>` (11165) — per-cinematic seen
   flags kept *outside* the save blob so they survive NEW GAME. Also
   `arcade_lowfx`, shared arcade-wide.
@@ -340,9 +378,18 @@ failures as `<suite>-FAIL.png`). `test/shots-probe/` is gitignored.
 | `flood` | Shield walked home, **input live inside 12 s**, bars off exactly at control-live, exactly one handoff rumble, **one continuous camera — no cuts ever**, sky step 2 real in pixels, matrix both directions |
 | `sail` | pad/kbd/touch board→steer→full sail→ashore, sea boundary, wisps fizz, hull never crosses land, boat persists where moored, Pearl's voyage |
 | `n2shots` | the night-two screenshot strip |
+| `isles` | **phase 3's must-never-regress subset**: the Foundry seal both ways, the portal actually walkable on foot, proximity waking the Hour Tortoise, a **kid bot that only body-slashes winning the whole fight**, sky step 3 with the arc live, the sun-arc **safety rail across 21 angles**, and NEW GAME un-refitting the boat / un-seeing the moon / re-pinning the sun |
 
 Nearly every suite ends with a `zero console errors` gate and a
 catch-all that fails on any thrown exception.
+
+Deeper phase-3 coverage (102 gates) lives in `test/probes/p6e-*.mjs` and
+`test/probes/seadiag.mjs`, run directly with node. Two hard-won rules for
+those probes: `seedSave(save, true)` seeds only the FIRST navigation, so a
+suite that reloads with a second fixture is silently testing the old world;
+and any timed mechanic (the resonance tone) must be started and then walked
+IMMEDIATELY — polling, gating and screenshotting first spends the player's
+clock in setup and then blames the door.
 
 **Harness API** (`makeApi`, ~300): `seedSave`, `nav`, `eval`, `waitFor`,
 `press`, `shot`, `installBot`, `walkTo`, `bot`, `botRelease`, plus

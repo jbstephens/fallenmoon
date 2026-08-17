@@ -41,6 +41,11 @@ function beginNewGame() {
 /* ═══ v6: ONE world-state derivation (the dormant-boss NEW GAME bug).
    Everything the world derives from the active save happens HERE — at
    boot, on NEW GAME, and on CONTINUE. Never at build time. ═══ */
+/* extension points for region parts concatenated after this file is NOT
+   possible — p7 is last — so these arrays are declared here and filled by
+   the region parts ABOVE at their own load time. */
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
 function applyWorldState() {
   const S = SAVE || defaultSave();
   /* player-side stats */
@@ -150,6 +155,11 @@ function applyWorldState() {
   /* night two: the Falls Hollow, the flood, and the boat derive last —
      the tide hook may override sky/wheel state for sky step 2 */
   if (window.__tideApplySave) window.__tideApplySave();
+  /* phase 3+: every later region part pushes ONE hook here instead of
+     editing this function, so parts can be built independently and still
+     derive the world from SAVE in BOTH directions. Hooks run in build.sh
+     concatenation order — later regions may override earlier sky state. */
+  for (const h of window.__worldStateHooks) { try { h(S); } catch (e) {} }
   /* quest line */
   if (SAVE) setQuest(S.q);
   else { QUEST.q = 0; questEl.textContent = ''; questEl.classList.remove('on'); }
@@ -480,6 +490,7 @@ function syncTelemetry() {
   TL.sitting = state === 'cine' && CINE.id === 'sit';
   TL.caption = floatEl.classList.contains('on') ? floatEl.textContent : null;
   TL.starOn = !!(pearlStar && pearlStar.visible);
+  for (const h of window.__telemetryHooks) { try { h(TL); } catch (e) {} }
 }
 const FREECAM = { on: false, p: [0, 0, 0], l: [0, 0, 0] };
 let SIM_FREEZE = false;   // screenshot staging: halt sim ticks, keep rendering
