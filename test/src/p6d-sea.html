@@ -482,6 +482,11 @@ const WG_CELL = LOWFX ? 11.5 : 7.0;
 const WG_SPAN = (WG_N - 1) * WG_CELL;
 let waveMesh = null, wavePos = null, waveCol = null, waveMat = null, waveIdx = null;
 let waveKeyI = 1e9, waveKeyJ = 1e9;
+/* the shoal field depends only on (x,z), and the grid's vertex positions
+   change only when the origin snaps a cell — so amp/off are cached per
+   snap instead of recomputed per vertex per frame (~18k hypots/frame gone,
+   the single largest steady cost the crossing added). */
+let waveAmpC = new Float32Array(WG_N * WG_N), waveOffC = new Float32Array(WG_N * WG_N);
 (function buildWaveGrid() {
   const n = WG_N * WG_N;
   wavePos = new Float32Array(n * 3);
@@ -509,6 +514,12 @@ let waterClarity = 0;              // 0 normal → 1 the clear water over the mo
    dropped from the index — rebuilt only when the grid's origin moves. */
 const bayWaterCell = (cx, cz) => cx > -104 && cx < 106 && cz > -64 && cz < 190;
 function rebuildWaveIndex(x0, z0) {
+  for (let j = 0; j < WG_N; j++) {
+    for (let i = 0; i < WG_N; i++) {
+      const sh = seaShoalAt(x0 + i * WG_CELL, z0 + j * WG_CELL);
+      waveAmpC[j * WG_N + i] = sh.amp; waveOffC[j * WG_N + i] = sh.off;
+    }
+  }
   let o = 0;
   for (let j = 0; j < WG_N - 1; j++) {
     for (let i = 0; i < WG_N - 1; i++) {
@@ -534,10 +545,23 @@ function updateWaveGrid() {
     prevH = 0;
     for (let i = 0; i < WG_N; i++, o += 3) {
       const x = x0 + i * WG_CELL;
-      const sh = seaShoalAt(x, z);
-      const a = sh.amp, off = sh.off;
+      const a = waveAmpC[j * WG_N + i], off = waveOffC[j * WG_N + i];
       const bs = a <= 0.002 ? 0 : bigSetHeight(x, z);
       let h = a <= 0.002 ? 0 : (swellRawAt(x, z, seaClock) + bs) * a;
+      /* THE WATER YIELDS TO THE HULL. The hull rides the analytic swell but
+         the rendered sea is this 7m grid — between vertices the interpolated
+         plane sits HIGHER than a steep trough's true floor, so the surface
+         sliced through the boat and Wick's legs flickered blue ("the boat
+         fills with water... a little dramatic"). Vertices near the hull now
+         blend down to the exact height she is riding, minus a hand's width
+         of freeboard, so the sea meets her waterline and never her deck. */
+      if (P.sailing) {
+        const bd = Math.hypot(x - BOAT.x, z - BOAT.z);
+        if (bd < 9) {
+          const k = smoothstep(clamp((9 - bd) / 6, 0, 1));
+          h = lerp(h, SEAFX.heave - 0.14, k);
+        }
+      }
       /* the rim rings flatten to the far sheet's level as well as its
          colour — displaced rim verts over a flat floor tore sawtooth gaps
          along the grid's edge, marching as the origin snapped */
@@ -2770,7 +2794,7 @@ cullChunks = function (ccx, ccz) {
        coplanar-fights it at the mouth. */
   /* THE DROWNED MOON: only ever seen from above it */
   const dMoon = Math.hypot(ccx - MOON_SITE.x, ccz - MOON_SITE.z);
-  const moonVis = west && dMoon < 900;
+  const moonVis = west && dMoon < 900 && (waterClarity > 0.01 || CINE.id === 'crossing');
   moonMesh.visible = moonVis; moonChainMesh.visible = moonVis;
   moonSiltMesh.visible = west && dMoon < MOON_BOWL_R + 320;
   /* the chime reef: bells that ring in the swell — the sound of the place */

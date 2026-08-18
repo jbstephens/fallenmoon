@@ -2036,7 +2036,9 @@ function fApplySky(force) {
   const mag = 1 + 0.55 * fSunK;
   SHADOW_DIR[0] = Math.cos(a) * mag;
   SHADOW_DIR[1] = Math.sin(a) * mag;
-  if (force || Math.abs(fSunK - fPoolK) > 0.01) { fPoolK = fSunK; rebuildShadePools(); }
+  /* a rebuild every ~5s is invisible on a 6-minute arc; every ~1.2s was a
+     steady GC hitch on the Pi, forever, once the arc went live */
+  if (force || Math.abs(fSunK - fPoolK) > 0.04) { fPoolK = fSunK; rebuildShadePools(); }
 }
 function fSunTargetFog() {
   mix3(SKY2.fog, SKY3.fog, fSkyK, _ffB);
@@ -2792,7 +2794,7 @@ cullChunks = function (ccx, ccz) {
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
 
   /* ── the works: one culled chunk ── */
-  const fVis = near2(F2.x, F2.z, 150);
+  const fVis = near2(F2.x, F2.z, 150) && (inFoundryAt(P.x, P.z) || near2(FDOOR.x, FDOOR.z, 40));
   fFloorMesh.visible = fVis;
   fWallMesh.visible = fVis;
   fDomeMesh.visible = fVis;

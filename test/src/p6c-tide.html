@@ -1367,7 +1367,15 @@ const BOAT = { x: 8.5, z: 6.0, ang: 0.9, spd: 0, vx: 0, vz: 0, heel: 0, sailK: 0
   // the helmsman faced across it. dynBoat (ry: 0) is the reference.
   latheW(md, [[0.0, -0.42], [1.05, 0.0], [1.15, 0.62], [0.98, 0.88]],
     { seg: 9, ex: 2.15, x: 0, y: 0.3, z: 0, ry: 0, col: C_HULL, cols: [C_HULL2, C_HULL, C_WOODW] });
-  // interior floor + thwarts
+  // interior floor + thwarts — the floor is now a full bilge LINER, wide and
+  // long enough to reach the hull walls: in a swell trough the transparent
+  // water plane clipped up through the old narrow plate and the boat filled
+  // with ocean to the gunwales. The inside of a boat is never blue.
+  const BILGE = mix3(C_WOODW, [0, 0, 0], 0.1);
+  // boxW takes HALF extents (the 0.72 helm seat spans most of the beam)
+  boxW(md, { x: 0, y: 0.38, z: 0,     w: 0.84, d: 1.1,  h: 0.1, col: BILGE });
+  boxW(md, { x: 0, y: 0.38, z: 1.55,  w: 0.52, d: 0.55, h: 0.1, col: BILGE });
+  boxW(md, { x: 0, y: 0.38, z: -1.55, w: 0.52, d: 0.55, h: 0.1, col: BILGE });
   boxW(md, { x: 0, y: 0.42, z: 0, w: 0.66, d: 1.7, h: 0.06, col: mix3(C_WOODW, [0, 0, 0], 0.1) });
   boxW(md, { x: 0, y: 0.62, z: -0.5, w: 0.72, d: 0.16, h: 0.07, col: C_WOODW });   // helm seat
   boxW(md, { x: 0, y: 0.62, z: 0.75, w: 0.6, d: 0.14, h: 0.07, col: C_WOODW });    // bow seat (Pearl's)
