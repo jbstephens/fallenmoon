@@ -1522,7 +1522,7 @@ window.__tideApplySave = function () {
     BOAT.z = (typeof S.boatX === 'number' && waterDepthAt(S.boatX, S.boatZ) > 0.3) ? S.boatZ : 6.0;
     BOAT.ang = typeof S.boatAng === 'number' ? S.boatAng : 0.9;
     BOAT.spd = 0;
-    sailboat.group.position.set(BOAT.x, WL - 0.42, BOAT.z);
+    sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
     sailboat.group.rotation.set(0, BOAT.ang, 0);
     sailboatColl.off = false;
     sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z;
@@ -1641,7 +1641,7 @@ function rescueStrandedBoat() {
       if (waterDepthAt(px, pz) < 0.4) continue;        // she must still float
       if (!boatMooringOK(px, pz)) continue;
       BOAT.x = px; BOAT.z = pz;
-      sailboat.group.position.set(BOAT.x, WL - 0.42, BOAT.z);
+      sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
       sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
       if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
       return;
@@ -2149,6 +2149,17 @@ function disembarkSpot() {
       const a = BOAT.ang + i * (TAU / 12);
       const px2 = BOAT.x + Math.sin(a) * r, pz2 = BOAT.z + Math.cos(a) * r;
       if (worldSolidAt(px2, pz2)) continue;
+      /* the PASSAGE matters, not just the endpoint: at the Drowned Spire the
+         search found the interior ledge THROUGH the ring wall, and COME
+         ASHORE teleported John inside a stone circle his boat could never
+         re-enter. A footing you cannot walk to from the hull is not ashore,
+         it is a cell. */
+      let blocked = false;
+      for (let s = 1; s <= 4; s++) {
+        const mx = BOAT.x + (px2 - BOAT.x) * s / 5, mz = BOAT.z + (pz2 - BOAT.z) * s / 5;
+        if (worldSolidAt(mx, mz)) { blocked = true; break; }
+      }
+      if (blocked) continue;
       const sy = supportYAt(px2, pz2, WL + 2.5);
       if (sy > WL - 0.35 && sy < WL + 2.0) return { x: px2, z: pz2, y: sy };
     }
@@ -2224,9 +2235,32 @@ function tickSailing() {
       // soft grounding: keep what slides, shed the speed
       if (waterDepthAt(nx, B.z) > 0.26 && waterDepthAt(nx + Math.sin(B.ang) * 1.3, B.z) > 0.2) nz = B.z;
       else if (waterDepthAt(B.x, nz) > 0.26 && waterDepthAt(B.x, nz + Math.cos(B.ang) * 1.3) > 0.2) nx = B.x;
-      else { nx = B.x; nz = B.z; }
+      else { nx = B.x; nz = B.z; B.stuckT = (B.stuckT || 0) + (tgt > 1 ? 1 : 0); }
       B.spd *= 0.86;
       if (B.spd > 1.5 && (simTick % 14) === 0) SFX.splashSm();
+      /* NEVER STRANDED AGROUND. In a shallow pocket — John found one between
+         a sandbar and the spire ring — every heading grounds, speed sheds to
+         nothing each tick, and no amount of steering rebuilds steerage: a
+         soft-lock with the engine running. If the player has been trying to
+         move against ground for ~3s, the swell lifts her to the nearest
+         water she can actually sail in. */
+      if ((B.stuckT || 0) > 180) {
+        B.stuckT = 0;
+        outer: for (let rr = 4; rr <= 70; rr += 3) {
+          for (let ii = 0; ii < 24; ii++) {
+            const aa = ii * (TAU / 24);
+            const fx = B.x + Math.sin(aa) * rr, fz = B.z + Math.cos(aa) * rr;
+            if (worldSolidAt(fx, fz)) continue;
+            if (waterDepthAt(fx, fz) < 0.7) continue;
+            B.x = fx; B.z = fz; B.spd = 1.2;
+            sailboatColl.x = B.x; sailboatColl.z = B.z;
+            if (SAVE) { SAVE.boatX = B.x; SAVE.boatZ = B.z; storeSave(); }
+            showCaption('A set lifts her off the bar.', 2800);
+            SFX.splash(); rumble({ duration: 160, strong: 0.2, weak: 0.4 });
+            break outer;
+          }
+        }
+      }
     }
     // THE SOFT SEA BOUNDARY: swells turn you home
     const de = Math.hypot(nx - SEA_EDGE.x, nz - SEA_EDGE.z);
@@ -2354,8 +2388,53 @@ function tickGlyphDoors() {
 
 /* ── the region tick ── */
 let hollowSeenSession = false, dunkCaption = false, lastDry = [4, -2];
+/* THE BOAT FOLLOWS YOU.
+   Twice in one evening the game separated John from his boat and left her
+   floating somewhere he could not reach: a disembark that threw him ashore
+   from the wreck, then the refit cinematic playing out at sea and leaving
+   the finished boat there. Each was a different author forgetting the same
+   thing, so the rule stops living in authors' heads: whenever you are
+   ashore and she is more than 60m away — beyond distance culling, so no
+   visible teleport — she quietly re-moors to the nearest water to YOU that
+   she floats in and you can reach. Checked every few seconds; never while
+   sailing, during Pearl's voyage, indoors, or in a cinematic. */
+let boatFollowT = 0;
+function tickBoatFollows() {
+  if (!flooded() || !FLOODLIVE.boatDone || P.sailing || VOYAGE.active) return;
+  if (typeof roomAt === 'function' && roomAt(P.x, P.z)) return;
+  if (inHollowAt(P.x, P.z)) return;
+  if (typeof inFoundryAt === 'function' && inFoundryAt(P.x, P.z)) return;
+  boatFollowT += DT;
+  if (boatFollowT < 5) return;
+  boatFollowT = 0;
+  if (Math.hypot(P.x - BOAT.x, P.z - BOAT.z) < 60) return;
+  /* Only when the game is POINTING you at her (the compass resolves to the
+     boat — every sea-bound quest ashore does this), or she is unboardable
+     from anywhere. The first cut pulled her toward you constantly, which
+     made her stalk the player around the bay during land content — the S3
+     regression gate caught her drifting away from her own mooring. A boat
+     that waits where you left her is right; a boat you are being SENT TO
+     that you cannot reach is the bug. */
+  const o = objectivePoint();
+  const sheIsTheObjective = o && Math.hypot(o.x - BOAT.x, o.z - BOAT.z) < 2;
+  if (!sheIsTheObjective && boatMooringOK(BOAT.x, BOAT.z)) return;
+  for (let r = 6; r <= 160; r += 2) {
+    for (let i = 0; i < 48; i++) {
+      const a = i * (TAU / 48);
+      const bx = P.x + Math.sin(a) * r, bz = P.z + Math.cos(a) * r;
+      if (waterDepthAt(bx, bz) < 0.5) continue;
+      if (!boatMooringOK(bx, bz)) continue;
+      BOAT.x = bx; BOAT.z = bz;
+      sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
+      sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
+      if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
+      return;
+    }
+  }
+}
 function tickTide() {
   if (state !== 'play') return;
+  tickBoatFollows();
   /* the resonance: with the Crescent thread alive, the forecourt answers */
   if (SAVE && !SAVE.basinOpen && QUEST.q >= 2 && !P.sailing) {
     if (Math.hypot(P.x - HUM_SPOT.x, P.z - HUM_SPOT.z) < 11) {
@@ -2682,7 +2761,7 @@ cullChunks = function (ccx, ccz) {
     if (FLOODLIVE.boatLift >= 0 && !FLOODLIVE.boatDone) {
       FLOODLIVE.boatLift += dtv;
       const k = smoothstep(clamp(FLOODLIVE.boatLift / 2.4, 0, 1));
-      sailboat.group.position.set(BOAT.x, lerp(WL - 1.1, WL - 0.42, k) + Math.sin(k * Math.PI) * 0.16, BOAT.z);
+      sailboat.group.position.set(BOAT.x, lerp(WL - 1.1, WL - 0.18, k) + Math.sin(k * Math.PI) * 0.16, BOAT.z);
       sailboat.group.rotation.set(0, BOAT.ang, (1 - k) * 1.15);
       if ((now % 200) < 40) psSpray.spawn(BOAT.x + (Math.random() - 0.5) * 2, WL + 0.15, BOAT.z + (Math.random() - 0.5) * 2, 0, 1.2, 0, 0.5);
       if (FLOODLIVE.boatLift >= 2.4) {
@@ -2692,10 +2771,10 @@ cullChunks = function (ccx, ccz) {
       }
     } else if (sailboat.group.visible) {
       if (P.sailing) {
-        sailboat.group.position.set(BOAT.x, WL - 0.42 + Math.sin((BOAT.bobPh += dtv * (2 + BOAT.spd * 0.35))) * 0.06, BOAT.z);
+        sailboat.group.position.set(BOAT.x, WL - 0.18 + Math.sin((BOAT.bobPh += dtv * (2 + BOAT.spd * 0.35))) * 0.06, BOAT.z);
         sailboat.group.rotation.set(Math.sin(BOAT.bobPh * 0.7) * 0.02 + BOAT.spd * 0.012, BOAT.ang, -BOAT.heel);
       } else {
-        sailboat.group.position.set(BOAT.x, WL - 0.42 + Math.sin(now / 1200) * 0.05, BOAT.z);
+        sailboat.group.position.set(BOAT.x, WL - 0.18 + Math.sin(now / 1200) * 0.05, BOAT.z);
         sailboat.group.rotation.set(0, BOAT.ang, Math.sin(now / 1600) * 0.025);
       }
       sailboat.sail.scale.y += (((P.sailing && BOAT.sailK > 0.5) ? 1 : 0.12) - sailboat.sail.scale.y) * Math.min(1, dtv * 3);
@@ -2742,7 +2821,11 @@ animateWick = function (dtv, now) {
   const c = wick;
   c.root.position.set(
     BOAT.x - Math.sin(BOAT.ang) * 0.45,
-    sailboat.group.position.y + 0.3,
+    /* ON the helm bench (0.62), not in the bilge (0.3): seated at bilge
+       height only his head cleared the gunwale, which read from the follow
+       camera as a man neck-deep in his own boat — half of John's "I look
+       like I'm sinking". */
+    sailboat.group.position.y + 0.66,
     BOAT.z - Math.cos(BOAT.ang) * 0.45);
   c.root.rotation.y = BOAT.ang;
   poseHumanoid(c, 'idle', 0, 0, { armsOverride: true });
@@ -2819,7 +2902,7 @@ function extendTideDebugOnce() {
   Object.assign(window.__fmDebug, {
     boat(x, z, ang) {
       BOAT.x = x; BOAT.z = z; if (ang !== undefined) BOAT.ang = ang;
-      sailboat.group.position.set(x, WL - 0.42, z);
+      sailboat.group.position.set(x, WL - 0.18, z);
       if (!P.sailing) { sailboatColl.x = x; sailboatColl.z = z; }
     },
     hollowInfo() {

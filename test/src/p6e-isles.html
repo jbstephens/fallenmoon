@@ -2968,8 +2968,13 @@ window.__worldStateHooks.push(function (S) {
   catch (e) { isleHookErr = String(e && e.message || e); throw e; }
 });
 function isleDeriveWorld(S) {
-  /* the bronze doors */
+  /* the bronze doors — and their SOLIDITY. The plug collider is born off
+     (p6d's unconditional one once walled the dungeon shut forever), so it
+     must follow the gate here: John walked clean through the CLOSED doors'
+     visuals into a sealed interior and got a room of nonsense. Shut doors
+     you can ghost through are worse than a wall. */
   fGateOpenNow = !!S.watchBell;
+  if (window.__foundryDoorColl) window.__foundryDoorColl.off = fGateOpenNow;
   fGateL.rotation.y = fGateOpenNow ? 1.95 : 0;
   fGateR.rotation.y = fGateOpenNow ? -1.95 : 0;
   fGateSaid = false;
@@ -3054,6 +3059,10 @@ function isleDeriveWorld(S) {
     else { SHADOW_DIR[0] = SUN_DIR_NOON[0]; SHADOW_DIR[1] = SUN_DIR_NOON[1]; rebuildShadePools(); }
   }
   fPlayTicks = 0; fTbc2Delay = -1;
+  /* the phase-2 card celebrates the MOMENT the keel hunt begins (q7). A save
+     already past that moment gets it marked seen, not popped 2.5s into some
+     random resume — it hijacked a dungeon approach and two harness shots. */
+  if (S.q >= 8 && !S.tbc2Seen) { S.tbc2Seen = true; storeSave(); }
   foundrySeenSession = false;
 }
 

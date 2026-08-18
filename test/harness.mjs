@@ -5600,11 +5600,27 @@ async function suiteIsles(base) {
        harness's own latency rather than to the boss. Hearts are topped up as
        SETUP so we are testing whether body damage can finish it, not whether
        a bot can also survive. */
+    /* the kid CHASES: a stationary masher whiffs whenever the Tortoise
+       rolls away, and three ten-minute runs stalled at 13-25hp purely on
+       drive-by geometry. The bot walks at the boss (real stick input via
+       the pad axes) and mashes ✕ — which is exactly what Ben does. */
+    await api.installBot('pad');
     await api.eval(`window.__kidBot = setInterval(function(){
-      try { P.hearts = P.maxHearts; __fakePad.press(0);
-            setTimeout(function(){ __fakePad.press(); }, 90); } catch (e) {}
-    }, 240); 0`);
-    await api.waitFor('__fm.tortDone === true', 300000, 'the kid bot finishes it').catch(() => {});
+      try {
+        P.hearts = P.maxHearts;
+        if (typeof TORT !== 'undefined' && TORT.c && window.__fmBot) {
+          __fmBot.tol = 1.6;
+          __fmBot.target = [TORT.c.root.position.x, TORT.c.root.position.z];
+        }
+        __fakePad.press(0);
+        setTimeout(function(){ __fakePad.press(); }, 80);
+      } catch (e) {}
+    }, 170); 0`);
+    /* ten minutes, not five: on a loaded machine the sim runs slow real-time
+       and the bot lost twice to the CLOCK while visibly winning (84→13,
+       84→25, and 84→0 whenever the machine was quiet). The claim under test
+       is that body-mashing WINS, not that it wins fast. */
+    await api.waitFor('__fm.tortDone === true', 600000, 'the kid bot finishes it').catch(() => {});
     await api.eval('clearInterval(window.__kidBot); __fakePad.press(); 0');
     const hp = await api.eval('__fm.tortHp');
     gate('isles: a KID BOT that only body-slashes wins the whole fight',
