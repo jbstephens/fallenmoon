@@ -503,8 +503,13 @@ async function v3ControlGates(api, D, g) {
   let cleared = false, overAir = 0;
   for (let att = 0; att < 4 && !cleared; att++) {
     await api.eval('__fmDebug.warp(12.4, 5.6); __fmDebug.camYaw(Math.PI)');
-    await api.eval(`window.__kw={over:0};(function w(){
-      const T=__fm; if(Math.abs(T.z-9.2)<0.55&&Math.abs(T.x-12.4)<1.2&&T.airY>__kw.over)__kw.over=T.airY;
+    /* telemetry syncs once per frame: arm the recorder only after the warp
+       is VISIBLE in __fm, or its z>11.5 exit fires on the stale pre-warp
+       position and it dies on frame one (it did — n:1 in the trace) */
+    await api.waitFor('Math.abs(__fm.z - 5.6) < 1.5 && Math.abs(__fm.x - 12.4) < 1.5', 4000, 'kelp warp landed');
+    await api.eval(`window.__kw={over:0};window.__kr=[];(function w(){
+      const T=__fm; __kr.push([+T.z.toFixed(2),T.air?1:0,+(T.airY||0).toFixed(2)]);
+      if(Math.abs(T.z-9.2)<0.55&&Math.abs(T.x-12.4)<1.2&&T.airY>__kw.over)__kw.over=T.airY;
       if(T.z>11.5)return; requestAnimationFrame(w);})()`);
     await api.eval('__fmBot.tol=0.4; __fmBot.target=[12.4, 12.6]');
     const t0 = Date.now();
@@ -519,6 +524,8 @@ async function v3ControlGates(api, D, g) {
     overAir = await api.eval('window.__kw.over');
     if (overAir > 0.25) cleared = true;
   }
+  if (!cleared) console.log('  kelp trace:', await api.eval(
+    `JSON.stringify({n:__kr.length, air:__kr.filter(f=>f[1]).length, win:__kr.filter(f=>Math.abs(f[0]-9.2)<0.55).slice(0,25), x:+__fm.x.toFixed(2)})`));
   g('jump: clears a kelp cluster airborne', cleared, `air over stalk=${overAir.toFixed(2)}`);
 
   // ── jump lands ON a crate top and stands there ──
