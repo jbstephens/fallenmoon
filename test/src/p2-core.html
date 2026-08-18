@@ -24,7 +24,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P3-HELMRESUME-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-P3-DEEPWATER-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ───────────────────────── math utils ───────────────────────── */
@@ -564,6 +564,7 @@ function loadSave() {
     if (out.bossDone) qMin = Math.max(qMin, 3);
     if (out.sky >= 1 || out.ph >= 1) qMin = Math.max(qMin, 4);
     /* night two: the same never-dead-end rule for the Half Shield arc */
+    if (out.wyrmDone) qMin = Math.max(qMin, 4);   // cure before q4 must not orphan the Shield
     if (out.sky >= 2 || out.ph >= 2) qMin = Math.max(qMin, 6);
     /* phase 3: flags and quest may never disagree into a dead end (the Ben
        soft-lock rule). Each milestone drags the quest step forward. */

@@ -1379,7 +1379,15 @@ const BOAT = { x: 8.5, z: 6.0, ang: 0.9, spd: 0, vx: 0, vz: 0, heel: 0, sailK: 0
   boxW(md, { x: 0, y: 1.06, z: -0.32, w: 0.045, d: 0.65, h: 0.045, col: C_HULL2 });
   // tiller
   boxW(md, { x: 0, y: 0.66, z: -1.15, w: 0.035, d: 0.4, h: 0.035, rx: -0.5, col: C_HULL2 });
-  const hull = mdMesh(md, WORLD_MAT, false);
+  /* HER OWN DOUBLE-SIDED MATERIAL. The hull's flared top band (radius
+     1.15 → 0.98, a tumblehome) wound some faces so they only rendered from
+     above: from a couch-height camera the near wall vanished and you saw
+     straight through to the inside of the far wall — John: "can we also
+     render the whole goddamn boat please". She is one small mesh; drawing
+     both sides costs nothing and can never be angle-dependent again. */
+  const hull = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, side: THREE.DoubleSide,
+  }), false);
   hull.frustumCulled = false;
   g.add(hull);
   // THE SAIL — a patched lugsail; scale.y follows the full-sail hold
@@ -1638,7 +1646,7 @@ function rescueStrandedBoat() {
     for (let i = 0; i < 32; i++) {
       const a = i * (TAU / 32);
       const px = wk[0] + Math.sin(a) * r, pz = wk[1] + Math.cos(a) * r;
-      if (waterDepthAt(px, pz) < 0.4) continue;        // she must still float
+      if (waterDepthAt(px, pz) < 1.3) continue;        // she must float AND sail — 0.4 beached John at his own re-moor
       if (!boatMooringOK(px, pz)) continue;
       BOAT.x = px; BOAT.z = pz;
       sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
@@ -2231,10 +2239,13 @@ function tickSailing() {
     const r = resolveSolid(B.x, B.z, c[0], c[1]);
     nx = r[0]; nz = r[1];
     const bowX = nx + Math.sin(B.ang) * 1.35, bowZ = nz + Math.cos(B.ang) * 1.35;
-    if (waterDepthAt(nx, nz) < 0.26 || waterDepthAt(bowX, bowZ) < 0.2) {
+    /* she stops in the SHALLOWS, not on the sand: at 0.26m she could drive
+       up the beach apron until her hull was buried in the slope — John's
+       "render the whole goddamn boat" was a boat parked inside the beach. */
+    if (waterDepthAt(nx, nz) < 0.55 || waterDepthAt(bowX, bowZ) < 0.45) {
       // soft grounding: keep what slides, shed the speed
-      if (waterDepthAt(nx, B.z) > 0.26 && waterDepthAt(nx + Math.sin(B.ang) * 1.3, B.z) > 0.2) nz = B.z;
-      else if (waterDepthAt(B.x, nz) > 0.26 && waterDepthAt(B.x, nz + Math.cos(B.ang) * 1.3) > 0.2) nx = B.x;
+      if (waterDepthAt(nx, B.z) > 0.55 && waterDepthAt(nx + Math.sin(B.ang) * 1.3, B.z) > 0.45) nz = B.z;
+      else if (waterDepthAt(B.x, nz) > 0.55 && waterDepthAt(B.x, nz + Math.cos(B.ang) * 1.3) > 0.45) nx = B.x;
       else { nx = B.x; nz = B.z; B.stuckT = (B.stuckT || 0) + (tgt > 1 ? 1 : 0); }
       B.spd *= 0.86;
       if (B.spd > 1.5 && (simTick % 14) === 0) SFX.splashSm();
@@ -2251,7 +2262,14 @@ function tickSailing() {
             const aa = ii * (TAU / 24);
             const fx = B.x + Math.sin(aa) * rr, fz = B.z + Math.cos(aa) * rr;
             if (worldSolidAt(fx, fz)) continue;
-            if (waterDepthAt(fx, fz) < 0.7) continue;
+            if (waterDepthAt(fx, fz) < 1.3) continue;
+            // and a runway: she must be able to actually GO somewhere
+            let run = false;
+            for (let dd = 0; dd < 4; dd++) {
+              const da = dd * (TAU / 4);
+              if (waterDepthAt(fx + Math.sin(da) * 12, fz + Math.cos(da) * 12) >= 1.0) { run = true; break; }
+            }
+            if (!run) continue;
             B.x = fx; B.z = fz; B.spd = 1.2;
             sailboatColl.x = B.x; sailboatColl.z = B.z;
             if (SAVE) { SAVE.boatX = B.x; SAVE.boatZ = B.z; storeSave(); }
@@ -2428,7 +2446,7 @@ function tickBoatFollows() {
     for (let i = 0; i < 48; i++) {
       const a = i * (TAU / 48);
       const bx = P.x + Math.sin(a) * r, bz = P.z + Math.cos(a) * r;
-      if (waterDepthAt(bx, bz) < 0.5) continue;
+      if (waterDepthAt(bx, bz) < 1.3) continue;
       if (!boatMooringOK(bx, bz)) continue;
       BOAT.x = bx; BOAT.z = bz;
       sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);

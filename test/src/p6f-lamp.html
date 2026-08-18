@@ -196,14 +196,21 @@ doInteract = function (ctx) {
     SFX.bellSmall ? SFX.bellSmall() : SFX.chime && SFX.chime();
     return;
   }
-  if (ctx.id === 'lampLight') { startCine('lampLight'); return; }
+  if (ctx.id === 'lampLight') { startCine('lampLight'); CAM.mode = 'cine'; return; }
   return _lampDo(ctx);
 };
 
 /* ── the lighting: a short authored beat, then the beam is yours ──────── */
 const _lampTickCine = tickCine;
-tickCine = function (t) {
-  if (CINE.id !== 'lampLight') return _lampTickCine(t);
+tickCine = function () {
+  if (CINE.id !== 'lampLight') return _lampTickCine();
+  /* the base tickCine advances CINE.t itself and is called with NO
+     arguments — this wrap intercepted before delegating, so t was
+     undefined, every branch guard was false, the camera went NaN and the
+     cine could never end: a hard soft-lock at the feature's own payoff.
+     Found in code review before any kid pressed the button. */
+  const t = (CINE.t += DT);
+  if (cineSeen('lampLight') && t > 0.9 && IN.confirm) { CINE.t = 11.99; }
   const bx = LIGHTHOUSE.x, bz = LIGHTHOUSE.z;
   const by = groundH(bx, bz) - 0.3 + 8.95;
   const lx = lampRoom.lamp.x, lz = lampRoom.lamp.z;

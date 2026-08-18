@@ -1329,7 +1329,11 @@ function tickFoundryTone(ctx) {
      door may never trap anybody in stone. */
   const perm = fResPermanent();
   const inDoorway = Math.hypot(P.x - FGLYPH3.x, P.z - FGLYPH3.z) < FGLYPH3.r + 0.9;
-  fResOpenNow = perm || FPZ.toneT > 0 || inDoorway;
+  /* anti-trap only: the door may not RE-ARM around a body standing in it,
+     but 'standing near a shut door' must not open it — as written it was an
+     unconditional open-on-proximity that ghosted players into the boss pit
+     with the tone never rung. */
+  fResOpenNow = perm || FPZ.toneT > 0 || (fResOpenNow && inDoorway);
   const wantK = (perm || FPZ.toneT > 0) ? 1 : 0;
   FPZ.doorK += (wantK - FPZ.doorK) * Math.min(1, DT * 3.4);
   /* through it: the way to the pit stays open for good */

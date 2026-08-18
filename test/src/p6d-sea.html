@@ -311,14 +311,16 @@ inShadeAt = function (x, z) {
 };
 let lastIsleAnchor = -1;                   // the most recent landfall/mooring
 function nearestIsleAnchor(x, z) {
-  if (lastIsleAnchor >= 0 && lastIsleAnchor < ISLE_ANCHORS.length) return ISLE_ANCHORS[lastIsleAnchor];
-  let best = null, bd = 1e9;
+  /* NEAREST, not last-remembered. The stale index sent a player downed on
+     Kiln Isle's beach 1.5km home to the village — with the boat still
+     moored at Kiln. lastIsleAnchor breaks ties only. */
+  let best = -1, bd = 1e9;
   for (let i = 0; i < ISLE_ANCHORS.length; i++) {
     const a = ISLE_ANCHORS[i];
-    const d = Math.hypot(x - a.x, z - a.z);
-    if (d < bd) { bd = d; best = a; }
+    const d = Math.hypot(x - a.sx, z - a.sz) - (i === lastIsleAnchor ? 25 : 0);
+    if (d < bd) { bd = d; best = i; }
   }
-  return best;
+  return best >= 0 ? ISLE_ANCHORS[best] : null;
 }
 const _n2NearestShade = nearestShadeSpot;
 nearestShadeSpot = function (x, z) {
@@ -781,7 +783,7 @@ let chanWaterMesh = null;
     vertexColors: true, transparent: true, opacity: 0.88, depthWrite: false,
   }), false);
   chanWaterMesh.renderOrder = 2;
-  chanWaterMesh.position.y = WL;
+  chanWaterMesh.position.y = WL - 0.05;
   chanWaterMesh.matrixAutoUpdate = false; chanWaterMesh.updateMatrix();
   chanWaterMesh.frustumCulled = false;
   chanWaterMesh.visible = false;
@@ -2759,7 +2761,13 @@ cullChunks = function (ccx, ccz) {
   const gridOn = flooded() && ccx < -78;
   waveMesh.visible = gridOn;
   if (gridOn) updateWaveGrid();
-  chanWaterMesh.visible = flooded() && !gridOn && ccx < 60;
+  chanWaterMesh.visible = flooded() && ccx < 60;
+    /* it owns the trench UNCONDITIONALLY: hiding it while the swell grid was
+       on left the dredged channel as a bare grey seabed whenever the camera
+       sat west of -78 — sailing home crossed a waterless trench (the code
+       reviewer predicted this from the sheet conditions; John photographed
+       it an hour later). It sits a hair lower so the bay plane never
+       coplanar-fights it at the mouth. */
   /* THE DROWNED MOON: only ever seen from above it */
   const dMoon = Math.hypot(ccx - MOON_SITE.x, ccz - MOON_SITE.z);
   const moonVis = west && dMoon < 900;
