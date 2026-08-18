@@ -5707,6 +5707,91 @@ async function suiteIsles(base) {
   c.close(); proc.kill();
 }
 
+
+/* ═══ JOURNEYS: the blind spots the review found — real input, one session ═══ */
+async function suiteJourneys(base) {
+  /* 1. RESUME WHERE YOU STOOD (lastPos had zero coverage; every fixture
+        predates it, so the code path every real family save uses was never
+        executed by a single gate). */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({ ...N2_FLOODED }, true);      // once: later reloads keep live writes
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      await api.eval('__fmBot.tol = 1.2; __fmBot.target = [30, -30]; 0');
+      await api.waitFor('Math.hypot(__fm.x - 30, __fm.z + 30) < 3', 45000, 'walked somewhere distinctive');
+      await api.eval('__fmBot.release(); 0');
+      await api.waitFor('SAVE.lastPos && Math.hypot(SAVE.lastPos[0] - __fm.x, SAVE.lastPos[1] - __fm.z) < 4', 20000, 'lastPos recorded');
+      const wx = await api.eval('__fm.x'), wz = await api.eval('__fm.z');
+      await api.nav(base + '/?turbo=6');                 // quit + relaunch, no reseed
+      await n2ContinueIn(api);
+      const d = await api.eval(`Math.hypot(__fm.x - (${wx}), __fm.z - (${wz}))`);
+      gate('journeys: CONTINUE resumes where you actually stood', d < 4, `Δ=${d.toFixed(1)}m`);
+      /* the John-shaped legacy save: bay region, forest anchor, no lastPos */
+      await api.seedSave({ ...FAMILY_Q4, q: 6, ph: 2, sky: 2, floodSeen: true, region: 'bay',
+        lastShade: [700, 340], lastPos: null }, false);
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      gate('journeys: a legacy bay save never wakes in the forest', (await api.eval('__fm.x')) < 170,
+        'x=' + (await api.eval('__fm.x')).toFixed(0));
+      const bad = api.consoleBad;
+      gate('journeys: zero console errors (resume)', bad.length === 0, bad.slice(0, 2).join(' | '));
+    } catch (e) { gate('journeys resume suite', false, e.message); }
+    c.close(); proc.kill();
+  }
+  /* 2. THE BELL, RUNG FOR REAL, OPENS THE DOORS IN THE SAME SESSION (the
+        suiteIsles gate uses the debug flag — this one walks the input). */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({ ...N2_FLOODED, q: 10, keelFound: true, boatRefit: true, moonSeen: true,
+        isleLandfall: true, watchBell: false, lastPos: [-978, -206], lastShade: [-980, -196] });
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      await api.eval(`__fmBot.tol = 1.2; __fmBot.target = [${-976}, ${-204}]; 0`);   // WATCH_BELL is (-978,-206), prompt radius 4.2
+      await api.waitFor(`__fm.prompt === 'watchbell'`, 60000, 'the bell offers ✕');
+      await api.eval('__fmBot.release(); 0');
+      await tapUntil(api, () => api.tap(0), 'SAVE.watchBell === true', 12, 'RING IT');
+      await api.waitFor(`__fm.state === 'play'`, 40000, 'the ring beat ends');
+      gate('journeys: ✕ at the bell rings it', await api.eval('SAVE.watchBell === true'));
+      gate('journeys: the ring OPENS the Foundry in the same session (no reload)',
+        (await api.eval('__fmDebug.foundryInfo().gate')) === true);
+      const bad = api.consoleBad;
+      gate('journeys: zero console errors (bell)', bad.length === 0, bad.slice(0, 2).join(' | '));
+    } catch (e) { gate('journeys bell suite', false, e.message); }
+    c.close(); proc.kill();
+  }
+  /* 3. THE CONSOLE'S OWN MODE: ?fx=low was never loaded by any test, and the
+        Pi runs nothing else. */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave({ ...N2_FLOODED });
+      await api.nav(base + '/?fx=low&turbo=6');
+      await n2ContinueIn(api);
+      await api.installBot('pad');
+      await api.eval('__fmBot.tol = 1.5; __fmBot.target = [20, -20]; 0');   // dry ground — [20,30] is under the returned sea
+      await api.waitFor('Math.hypot(__fm.x - 20, __fm.z + 20) < 4', 45000, 'walked under lowfx');
+      gate('journeys: LOWFX boots, plays, and walks', true);
+      const bad = api.consoleBad;
+      gate('journeys: zero console errors (LOWFX)', bad.length === 0, bad.slice(0, 2).join(' | '));
+    } catch (e) { gate('journeys lowfx suite', false, e.message); }
+    c.close(); proc.kill();
+  }
+}
+
 const whichArg = process.argv[2] || 'all';
 const parts = whichArg.split(',');
 const which = parts.length > 1 ? 'list' : whichArg;
@@ -5743,6 +5828,7 @@ try {
   if (wants('sail')) await suiteSail(base);
   if (wants('n2shots')) await suiteN2Shots(base);
   if (wants('isles')) await suiteIsles(base);
+  if (wants('journeys')) await suiteJourneys(base);
 } finally {
   srv.close();
 }
