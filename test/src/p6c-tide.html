@@ -1597,7 +1597,50 @@ window.__tideApplySave = function () {
   VOYAGE.active = false; VOYAGE.aboard = false;
   el('cineBars').classList.remove('on');
   if (CAM.mode === 'handoff') CAM.mode = 'follow';
+  rescueStrandedBoat();
 };
+
+/* SHE MUST ALWAYS BE BOARDABLE.
+   Boarding needs you within 4.6m of the hull, and disembark only ever sets
+   you down on dry footing — so the boat can only end up out of reach one
+   way: you QUIT while aboard. Then the save keeps her wherever she was
+   floating, you resume ashore, and there is no way to call her back. John
+   hit exactly this: moored at (15.5, 55.6) in 1.96m of water with NO dry
+   footing within twelve metres, while the quest told him to salvage a keel
+   that needs the boat to reach. A hard soft-lock, from one interrupted sail.
+   So on every load: if she cannot be boarded from anywhere, walk outward
+   until we find water she still floats in that DOES have a footing beside
+   it, and moor her there. Nearest valid spot, so she stays as close to
+   where you left her as the bay allows. */
+function boatMooringOK(bx, bz) {
+  for (let r = 1.7; r <= 4.1; r += 0.8) {
+    for (let i = 0; i < 12; i++) {
+      const a = i * (TAU / 12);
+      const px = bx + Math.sin(a) * r, pz = bz + Math.cos(a) * r;
+      if (worldSolidAt(px, pz)) continue;
+      const sy = supportYAt(px, pz, WL + 2.5);
+      if (sy > WL - 0.35 && sy < WL + 2.0) return true;
+    }
+  }
+  return false;
+}
+function rescueStrandedBoat() {
+  if (!flooded() || !FLOODLIVE.boatDone) return;
+  if (boatMooringOK(BOAT.x, BOAT.z)) return;          // already reachable
+  for (let r = 2; r <= 120; r += 2) {
+    for (let i = 0; i < 32; i++) {
+      const a = i * (TAU / 32);
+      const px = BOAT.x + Math.sin(a) * r, pz = BOAT.z + Math.cos(a) * r;
+      if (waterDepthAt(px, pz) < 0.4) continue;        // she must still float
+      if (!boatMooringOK(px, pz)) continue;
+      BOAT.x = px; BOAT.z = pz;
+      sailboat.group.position.set(BOAT.x, WL - 0.42, BOAT.z);
+      sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
+      if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
+      return;
+    }
+  }
+}
 </script>
 <script>
 /* ═══════════ p6c/5 — cinematics: the resonance, the cure, THE TIDE (seamless) ═══════════ */

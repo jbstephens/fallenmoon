@@ -212,9 +212,35 @@ function titleCam(now) {
 }
 
 /* ── apply a save (CONTINUE) — the derivation itself lives in applyWorldState ── */
+/* WHERE YOU ACTUALLY WERE.
+   lastShade is the SUNSTRUCK respawn anchor — the shade you wake in after
+   fainting — and it is written in exactly three places: the sunstruck
+   cinematic, touching a forest spring, and the flood. Nothing in ordinary
+   Brightharbor play touches it. Resuming a save from it therefore pinned
+   you to the last forest spring you walked past: John touched spring #1,
+   walked the whole way home, sailed for an evening, quit, and came back
+   700m deep in the Parched Forest. His save showed it exactly —
+   region 'bay', boat moored at [16,56], lastShade [700,340] = FSPRINGS[1].
+   So CONTINUE now resumes at lastPos, recorded from real play, and
+   lastShade goes back to being only what its name says. */
+let posSaveT = 0;
+function recordLastPos() {
+  if (!SAVE || state !== 'play') return;
+  if (P.sailing) return;                                   // never resume adrift
+  if (typeof roomAt === 'function' && roomAt(P.x, P.z)) return;   // resume outdoors
+  posSaveT += DT;
+  if (posSaveT < 2.5) return;
+  posSaveT = 0;
+  const p = SAVE.lastPos;
+  if (p && Math.hypot(p[0] - P.x, p[1] - P.z) < 1.5) return;      // no idle churn
+  SAVE.lastPos = [P.x, P.z];
+  storeSave();
+}
 function applySave() {
   applyWorldState();
-  P.x = SAVE.lastShade[0]; P.z = SAVE.lastShade[1];
+  const rp = (SAVE.lastPos && isFinite(SAVE.lastPos[0]) && isFinite(SAVE.lastPos[1]))
+    ? SAVE.lastPos : SAVE.lastShade;      // old saves fall back, and still work
+  P.x = rp[0]; P.z = rp[1];
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI;
   P.st = 'idle'; P.vx = 0; P.vz = 0; P.iframes = 0;
@@ -540,6 +566,7 @@ function tickSim() {
       tickHomeChest();
       tickRoomChests(); tickLightChest(); tickClock(); tickBoat();   // v4.5
       tickSalt();
+      recordLastPos();
       if (IN.pause) { setState('pause'); pauseFocus = 0; refreshPause(); SFX.menu(); }
       break;
     }
