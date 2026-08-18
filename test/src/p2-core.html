@@ -24,7 +24,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P3-DRYBILGE-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-P4-WINDHOME-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ───────────────────────── math utils ───────────────────────── */
@@ -532,6 +532,17 @@ function defaultSave() {
     garSeen: false,           // one-time teaching caption for the first reef gar
     resumeAboard: false,      // quit at the helm = resume at the helm
     lampLit: false,           // Finn's lamp room — lit once the sun moves
+    /* PHASE 4 — THE CROWN & THE WIND'S RETURN */
+    crownGlint: false,        // saw the gold-hour glint from the tower top
+    stairOpen: false,         // the Falls Stair crack answered
+    organ1: false, organ2: false, organ3: false,   // the wind organ, tuned
+    crownSeen: false,         // stood on the Crown (region title shown)
+    beaconHeart: false,       // the beacon ruin's heart container
+    crownChest1: false, crownChest2: false,
+    stagDone: false,          // the Ash Stag cured
+    riverWet: false,          // THE SILVERRUN RUNS — derived world, both ways
+    skiffX: null, skiffZ: null,   // where the skiff is tied up
+    tbc4Seen: false,
     tbc2Seen: false, tbc3Seen: false,   // end cards shown once each
     lastPos: null,            // where you ACTUALLY were — what CONTINUE resumes to
     lastShade: [8.2, 7.0],    // the SUNSTRUCK respawn anchor, and only that
@@ -574,6 +585,12 @@ function loadSave() {
     if (out.moonSeen || out.isleLandfall) qMin = Math.max(qMin, 10);
     if (out.tortoiseDone) qMin = Math.max(qMin, 11);
     if (out.sky >= 3 || out.ph >= 3) qMin = Math.max(qMin, 12);
+    /* phase 4 */
+    if (out.crownGlint) qMin = Math.max(qMin, 13);
+    if (out.stairOpen) qMin = Math.max(qMin, 14);
+    if (out.crownSeen) qMin = Math.max(qMin, 15);
+    if (out.stagDone) qMin = Math.max(qMin, 15);  // pickup beat preserved (tortoise lesson)
+    if (out.sky >= 4 || out.ph >= 4) qMin = Math.max(qMin, 17);
     if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }

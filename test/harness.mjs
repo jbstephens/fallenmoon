@@ -3123,8 +3123,12 @@ async function suiteForest(base) {
         await topUp();
         await api.eval('__fmBot.noWiggle = true');
         try {
-          for (const [x, z] of [[1095.7, 814.35], [1104.3, 814.35], [1104.35, 806.0], [1096.0, 805.65], [1095.65, 813.8], [1100, 810]]) {
-            await api.walkTo(x, z, 0.7, 45000);
+          /* mid-side waypoints ON each step line: a corner reached 0.7m wide
+             put the next traverse off the stairs entirely (fell every lap) */
+          for (const [x, z] of [[1095.7, 814.35], [1100, 814.35], [1104.3, 814.35],
+                                [1104.35, 810], [1104.35, 806.0], [1100, 805.65],
+                                [1096.0, 805.65], [1095.65, 810], [1095.65, 813.8], [1100, 810]]) {
+            await api.walkTo(x, z, 0.5, 45000);
             if (!(await api.eval('__fm.fy > groundH(__fm.x, __fm.z) - 0.2 || true'))) break;
           }
         } catch (e) { /* fell — try again */ }
@@ -3400,9 +3404,17 @@ async function suiteForest(base) {
           'maxHearts=' + await api.eval('__fm.maxHearts'));
         g('persist: warden + hum remembered',
           await api.eval('__fm.wardenTalked === 2 && __fm.fallsHum === true'));
-        g('persist: woke at the saved spring anchor',
-          await api.eval(`(function(){ const s = FSPRINGS[__fm.lastSpring]; return !!s && Math.hypot(__fm.x - s.x, __fm.z - s.z) < 8; })()`),
-          'spring=' + await api.eval('__fm.lastSpring') + ' pos=' + await api.eval('__fm.x.toFixed(0) + "," + __fm.z.toFixed(0)'));
+        /* CONTINUE now resumes where you actually stood (lastPos, John's
+           field fix) — the spring is the SUNSTRUCK anchor, not the resume
+           point. This gate drifted the day lastPos shipped: assert the new
+           contract (resume near the walked spot) AND that the spring anchor
+           itself survived for the next faint. */
+        g('persist: CONTINUE resumes where the walk ended (lastPos)',
+          await api.eval(`SAVE.lastPos ? Math.hypot(__fm.x - SAVE.lastPos[0], __fm.z - SAVE.lastPos[1]) < 6 : true`),
+          'pos=' + await api.eval('__fm.x.toFixed(0) + "," + __fm.z.toFixed(0)'));
+        g('persist: the spring anchor survives for the next sunstruck',
+          await api.eval(`(function(){ const s = FSPRINGS[__fm.lastSpring]; return !!s; })()`),
+          'spring=' + await api.eval('__fm.lastSpring'));
       }
 
       const bad = api.consoleBad;
@@ -3848,6 +3860,8 @@ try {
     if (isForest(x, z) ? window.__forestSolid(x, z) : worldSolidAt(x, z)) continue;
     if (window.__hollowAt && window.__hollowAt(x, z)) continue;   // the Falls Hollow has its own sweep
     if (typeof roomAt === 'function' && roomAt(x, z)) continue;
+    if (typeof KROWN !== 'undefined' && x >= KROWN.x0 && x <= KROWN.x1
+        && z >= KROWN.z0 && z <= KROWN.z1) continue;   // the Crown owns its ground (p6g-struct sweeps it)
     __fmDebug.warp(x, z);
     P.hearts = P.maxHearts; swelterT = 0; P.iframes = 300;
     res.pts++;
@@ -4702,10 +4716,16 @@ async function suiteWyrm(base) {
     /* KID BOT: only ever slashes whatever is near — body chips must win */
     const phasesSeen = new Set();
     const phaseHp = {};
-    let cureStart = 0;
+    /* the cure cine spans ~10 FRAMES at turbo 8 — a poll gap swallows it
+       whole (it did: cureStart stayed 0 and the gate read page-epoch).
+       An in-page rAF monitor sees every frame; CDP polling cannot. */
+    await api.eval(`window.__cureT0 = 0; window.__cureT1 = 0; (function cm() {
+      if (window.__cureT0 === undefined) return;
+      if (!window.__cureT0 && CINE.id === 'wyrmCure') window.__cureT0 = simTick;
+      if (window.__cureT0 && !window.__cureT1 && CINE.id !== 'wyrmCure') window.__cureT1 = simTick;
+      requestAnimationFrame(cm); })(); 0`);
     for (let i = 0; i < 400; i++) {
-      const st = await api.eval('__fm.state');
-      if (st === 'cine') { cureStart = await api.eval('__fm.tick'); break; }
+      if (await api.eval('window.__cureT0 > 0 || __fm.wyrmDone === true')) break;
       const ph = await api.eval('__fm.wyrmPhase');
       phasesSeen.add(ph);
       const hp = await api.eval('__fm.wyrmHp');
@@ -4732,9 +4752,9 @@ async function suiteWyrm(base) {
 
     /* THE CURE: it dissolves into water, bows, leaves the Shield floating */
     await api.eval('window.__fmTurbo = 2');
-    await api.waitFor(`__fm.state === 'play'`, 40000, 'cure cinematic ends');
+    await api.waitFor(`window.__cureT1 > 0 && __fm.state === 'play'`, 40000, 'cure cinematic ends');
     await api.eval('window.__fmTurbo = undefined');
-    const cureTicks = (await api.eval('__fm.tick')) - cureStart;
+    const cureTicks = await api.eval('window.__cureT1 - window.__cureT0');
     gate('wyrm: cure cinematic ≤ 12 s and shows the water', cureTicks / 60 <= 12.8, (cureTicks / 60).toFixed(1) + 's');
     gate('wyrm: the pool is WET and the Half Shield floats on it',
       (await api.eval('__fm.poolWet')) === true && (await api.eval('__fm.wyrmDone')) === true);

@@ -1039,3 +1039,117 @@ DISCOVERY. Budgets ≤80 draw calls / ≤120k tris measured under full
 sail in the big sets and in the foundry. Build-unique deploy marker
 verified absent from the previous bundle. The family save must
 continue seamlessly into all of it.
+
+---
+
+# PHASE 4 — THE WAXING SLIVER: THE CROWN & THE WIND'S RETURN
+(locked 2026-08-17 overnight; John ratified the pitch — "go ahead and build
+the next phase... make this great" — and gave one directive that outranks
+everything else in this section: THE PUZZLE. His words on phase 3's bells:
+"you didn't tell you outright, but you kinda figured out that you had to
+match the sound. It was honestly a magical moment. The whole family was
+playing." Phase 4's puzzle must be that moment's descendant.)
+
+## THE REVEAL — the sun you freed shows you the way
+At GOLD HOUR (the phase-3 sun arc, low in the west), from the top of the
+fire-watch tower, the sun GLINTS off something on the CROWN — the sealed
+plateau above the Dried Falls, "solid, unclimbable" since night one. A
+visible pulsing star-glint on the summit, only during the gold band.
+Standing at the tower top during a glint sets the thread (crownGlint,
+quest 13); the Warden, if talked to after: "That light's off the old
+watch-garden. Nothing's caught the sun up there since the wind died."
+Phase 3's payoff literally reveals phase 4's goal — the spine working.
+
+## THE WAY UP — THE FALLS STAIR
+Behind the dry falls: the fire-watch order's carved stair, climbing INSIDE
+the rock the water once poured over. Entered from the Falls Hollow's upper
+gallery — a crack that, after crownGlint, gains a prompt and a one-line
+hint ("Gold light falls through here, evenings."). The stair is a new
+dungeon segment extending the Hollow UPWARD: three tall landings, dry
+plunge-shafts, the bones of the order's rope-lifts.
+
+## THE WIND ORGAN — the puzzle (the whole rev bends to this)
+The order carved AEOLIAN PIPES up the stair — the mountain itself is an
+instrument, and it has been silent for a year. As you enter, a faint CHORD
+hums from somewhere above: the target, always audible, never explained.
+Each landing has stone VENTS with rotatable shutters (hold ✕ to turn —
+the mirror-shell verb, third generation). An open vent WHISTLES; turning
+the shutter bends its pitch, continuously, like tuning a radio. Match the
+landing's vents to the chord you hear:
+  L1 — ONE vent. Learn the verb by ear: turn until your note sits inside
+       the hum. Pipes warm-glow when true, door grinds open.
+  L2 — TWO vents, a two-note chord. Tune them against each other AND the
+       hum. (The chord is consonant when right — kids hear "it stopped
+       being sour" without knowing why.)
+  L3 — THREE vents, and the WIND GUSTS: pitches drift slowly, so you tune
+       all three inside a gust's calm. Generous windows (the 15s tone
+       lesson: tuned for a 7-year-old's fumbling, not a bot).
+No text explains any of it. Colour + sound + doors opening. When all three
+landings sing, THE WHOLE STAIR PLAYS — the order's old dawn call rolls
+down the cliff (authored ≤12s beat, the organ's own cinematic) and the
+top door opens onto the Crown.
+
+## THE CROWN — the summit region
+Compact and precious (~0.4 x 0.3km): the fire-watch order's WATCH-GARDEN —
+dead orchard terraces, a beacon ruin, a wind shrine of carved pinwheels
+(all frozen), the Sliver's plinth arena at the summit. THE VIEW is the
+reward for arriving: from up there the whole healed world is visible at
+once — the flooded bay, the isles, the sea, the forest below (far tiers
+already exist; frame it). Hostiles: EMBER FAWNS — small, quick, leaping;
+2 hits; cured they turn warm brown and bound away. Hornets drift the
+terraces. Chests: salt seams, one HEART CONTAINER in the beacon ruin.
+
+## THE GUARDIAN — THE ASH STAG
+A great deer of ash and ember, the WAXING SLIVER caught in its antlers
+(the guardians WEAR the phases: crab, wyrm, tortoise, stag). Fought on the
+orchard terraces — a VERTICAL arena for the jump verb.
+  P1: telegraphed charges (paw, huff ember-smoke, rush); sidestep or jump;
+      a charge into a terrace wall staggers it = the window. Body chips
+      always land (law).
+  P2: it LEAPS between terrace levels and rains ember motes — move under
+      the dead orchard boughs (cover play).
+  P3: it calls a FAWN STAMPEDE across the arena — jump the line (taught by
+      the boars' tree-stun cousin logic; visible, fair).
+HP ~78, notches, kid-bot-wins gate WITH the chasing bot. The cure: the ash
+blows off grey-to-warm-brown, the fawns gather to it, it bows, and dips
+its antlers to hand you the Sliver. Nothing dies.
+
+## THE PAYOFF — COOL WINDS COME HOME (the biggest world-change yet)
+Slot the Sliver at the Moonwheel: fourth notch, fourth star, sky step 4 —
+then THE WIND: a visible grass-wave front sweeps across the Parched Forest
+as it re-greens IN FRAME — burnt rust to living green, needle carpet to
+meadow. THE SWELTER RETIRES, permanently: the region's hazard simply ends
+(the sun icon by the hearts takes a final leaf chime and never returns).
+Burnt thickets soften and open the three blocked shortcut paths. And THE
+SILVERRUN RUNS AGAIN: water sweeps down the riverbed from the falls (the
+flood beat's inland echo, ≤12s), waterwheels turn, the ferry floats, the
+Dried Falls POUR.
+
+## THE SKIFF — the river becomes the ride
+A pilotable SKIFF on the living Silverrun (boat physics constrained to the
+river spine, current-assisted downstream): board at the falls pool or the
+ferry landing, ride the whole 2.5km spine down to the bay mouth, hop out
+at any landing. The road you trudged all of phase 2 becomes the joyride
+home, and it connects the forest to your sailing water. Wisps fizz over
+the wet river. (Upstream is slow but possible — no one-way traps.)
+
+## Save/quest scaffolding (pinned)
+Flags: crownGlint, stairOpen, organ1/2/3, crownSeen, beaconHeart,
+crownChests..., stagDone, sunArc unchanged, riverWet (the big one —
+derived world both ways), skiffX/skiffZ, tbc4Seen. Quest: 13 FOLLOW THE
+GOLD LIGHT, 14 CLIMB THE FALLS STAIR, 15 RECOVER THE WAXING SLIVER,
+16 CARRY THE SLIVER TO THE MOONWHEEL, 17 4/8 PHASES RESTORED. Forward
+derivation: stagDone→15(pickup preserved, tortoise lesson), sky>=4→17.
+
+## Process law — everything already standing, PLUS tonight's lessons as law
+- Every flag applies LIVE at its set-site (storeSave + applyWorldState);
+  doors are solid when shut; thresholds get portals + light gradients
+  (the door law); interiors are capped — NO SKY from inside; any water
+  craft obeys the 1.3m mooring depth + runway rule; the water yields to
+  any hull it renders around; boxW takes HALF-extents; small craft hulls
+  are double-sided.
+- Puzzle timing tuned for cold 7-year-olds (the 15s tone lesson).
+- Harness: real-input organ suite (tune by ear = assert via telemetry pitch
+  distance shrinking under held ✕, doors opened by REAL tuning); the
+  one-session glint→stair→crown journey gate; kid-bot CHASES; lastPos
+  resume gate; crown perf on 8 sample points; full regression.

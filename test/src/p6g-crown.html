@@ -1,0 +1,3290 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PHASE 4, PART ONE — THE FALLS STAIR, THE WIND ORGAN & THE CROWN
+
+   Owns: the gold-hour glint reveal, the Falls Stair dungeon segment, the
+   WIND ORGAN puzzle (the rev's heart), the Crown summit region, ember
+   fawns, the ASH STAG, and the Sliver pickup.
+
+   Does NOT own: the payoff (re-green, swelter retirement, the living
+   Silverrun, the skiff, sky step 4, the end card) — that is
+   p6h-green.html, concatenated after this file.
+
+   ARCHITECTURE: extends by wrapping (the p6b/p6c/p6e pattern) — groundH,
+   the forest solid authority, inShadeAt, nearestShadeSpot, areaAt,
+   collide (the world clamp predates the Crown), currentInteract,
+   doInteract, tickPlayer, swingHits, cullChunks, objectivePoint,
+   updateCamera, startCine, tickCine, respawnLeftBehind. TWO ground
+   authorities, each rendered == physics by construction (makeMeshField):
+   the CROWN sheet (always live in its own field) and the FALLS STAIR
+   floor (live only while the player is inside the stair volume, because
+   the stair climbs over the top of the Falls Hollow and one x,z can only
+   answer one height). ONE save derivation pushed into
+   window.__worldStateHooks — both ways. ONE telemetry hook.
+
+   WHAT p6h INHERITS (page scope, and none of it is private):
+     KROWN · STAIR_IN/L1/L2/L3/OUT · K_TERRACES · K_BEACON · K_SHRINE ·
+     K_PLINTH · K_SHADE   — the pinned geography, unchanged
+     K_PADS / K_RAMPS / crownY(x,z) / inGardenWalkQ(x,z)  — the garden
+     window.__crownPinwheels  — six shrine wheels; spin their rotation.z
+       when the wind comes home (this part resets them to 0 on derive, and
+       p6h's world hook runs AFTER this one, so it wins)
+     sliverItem / buildSliverItem()  — the fourth phase, and its halo in
+       userData.halo. While P.carrySliver is true this part rides it on
+       Wick's back in state play/dialog/pause ONLY, so a p6h cinematic can
+       drive it freely; P.carrySliver derives here from q === 16 &&
+       stagDone && sky < 4, so setting sky 4 puts it down for good.
+     STAG.sliverTaken  — true from q ≥ 16 or sky ≥ 4
+   ═══════════════════════════════════════════════════════════════════════ */
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
+
+/* ── PINNED GEOGRAPHY (authoritative; p6h reads these) ───────────────── */
+/* the Crown sits on the plateau above the Dried Falls (CROWN, BASIN and
+   the falls face are p6b's). Stair climbs inside the falls rock. */
+const KROWN = { x0: 1950, x1: 2350, z0: 1250, z1: 1560 };   // summit bounds
+const STAIR_IN  = { x: 1978, z: 1243 };    // the Hollow's upper-gallery crack
+const STAIR_L1  = { x: 2002, z: 1268, y: 40 };
+const STAIR_L2  = { x: 2024, z: 1294, y: 58 };
+const STAIR_L3  = { x: 2046, z: 1320, y: 76 };
+const STAIR_OUT = { x: 2066, z: 1342 };    // opens onto the Crown
+const K_TERRACES = { x: 2160, z: 1420, r: 60 };   // orchard terraces + arena
+const K_BEACON   = { x: 2060, z: 1490, r: 18 };   // beacon ruin (heart)
+const K_SHRINE   = { x: 2260, z: 1330, r: 14 };   // pinwheel wind shrine
+const K_PLINTH   = { x: 2160, z: 1470 };          // the Sliver plinth (arena crown)
+const K_SHADE = [ { x: 2060, z: 1490, r: 6 }, { x: 2160, z: 1420, r: 6 },
+                  { x: 2260, z: 1330, r: 5 }, { x: 2070, z: 1345, r: 5 } ];
+
+/* ═══════════════════ THE CROWN'S SHAPE ═══════════════════
+   The watch-garden is a set of flat PADS joined by RAMPS, sitting on top
+   of the mountain the Parched Forest already models. Everything outside
+   the pads is crag: solid by construction, so the only way onto the Crown
+   is the stair, and there is no edge to fall off.
+
+   The heightfield rule that keeps this honest: the Crown surface is never
+   allowed BELOW the forest's own surface, so p6b's mountain can never
+   poke through the garden floor. Verified point-by-point by the probe. */
+const K_PADS = [
+  { id: 'ledge',  x: 2066, z: 1342, r: 16, y: 141 },   // the stair mouth court
+  { id: 'saddle', x: 2112, z: 1370, r: 13, y: 136 },   // the gate through the rim
+  /* the three terraces are deliberately NOT touching: the gap between two
+     pads IS the terrace face, and a face the Stag can trip over is the
+     whole reason a terraced arena is worth building */
+  { id: 't1',     x: 2160, z: 1390, r: 16, y: 122 },   // upper orchard terrace
+  { id: 't2',     x: 2160, z: 1428, r: 16, y: 117 },   // middle terrace
+  { id: 't3',     x: 2158, z: 1470, r: 20, y: 112 },   // lower terrace + the plinth
+  { id: 'beacon', x: 2060, z: 1490, r: 18, y: 112 },   // the beacon ruin spur
+  { id: 'east',   x: 2232, z: 1384, r: 16, y: 120 },   // the east walk
+  { id: 'shrine', x: 2260, z: 1330, r: 16, y: 124 },   // the pinwheel shrine
+  { id: 'gate',   x: 2080, z: 1366, r: 7,  y: 135 },   // the notch the stair opens into
+];
+const K_PAD = {};
+for (const p of K_PADS) K_PAD[p.id] = p;
+const K_RAMPS = [
+  { a: 'gate', b: 'ledge', hw: 6 },
+  { a: 'ledge', b: 'saddle', hw: 7 },
+  { a: 'saddle', b: 't1', hw: 7 },
+  { a: 't1', b: 't2', hw: 8 },
+  { a: 't2', b: 't3', hw: 9 },
+  { a: 't3', b: 'beacon', hw: 8 },
+  { a: 't1', b: 'east', hw: 6.5 },
+  { a: 'east', b: 'shrine', hw: 6.5 },
+];
+for (const r of K_RAMPS) {
+  const A = K_PAD[r.a], B = K_PAD[r.b];
+  r.ax = A.x; r.az = A.z; r.ay = A.y; r.bx = B.x; r.bz = B.z; r.by = B.y;
+}
+/* THE VIEW: where the rim is deliberately absent and the ground falls
+   away, so from the parapet you see the whole world you healed. */
+/* Only the ledge gets windows: it is the one lip of the Crown with a
+   thousand metres of real world in front of it. Everywhere else the rim
+   stays shut — a window with nothing behind it is a hole in the world. */
+const K_WINDOWS = [
+  { x: 2046, z: 1302, r: 22 },      // north, straight down the falls face
+  { x: 2032, z: 1320, r: 20 },      // north-west, over the plateau and the forest
+  { x: 2040, z: 1340, r: 16 },      // west
+];
+const K_GATE = { x: 2076, z: 1362 };   // the stair's threshold onto the Crown
+/* crag knobs: the rock the stair's last flight climbs UNDER. Without them
+   the top of the stair would surface on the mountainside. */
+const K_KNOBS = [
+  { x: 2035, z: 1367, r: 22, h: 15 },
+  { x: 2010, z: 1382, r: 18, h: 12 },
+  { x: 1992, z: 1352, r: 16, h: 10 },
+];
+const KBOX = { x0: 2000, z0: 1270, x1: 2320, z1: 1540 };
+const K_WALK = 8;        // the walkable fringe past every pad/ramp edge
+const K_SKIRT = 30;      // how far the crag skirt runs before it is mountain again
+
+const K_ARENA = { x: 2160, z: 1428, r: 46 };      // the Ash Stag's ground
+/* the orchard's dead boughs — cover from the ember rain (and the shade
+   they still throw). Their trunks are colliders; standing under one is
+   what keeps embers off you. */
+/* THE ORCHARD, in the order's own rows. Dead as it is, it still throws
+   shade — which makes the terraces survivable in the swelter AND is the
+   cover the ember rain cannot reach through. One thing, two jobs, and the
+   plinth court left deliberately bare: the Stag's own patch of open sun. */
+const K_BOUGHS = [
+  [2144, 1380], [2160, 1377], [2176, 1380], [2140, 1398], [2180, 1398],
+  [2142, 1418], [2160, 1414], [2178, 1418], [2142, 1440], [2178, 1440],
+  [2140, 1458], [2178, 1460], [2138, 1484], [2180, 1484],
+].map(([x, z]) => ({ x, z, r: 6.4 }));
+/* retaining walls along the terrace lips: what the Stag brains itself on */
+const K_WALLS = [
+  { ax: 2136, az: 1409, bx: 2152, bz: 1409, y: 122 },
+  { ax: 2170, az: 1409, bx: 2186, bz: 1409, y: 122 },
+  { ax: 2136, az: 1449, bx: 2150, bz: 1449, y: 117 },
+  { ax: 2172, az: 1449, bx: 2186, bz: 1449, y: 117 },
+];
+
+const _preCrownGroundH = groundH;
+const _preCrownFSolid = window.__forestSolid;
+const _preCrownInShade = inShadeAt;
+const _preCrownNearShade = nearestShadeSpot;
+const _preCrownAreaAt = areaAt;
+
+/* ── distances into the garden ── */
+function kPadD(p, x, z) { return Math.hypot(x - p.x, z - p.z) - p.r; }
+const _kseg = [0, 0];
+function kRampD(r, x, z) {
+  const dx = r.bx - r.ax, dz = r.bz - r.az;
+  const L2 = dx * dx + dz * dz || 1;
+  const t = clamp(((x - r.ax) * dx + (z - r.az) * dz) / L2, 0, 1);
+  _kseg[0] = t;
+  _kseg[1] = Math.hypot(x - (r.ax + dx * t), z - (r.az + dz * t));
+  return _kseg[1] - r.hw;
+}
+/* distance OUTSIDE the garden footprint: 0 anywhere on a pad or a ramp */
+function crownDG(x, z) {
+  let best = 1e9;
+  for (let i = 0; i < K_PADS.length; i++) best = Math.min(best, kPadD(K_PADS[i], x, z));
+  for (let i = 0; i < K_RAMPS.length; i++) best = Math.min(best, kRampD(K_RAMPS[i], x, z));
+  return Math.max(0, best);
+}
+/* the garden height: inverse-square blend of pads and ramps. Flat on a pad
+   (the nearest source outweighs everything else by three orders), a clean
+   ramp between two, and continuous everywhere — one function, so the
+   rendered sheet and the ground the player walks are the same surface. */
+function crownBlend(x, z) {
+  let ws = 0, hs = 0;
+  for (let i = 0; i < K_PADS.length; i++) {
+    const p = K_PADS[i];
+    const d = Math.max(0.7, kPadD(p, x, z));
+    const w = 1 / (d * d);
+    ws += w; hs += w * p.y;
+  }
+  for (let i = 0; i < K_RAMPS.length; i++) {
+    const r = K_RAMPS[i];
+    const d = Math.max(0.7, kRampD(r, x, z));
+    const w = 1 / (d * d);
+    ws += w; hs += w * lerp(r.ay, r.by, smoothstep(_kseg[0]));
+  }
+  return hs / ws;
+}
+function crownRimK(x, z) {
+  let k = 1;
+  for (let i = 0; i < K_WINDOWS.length; i++) {
+    const w = K_WINDOWS[i];
+    const d = Math.hypot(x - w.x, z - w.z);
+    if (d < w.r) k = Math.min(k, smoothstep(clamp((d - w.r * 0.55) / (w.r * 0.45), 0, 1)));
+  }
+  return k;
+}
+function crownRaw(x, z) {
+  const g = crownBlend(x, z);
+  const f = _forestSheetH(x, z) + 0.25;
+  const dG = crownDG(x, z);
+  let y;
+  if (dG <= K_WALK) y = g;
+  else {
+    /* THE RIM. It is not decoration: the world simply ENDS south and east
+       of here, and a garden on a mountain top with a low wall shows the
+       player the sky where the ground should be. High enough that from
+       anywhere inside, the crag — not the void — is what the eye falls on. */
+    const t = smoothstep(clamp((dG - K_WALK) / K_SKIRT, 0, 1));
+    const rise = 27 * crownRimK(x, z) * Math.sin(Math.PI * clamp((dG - K_WALK) / (K_SKIRT * 0.92), 0, 1));
+    y = lerp(g, f, t) + rise;
+  }
+  for (let i = 0; i < K_KNOBS.length; i++) {
+    const k = K_KNOBS[i];
+    const d = Math.hypot(x - k.x, z - k.z);
+    if (d < k.r * 2.2) y = Math.max(y, f + k.h * Math.exp(-(d * d) / (k.r * k.r)));
+  }
+  /* worn stone and dry grass: gentle, so a 3 m lattice can carry it — and
+     ironed flat at the threshold, where the stair's floor has to meet the
+     Crown's without a step under the doorway */
+  const nAmp = smoothstep(clamp((Math.hypot(x - K_GATE.x, z - K_GATE.z) - 3) / 7, 0, 1));
+  y += (vnoise(x * 0.07, z * 0.07) * 0.42 + vnoise(x * 0.23 + 4, z * 0.23) * 0.12) * nAmp;
+  return Math.max(y, f);
+}
+/* the forest's own sheet, read straight (never through the wrapped chain —
+   the Falls Hollow lives under part of this box and must not answer for
+   the mountain's outside surface) */
+function _forestSheetH(x, z) { return forestHMesh(x, z); }
+
+/* 2 m triangles across the garden, 4 m across the crag: the sheet carries
+   its own colour per vertex, so the lattice IS the texture resolution —
+   at 6 m the terraces read as one poured plane no matter what is painted
+   on them. */
+const K_FINE = (x, z) => crownDG(x, z) < 18;
+const crownHMesh = makeMeshField(crownRaw, KBOX.x0, KBOX.z0, KBOX.x1, KBOX.z1, 4, K_FINE);
+function inKBox(x, z) { return x > KBOX.x0 && x < KBOX.x1 && z > KBOX.z0 && z < KBOX.z1; }
+function inCrownFieldQ(x, z) { return inKBox(x, z) && crownDG(x, z) < K_SKIRT + 8; }
+function inGardenWalkQ(x, z) { return inKBox(x, z) && crownDG(x, z) <= K_WALK; }
+function crownY(x, z) { return crownHMesh(x, z); }
+
+/* ═══════════════════ THE FALLS STAIR ═══════════════════
+   Six nodes, five flights, climbing 110 m inside the rock the water used
+   to pour over. The pinned landings carry the wind organ; the last two
+   turns are the order's old rope-lift shafts. */
+const S_NODES = [
+  { id: 'mouth', x: 1982.5, z: 1248.5, y: 0, r: 3.6 },     // y set from the hollow floor
+  { id: 'l1', x: STAIR_L1.x, z: STAIR_L1.z, y: STAIR_L1.y, r: 7.5 },
+  { id: 'l2', x: STAIR_L2.x, z: STAIR_L2.z, y: STAIR_L2.y, r: 9.0 },
+  { id: 'l3', x: STAIR_L3.x, z: STAIR_L3.z, y: STAIR_L3.y, r: 10.0 },
+  { id: 'a', x: 1988, z: 1348, y: 100, r: 5.0 },
+  { id: 'b', x: 2012, z: 1382, y: 120, r: 5.0 },
+  { id: 'out', x: K_GATE.x, z: K_GATE.z, y: 135, r: 4.0 },
+];
+const S_NODE = {};
+for (const n of S_NODES) S_NODE[n.id] = n;
+S_NODE.mouth.y = _preCrownGroundH(S_NODE.mouth.x, S_NODE.mouth.z) + 0.05;
+S_NODE.out.y = crownY(S_NODE.out.x, S_NODE.out.z);
+const S_LEGS = [];
+for (const [a, b] of [['mouth', 'l1'], ['l1', 'l2'], ['l2', 'l3'], ['l3', 'a'], ['a', 'b'], ['b', 'out']]) {
+  const A = S_NODE[a], B = S_NODE[b];
+  S_LEGS.push({ a, b, ax: A.x, az: A.z, ay: A.y, bx: B.x, bz: B.z, by: B.y, hw: 3.0 });
+}
+const SBOX = { x0: 1972, z0: 1236, x1: 2076, z1: 1396 };
+const S_LAND_H = 9.2;      // a landing's headroom (tall: the pipes live there)
+const S_LEG_H = 6.4;       // a flight's headroom
+/* the two doorways duck: a low throat is what makes a doorway read as one,
+   and it keeps the stair's cap under the mountain's own skin at the top */
+function sHead(id) { return id === 'mouth' ? 3.6 : id === 'out' ? 3.4 : S_LAND_H; }
+
+function sLegT(l, x, z) {
+  const dx = l.bx - l.ax, dz = l.bz - l.az;
+  const L2 = dx * dx + dz * dz || 1;
+  const t = clamp(((x - l.ax) * dx + (z - l.az) * dz) / L2, 0, 1);
+  _kseg[0] = t;
+  _kseg[1] = Math.hypot(x - (l.ax + dx * t), z - (l.az + dz * t));
+  return _kseg[1];
+}
+/* the two throats: the last stretch at either doorway, where the stair is
+   within touching distance of the open air. Nothing is capped there — the
+   portal frame is the lintel, and a cap would be a black slab lying on
+   the mountainside (measured: 4.3 m of it, at the exit). */
+function stairThroatQ(x, z) {
+  return Math.hypot(x - S_NODES[0].x, z - S_NODES[0].z) < S_NODES[0].r + 4.0 ||
+    Math.hypot(x - S_NODES[6].x, z - S_NODES[6].z) < S_NODES[6].r + 7.5;
+}
+function stairOpenCore(x, z) {
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    if (Math.hypot(x - n.x, z - n.z) < n.r + 0.6) return true;
+  }
+  for (let i = 0; i < S_LEGS.length; i++) {
+    if (sLegT(S_LEGS[i], x, z) < S_LEGS[i].hw) return true;
+  }
+  return false;
+}
+function inStairFieldQ(x, z) {
+  if (!(x > SBOX.x0 && x < SBOX.x1 && z > SBOX.z0 && z < SBOX.z1)) return false;
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    if (Math.hypot(x - n.x, z - n.z) < n.r + 3.0) return true;
+  }
+  for (let i = 0; i < S_LEGS.length; i++) {
+    if (sLegT(S_LEGS[i], x, z) < S_LEGS[i].hw + 2.6) return true;
+  }
+  return false;
+}
+/* the floor: the same inverse-square blend, so flights and landings meet
+   without a step and the mesh is the physics */
+function stairFloorRaw(x, z) {
+  let ws = 0, hs = 0;
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    const d = Math.max(0.6, Math.hypot(x - n.x, z - n.z) - n.r);
+    const w = 1 / (d * d);
+    ws += w; hs += w * n.y;
+  }
+  for (let i = 0; i < S_LEGS.length; i++) {
+    const l = S_LEGS[i];
+    const d = Math.max(0.6, sLegT(l, x, z) - l.hw);
+    const w = 1 / (d * d);
+    ws += w; hs += w * lerp(l.ay, l.by, smoothstep(_kseg[0]));
+  }
+  let h = hs / ws;
+  h += vnoise(x * 0.35, z * 0.35) * 0.06;
+  return h;
+}
+const stairHMesh = makeMeshField(stairFloorRaw, SBOX.x0, SBOX.z0, SBOX.x1, SBOX.z1, 4, () => true);
+function stairY(x, z) { return stairHMesh(x, z); }
+function legHead(l, t) {
+  /* a flight is as tall as a flight in the middle and as tall as its
+     doorways at the ends */
+  const ha = Math.min(S_LEG_H, sHead(l.a)), hb = Math.min(S_LEG_H, sHead(l.b));
+  const mid = Math.sin(Math.PI * clamp(t, 0, 1));
+  return lerp(lerp(ha, hb, t), S_LEG_H, mid * 0.85);
+}
+/* the skin of the mountain over the stair: the forest's own surface, or
+   the Crown's where the Crown has taken it over */
+function stairSkinY(x, z) {
+  const f = forestHMesh(x, z);
+  return inCrownFieldQ(x, z) ? Math.max(f, crownHMesh(x, z)) : f;
+}
+function stairCeilY(x, z) {
+  /* headroom follows the same blend, taller over the landings — and NEVER
+     breaks the surface: at the top the stair runs within a few metres of
+     the open air, and a ceiling that surfaces is a black slab lying on the
+     mountainside (measured at the exit: 4.3 m of it) */
+  let ws = 0, hs = 0;
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    const d = Math.max(0.6, Math.hypot(x - n.x, z - n.z) - n.r);
+    const w = 1 / (d * d);
+    ws += w; hs += w * (n.y + sHead(n.id));
+  }
+  for (let i = 0; i < S_LEGS.length; i++) {
+    const l = S_LEGS[i];
+    const d = Math.max(0.6, sLegT(l, x, z) - l.hw);
+    const w = 1 / (d * d);
+    const t = _kseg[0];
+    ws += w; hs += w * (lerp(l.ay, l.by, smoothstep(t)) + legHead(l, t));
+  }
+  const h = hs / ws;
+  return Math.max(stairY(x, z) + 2.2, Math.min(h, stairSkinY(x, z) - 0.7));
+}
+
+/* ── THE DOORS: one per landing, shut until that landing sings ── */
+const S_DOORS = [
+  { key: 'organ1', from: 'l1', to: 'l2', t: 0.20, r: 3.2 },
+  { key: 'organ2', from: 'l2', to: 'l3', t: 0.20, r: 3.2 },
+  { key: 'organ3', from: 'l3', to: 'a', t: 0.16, r: 3.4 },
+];
+for (const d of S_DOORS) {
+  const A = S_NODE[d.from], B = S_NODE[d.to];
+  d.x = lerp(A.x, B.x, d.t); d.z = lerp(A.z, B.z, d.t);
+  d.y = lerp(A.y, B.y, d.t);
+  d.ry = Math.atan2(B.z - A.z, B.x - A.x) + Math.PI / 2;
+}
+let organOpen = [false, false, false];      // derived from SAVE in the world hook
+function stairPlugAt(x, z) {
+  for (let i = 0; i < S_DOORS.length; i++) {
+    if (organOpen[i]) continue;
+    const d = S_DOORS[i];
+    if (Math.hypot(x - d.x, z - d.z) < d.r) return true;
+  }
+  return false;
+}
+/* the crack in the Hollow's upper gallery: shut stone until the gold light
+   has been seen from the tower */
+let stairInOpen = false;
+function stairMouthPlugAt(x, z) {
+  if (stairInOpen) return false;
+  /* the plug fills the mouth's whole carved disc — a plug even a hand's
+     breadth smaller leaves a ring of air that belongs to the stair while
+     the crack is still shut, and a player brushing it flips worlds */
+  return Math.hypot(x - S_NODE.mouth.x, z - S_NODE.mouth.z) < S_NODE.mouth.r + 0.6;
+}
+
+/* ── which world the player is standing in ──
+   The stair climbs OVER the Falls Hollow: at L1 and L3 one (x,z) has two
+   floors, 15 m and 54 m apart. The stair's ground authority is therefore
+   live only while the player is inside the stair volume — resolved from
+   the real position every tick, and from the footprint alone when a
+   position is being PLACED and its height is not known yet. */
+let stairMode = false;
+function stairModeAt(x, z, y) {
+  /* the OPEN CORE, not the field: the field carries three metres of wall
+     margin so the ground and solid queries have something to answer with,
+     and that margin reaches back out of the crack — far enough that
+     standing in the gallery reading the crack counted as being inside the
+     mountain, and the prompt to open it never appeared.
+
+     HEIGHT IS NOT OPTIONAL. Two of the landings sit directly over the
+     Falls Hollow's chambers, so x,z alone cannot say which floor you are
+     on: answering "yes, the stair" for a position with no height took a
+     player standing at the Chandelier Vault's mirror-shell and declared
+     them fifteen metres up the inside of the mountain — world culled, fog
+     wrong, puzzle unreachable. No height means NO. */
+  if (!stairOpenCore(x, z)) return false;
+  if (y === undefined || y === null || !isFinite(y)) return false;
+  const f = stairHMesh(x, z);
+  return y > f - 6 && y < f + 14;
+}
+
+/* ═══ the wrapped world authorities ═══ */
+/* the stair climbs OVER the Falls Hollow, and p6c answers "am I in the
+   hollow?" from x,z alone: without this the gallery's fog, its region
+   caption, its shade and its mirror-shell prompts all followed the player
+   fifty metres up the inside of the mountain. The captured original is
+   also the Crown's own authority for "is the cave really here". */
+const _preCrownInHollowAt = inHollowAt;
+inHollowAt = function (x, z) {
+  if (stairMode && inStairFieldQ(x, z) && !stairMouthPlugAt(x, z)) return false;
+  return _preCrownInHollowAt(x, z);
+};
+groundH = function (x, z) {
+  if (stairMode && inStairFieldQ(x, z)) return stairHMesh(x, z);
+  /* the Crown sits over the Falls Hollow's roof: only the gallery's OPEN
+     AIR belongs to p6c. Excluding its whole wall-margin field instead left
+     eight square metres of the ledge with the cave's floor a hundred and
+     twenty metres below it — a hole to fall through at the parapet. */
+  if (inCrownFieldQ(x, z) && !_preCrownInHollowAt(x, z)) return crownHMesh(x, z);
+  return _preCrownGroundH(x, z);
+};
+/* SOLID: inside the stair, everything but the carved air (plus the doors).
+   On the Crown, everything but the garden — so there is no edge to walk
+   off and no flank to climb: the stair is the only way up. */
+window.__forestSolid = function (x, z) {
+  /* the garden is free ground first of all: the threshold sits inside BOTH
+     fields, and a doorway you cannot step out of is worse than no door */
+  const inK = inCrownFieldQ(x, z) && !_preCrownInHollowAt(x, z);
+  if (inK && inGardenWalkQ(x, z)) return false;
+  if (stairMode && inStairFieldQ(x, z)) {
+    if (stairPlugAt(x, z) || stairMouthPlugAt(x, z)) return true;
+    if (stairOpenCore(x, z)) return false;
+    /* AT THE THRESHOLD THE HOLLOW STILL OWNS ITS OWN WALLS. The mouth is a
+       hole cut in the gallery's wall, and the two solid authorities meet
+       across a four-metre disc: answering "stone" for the gallery side of
+       it turned the whole Chandelier gallery to rock around a player who
+       had merely brushed the doorway, and bounced them between two worlds
+       tick by tick (found by the hollow suite, twice). */
+    if (Math.hypot(x - S_NODE.mouth.x, z - S_NODE.mouth.z) < S_NODE.mouth.r + 9) {
+      return _preCrownFSolid(x, z);
+    }
+    return true;
+  }
+  if (inK) return true;                                    // the crag: no way up but the stair
+  if (!stairMode && stairMouthPlugAt(x, z)) return true;   // the crack, from the gallery side
+  return _preCrownFSolid(x, z);
+};
+inShadeAt = function (x, z) {
+  if (stairMode && inStairFieldQ(x, z)) return true;       // inside the rock, always cool
+  if (inGardenWalkQ(x, z) && !_preCrownInHollowAt(x, z)) return crownShadeAt(x, z);
+  return _preCrownInShade(x, z);
+};
+/* the watch-garden's shade: the four authored circles, the dead boughs,
+   and the cool strip at the foot of every retaining wall. All authored —
+   none of it moves with the sun, so the arc can only ever ADD shade. */
+function crownShadeAt(x, z) {
+  for (let i = 0; i < K_SHADE.length; i++) {
+    const s = K_SHADE[i];
+    if (Math.hypot(x - s.x, z - s.z) < s.r) return true;
+  }
+  for (let i = 0; i < K_BOUGHS.length; i++) {
+    const b = K_BOUGHS[i];
+    if (Math.hypot(x - b.x, z - b.z) < b.r) return true;
+  }
+  for (let i = 0; i < K_WALLS.length; i++) {
+    const w = K_WALLS[i];
+    if (distSeg(x, z, w.ax, w.az, w.bx, w.bz) < 2.6) return true;
+  }
+  return false;
+}
+nearestShadeSpot = function (x, z) {
+  if (stairMode && inStairFieldQ(x, z)) {
+    let best = S_NODE.l1, bd = 1e9;
+    for (const n of S_NODES) {
+      const d = Math.hypot(x - n.x, z - n.z);
+      if (d < bd) { bd = d; best = n; }
+    }
+    return { x: best.x, z: best.z };
+  }
+  if (inCrownFieldQ(x, z) && P.fy > crownHMesh(x, z) - 16) {
+    /* only when the player is truly UP HERE: the field's plan footprint
+       hangs over the silt flats and the Hollow's roof, and a sunstruck
+       walker a hundred metres below must wake at his own world's anchor
+       (found by the wyrm slab suite: woke at 2070,1345 mid-fight) */
+    /* fainting in the arena must not wake you back up inside the fight:
+       from the Stag's ground you come to in the beacon's lee, and walk
+       back in when you are ready */
+    const inArena = Math.hypot(x - K_ARENA.x, z - K_ARENA.z) < K_ARENA.r;
+    let best = null, bd = 1e9;
+    for (const s of K_SHADE) {
+      if (inArena && Math.hypot(s.x - K_ARENA.x, s.z - K_ARENA.z) < K_ARENA.r + 20) continue;
+      const d = Math.hypot(x - s.x, z - s.z);
+      if (d < bd) { bd = d; best = s; }
+    }
+    return best ? { x: best.x, z: best.z } : { x: K_SHADE[0].x, z: K_SHADE[0].z };
+  }
+  return _preCrownNearShade(x, z);
+};
+areaAt = function (x, z) {
+  if (stairMode && inStairFieldQ(x, z)) return 'stair';
+  if (inGardenWalkQ(x, z)) return 'crown';
+  return _preCrownAreaAt(x, z);
+};
+/* the world clamp in p4's collide() is a box drawn before the Crown
+   existed (x ≤ 2178, z ≤ 1398) and it cuts the watch-garden in half. Same
+   collider pass, the Crown's own box. */
+const _preCrownCollide = collide;
+collide = function (px, pz, pr, fy) {
+  if (!(px > KBOX.x0 - 40 && pz > KBOX.z0 - 40)) return _preCrownCollide(px, pz, pr, fy);
+  let x = px, z = pz;
+  for (let i = 0; i < COLL.length; i++) {
+    const c = COLL[i];
+    if (c.off || c.plat) continue;
+    if (c.top !== undefined && fy !== undefined && fy >= c.top - 0.42) continue;
+    const dx = x - c.x, dz = z - c.z;
+    const d2 = dx * dx + dz * dz, rr = c.r + pr;
+    if (d2 < rr * rr && d2 > 0.0001) {
+      const d = Math.sqrt(d2);
+      x = c.x + dx / d * rr; z = c.z + dz / d * rr;
+    }
+  }
+  return [clamp(x, 100, KROWN.x1 - 4), clamp(z, -38, KROWN.z1 - 4)];
+};
+</script>
+<script>
+/* ═══════════ p6g/2 — BUILDING THE CROWN ═══════════
+   The fire-watch order's watch-garden: dead orchard terraces on dry-stone
+   retaining walls, a broken beacon, a shrine of carved pinwheels that have
+   not turned in a year, and the plinth the Waxing Sliver was set on.
+   Four merged meshes (floor / props / glow / vista) plus the pieces that
+   have to move.                                                          */
+const C_KSTONE = col(0x9a8d74), C_KSTONE2 = col(0x7d7159), C_KDARK = col(0x585044);
+const C_KSOIL = col(0x7a5a36), C_KSOIL2 = col(0x53412a);
+const C_KGRASS = col(0xb0975a), C_KGRASS2 = col(0x877036);
+const C_KASH = col(0x6f6a62), C_KBARK = col(0x6b6259), C_KBARK2 = col(0x554e46);
+const C_KBRASS = col(0x9a7c3a), C_KBRASS2 = col(0x6a5426);
+const C_KPALE = col(0xd6cdb4);
+
+const _kgc = [0, 0, 0];
+function crownColor(x, z, y) {
+  const n = vnoise(x * 0.045, z * 0.045) * 0.9 + vnoise(x * 0.14 + 2, z * 0.14) * 0.5;
+  const f = vnoise(x * 0.115 + 3, z * 0.115);
+  const dG = crownDG(x, z);
+  if (dG > K_WALK + 1.5) {
+    /* the crag: bare wind-scoured stone, banded by height */
+    mix3(C_KSTONE2, C_KDARK, clamp(0.45 + n * 0.6, 0, 1), _kgc);
+    if (Math.abs(Math.sin(y * 0.9 + n * 2)) > 0.82) mix3(_kgc, C_KSTONE, 0.35, _kgc);
+    return _kgc;
+  }
+  /* the garden floor: thin dry grass over the order's laid soil, and
+     enough contrast between the two that a flat terrace never reads as one
+     poured plane */
+  mix3(C_KGRASS, C_KGRASS2, clamp(0.5 + n * 0.7 + f * 0.25, 0, 1), _kgc);
+  if (f > 0.16) mix3(_kgc, C_KSOIL, 0.75, _kgc);
+  if (f < -0.22) mix3(_kgc, C_KSOIL2, 0.7, _kgc);
+  /* the orchard's own dark ring of turned earth around every tree */
+  for (let i = 0; i < K_BOUGHS.length; i++) {
+    const b = K_BOUGHS[i];
+    const d = Math.hypot(x - b.x, z - b.z);
+    if (d < 2.4) mix3(_kgc, C_KSOIL2, 0.7 * smoothstep((2.4 - d) / 1.4), _kgc);
+  }
+  /* clumped tufts: the speckle that stops a 3 m lattice reading as paper */
+  {
+    const t = vnoise(x * 0.26 + 11, z * 0.26) + vnoise(x * 0.62, z * 0.62) * 0.4;
+    if (t > 0.18) mix3(_kgc, col(0x94803c), clamp((t - 0.18) * 1.9, 0, 0.85), _kgc);
+  }
+  /* the terraces' paths: the walked line between pads reads pale */
+  for (let i = 0; i < K_RAMPS.length; i++) {
+    const r = K_RAMPS[i];
+    const d = kRampD(r, x, z);
+    if (d < -r.hw * 0.35) mix3(_kgc, C_KPALE, 0.4, _kgc);
+  }
+  /* ash drift around the plinth — the Stag's own weather */
+  {
+    const d = Math.hypot(x - K_PLINTH.x, z - K_PLINTH.z);
+    if (d < 22) mix3(_kgc, C_KASH, 0.5 * smoothstep((22 - d) / 14), _kgc);
+  }
+  /* SHADE MUST BE VISIBLE (the house rule): every safe patch is drawn dark,
+     so a seven-year-old can see where the sun cannot reach */
+  if (crownShadeAt(x, z)) mix3(_kgc, C_KDARK, 0.42, _kgc);
+  /* salt bloom in the seams */
+  if (Math.abs(vnoise(x * 1.3, z * 1.3)) < 0.05) mix3(_kgc, C_KPALE, 0.5, _kgc);
+  return _kgc;
+}
+
+/* ── the floor sheet: the same lattice, split and diagonal as the field ── */
+let crownFloorMesh = null;
+(function buildCrownFloor() {
+  const md = MD();
+  const gc = (x, z) => {
+    const y = crownHMesh(x, z);
+    const c = crownColor(x, z, y);
+    return [c[0], c[1], c[2], y];
+  };
+  const cell = (x, z, s) => {
+    const c00 = gc(x, z), c10 = gc(x + s, z), c01 = gc(x, z + s), c11 = gc(x + s, z + s);
+    pushTriWV(md, x, c00[3], z, x, c01[3], z + s, x + s, c11[3], z + s, c00, c01, c11);
+    pushTriWV(md, x, c00[3], z, x + s, c11[3], z + s, x + s, c10[3], z, c00, c11, c10);
+  };
+  const S = 4;
+  for (let x = KBOX.x0; x < KBOX.x1; x += S) {
+    for (let z = KBOX.z0; z < KBOX.z1; z += S) {
+      if (!(inCrownFieldQ(x, z) || inCrownFieldQ(x + S, z) ||
+            inCrownFieldQ(x, z + S) || inCrownFieldQ(x + S, z + S))) continue;
+      if (K_FINE(x, z)) {
+        const h = S / 2;
+        cell(x, z, h); cell(x + h, z, h); cell(x, z + h, h); cell(x + h, z + h, h);
+      } else cell(x, z, S);
+    }
+  }
+  crownFloorMesh = mdMesh(md, WORLD_MAT, false);
+  crownFloorMesh.matrixAutoUpdate = false; crownFloorMesh.updateMatrix();
+  crownFloorMesh.visible = false;
+  scene.add(crownFloorMesh);
+})();
+
+/* ── the props ── */
+let crownPropMesh = null, crownGlowMesh = null;
+const K_PINWHEELS = [];
+window.__crownPinwheels = K_PINWHEELS;      // p6h spins these when the wind comes home
+let plinthSocket = null, beaconBowl = null;
+(function buildCrownProps() {
+  const md = MD();
+  const mdG = MD();
+  const rnd = mulberry32(40417);
+
+  /* ── the crag's silhouette: boulders along the rim ── */
+  for (let i = 0; i < 96; i++) {
+    const x = KBOX.x0 + rnd() * (KBOX.x1 - KBOX.x0);
+    const z = KBOX.z0 + rnd() * (KBOX.z1 - KBOX.z0);
+    const dG = crownDG(x, z);
+    if (dG < K_WALK + 3 || dG > K_SKIRT * 0.7) continue;
+    const R = 1.1 + rnd() * 2.2;
+    latheW(md, [[R, 0], [R * 1.05, R * 0.7], [R * 0.5, R * 1.5], [0, R * 1.9]],
+      { seg: 6, ex: 0.85, x, y: crownY(x, z) - R * 0.4, z, ry: rnd() * TAU, flat: true, warm: true,
+        segJitter: 0.15, col: C_KSTONE2, cols: [C_KDARK, C_KSTONE2, C_KSTONE] });
+  }
+
+  /* ── the parapet: the order's wall along the north-west lip, so the drop
+     reads as a place to stand and look, never as an invisible wall ── */
+  {
+    const L = K_PAD.ledge;
+    for (let i = 0; i < 44; i++) {
+      const a = i / 44 * TAU;
+      const px = L.x + Math.cos(a) * (L.r + K_WALK - 0.9);
+      const pz = L.z + Math.sin(a) * (L.r + K_WALK - 0.9);
+      if (crownRimK(px, pz) > 0.55) continue;         // only where the view is
+      const y = crownY(px, pz);
+      const ry = a + Math.PI / 2;
+      boxW(md, { x: px, y, z: pz, w: 1.5, d: 0.42, h: 0.62 + (i % 3) * 0.18, ry, warm: true,
+        col: i % 2 ? C_KSTONE : C_KSTONE2, colB: C_KDARK });
+      if (i % 3 === 0) {
+        boxW(md, { x: px, y: y + 0.8, z: pz, w: 0.5, d: 0.44, h: 0.42, ry, warm: true, col: C_KSTONE2 });
+      }
+      addColl(px, pz, 0.85);
+    }
+  }
+
+  /* ── the retaining walls the terraces stand on ── */
+  for (let i = 0; i < K_WALLS.length; i++) {
+    const w = K_WALLS[i];
+    const len = Math.hypot(w.bx - w.ax, w.bz - w.az);
+    const ry = Math.atan2(w.bz - w.az, w.bx - w.ax);
+    const n = Math.max(2, Math.round(len / 2.2));
+    for (let k = 0; k < n; k++) {
+      const t = (k + 0.5) / n;
+      const x = lerp(w.ax, w.bx, t), z = lerp(w.az, w.bz, t);
+      const y = crownY(x, z) - 1.1;
+      boxW(md, { x, y, z, w: 1.15, d: 0.55, h: 2.5 + (k % 2) * 0.12, ry, warm: true,
+        col: k % 2 ? C_KSTONE : C_KSTONE2, colB: C_KDARK });
+      boxW(md, { x, y: y + 2.5, z, w: 1.2, d: 0.62, h: 0.22, ry, warm: true, col: C_KPALE });
+      addColl(x, z, 1.0);
+    }
+  }
+
+  /* ── THE DEAD ORCHARD: bare trunks and long horizontal boughs. The
+     boughs are the cover the ember rain cannot reach through. ── */
+  for (let i = 0; i < K_BOUGHS.length; i++) {
+    const b = K_BOUGHS[i];
+    const y = crownY(b.x, b.z);
+    const s = 0.9 + (i % 3) * 0.14;
+    latheW(md, [[0.42 * s, 0], [0.3 * s, 2.2 * s], [0.22 * s, 3.6 * s], [0, 4.0 * s]],
+      { seg: 6, x: b.x, y: y - 0.2, z: b.z, warm: true, flat: true, segJitter: 0.1,
+        col: C_KBARK, cols: [C_KBARK2, C_KBARK, C_KBARK] });
+    for (let k = 0; k < 7; k++) {
+      const a = k / 7 * TAU + i;
+      const r0 = 0.9 + (k % 2) * 0.4;
+      const bx = b.x + Math.cos(a) * r0, bz = b.z + Math.sin(a) * r0;
+      boxW(md, { x: bx, y: y + 2.4 * s + (k % 3) * 0.35, z: bz,
+        w: b.r * 0.42, d: 0.13, h: 0.13, ry: a, rz: -0.16, warm: true,
+        col: k % 2 ? C_KBARK : C_KBARK2 });
+      /* the second order of twigs — enough silhouette to read as a canopy */
+      boxW(md, { x: bx + Math.cos(a) * b.r * 0.42, y: y + 2.7 * s + (k % 3) * 0.35,
+        z: bz + Math.sin(a) * b.r * 0.42, w: b.r * 0.3, d: 0.08, h: 0.08,
+        ry: a + 0.5, rz: 0.2, warm: true, col: C_KBARK2 });
+    }
+    addColl(b.x, b.z, 0.62);
+  }
+
+  /* ── THE BEACON RUIN: half a tower, its fire bowl cold, and a chest the
+     last watcher left behind ── */
+  {
+    const bx = K_BEACON.x, bz = K_BEACON.z;
+    const y = crownY(bx, bz);
+    const doorA = 0.9;
+    latheW(md, [[4.6, 0], [4.4, 1.2], [4.2, 3.4], [4.0, 5.6]], {
+      seg: 14, x: bx, y: y - 0.4, z: bz, flat: true, segJitter: 0.1, warm: true,
+      col: C_KSTONE2, cols: [C_KDARK, C_KSTONE2, C_KSTONE, C_KSTONE],
+      skip: (t0, t1, band) => {
+        let d = Math.abs(((t0 - doorA) % TAU + TAU) % TAU);
+        if (d > Math.PI) d = TAU - d;
+        if (band < 2 && d < 0.30) return true;              // the doorway
+        if (band >= 2 && ((t0 > 2.4 && t0 < 4.2) || (t0 > 5.4))) return true;   // fallen away
+        return false;
+      },
+    });
+    /* the inner face, so the ruin reads as a ROOM and not a wall */
+    latheW(md, [[4.0, 0], [3.9, 5.6]], {
+      seg: 14, x: bx, y: y - 0.4, z: bz, inward: true, flat: true,
+      col: C_KDARK, cols: [C_KDARK, C_KSTONE2],
+      skip: (t0, t1, band) => {
+        let d = Math.abs(((t0 - doorA) % TAU + TAU) % TAU);
+        if (d > Math.PI) d = TAU - d;
+        return d < 0.30 || (t0 > 2.4 && t0 < 4.2) || t0 > 5.4;
+      },
+    });
+    /* the fire bowl on its tripod, cold and full of a year of ash */
+    for (let i = 0; i < 3; i++) {
+      const a = i / 3 * TAU + 0.4;
+      boxW(md, { x: bx + Math.cos(a) * 0.7, y, z: bz + Math.sin(a) * 0.7,
+        w: 0.09, d: 0.09, h: 1.5, rx: Math.sin(a) * 0.2, rz: -Math.cos(a) * 0.2, col: C_KBRASS2 });
+    }
+    latheW(md, [[0.95, 1.45], [1.15, 1.75], [1.0, 2.0], [0.5, 1.95]],
+      { seg: 12, x: bx, y, z: bz, flat: true, col: C_KBRASS, cols: [C_KBRASS2, C_KBRASS, C_KBRASS2] });
+    latheW(md, [[0.9, 1.86], [0, 1.84]], { seg: 12, x: bx, y, z: bz, flat: true, col: C_KASH });
+    /* fallen blocks */
+    for (let i = 0; i < 9; i++) {
+      const a = rnd() * TAU, d = 5.4 + rnd() * 6;
+      const px = bx + Math.cos(a) * d, pz = bz + Math.sin(a) * d;
+      boxW(md, { x: px, y: crownY(px, pz) - 0.2, z: pz, warm: true, w: 0.7 + rnd() * 0.5, d: 0.6 + rnd() * 0.4,
+        h: 0.5 + rnd() * 0.5, ry: rnd() * TAU, rz: (rnd() - 0.5) * 0.3, col: C_KSTONE2, colB: C_KDARK });
+    }
+    addColl(bx + Math.cos(0.9 + 2.6) * 4.3, bz + Math.sin(0.9 + 2.6) * 4.3, 1.4);
+    beaconBowl = [bx, y + 1.9, bz];
+  }
+
+  /* ── THE PLINTH: the socket the Waxing Sliver was set in, empty since
+     the night the moon came apart ── */
+  {
+    const px = K_PLINTH.x, pz = K_PLINTH.z;
+    const y = crownY(px, pz);
+    latheW(md, [[3.2, 0], [3.0, 0.5], [2.4, 0.7]], { seg: 12, x: px, y: y - 0.15, z: pz, flat: true, warm: true,
+      col: C_KSTONE, cols: [C_KSTONE2, C_KSTONE] });
+    latheW(md, [[1.5, 0.7], [1.35, 1.6], [1.15, 1.9]], { seg: 10, x: px, y, z: pz, flat: true, warm: true,
+      col: C_KSTONE2, cols: [C_KSTONE2, C_KSTONE] });
+    /* the eight-phase ring around its rim — the same eight as the Moonwheel */
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * TAU;
+      latheW(md, [[0.2, 0], [0.16, 0.1], [0, 0.14]],
+        { seg: 6, x: px + Math.cos(a) * 2.6, y: y + 0.5, z: pz + Math.sin(a) * 2.6, flat: true, col: C_KBRASS });
+    }
+    /* the empty socket, a crescent hollow cut in the top */
+    latheW(md, [[1.05, 1.9], [0.85, 1.7], [0, 1.72]], { seg: 10, x: px, y, z: pz, flat: true, col: C_KDARK });
+    plinthSocket = [px, y + 2.0, pz];
+    addColl(px, pz, 1.5);
+    /* the socket's own cold light */
+    lathe(mdG, [[0, 0.02], [1.5, 0]], { seg: 10, x: px, y: y + 1.95, z: pz, col: [0.62, 0.72, 0.95] });
+  }
+
+  /* ── THE WIND SHRINE: eight posts, eight carved pinwheels, all frozen ── */
+  {
+    const sx = K_SHRINE.x, sz = K_SHRINE.z;
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * TAU;
+      const px = sx + Math.cos(a) * 8.5, pz = sz + Math.sin(a) * 8.5;
+      const y = crownY(px, pz);
+      boxW(md, { x: px, y, z: pz, w: 0.22, d: 0.22, h: 2.6 + (i % 3) * 0.3, tw: 0.17, td: 0.17, warm: true,
+        ry: a, col: i % 2 ? C_KSTONE : C_KSTONE2, colB: C_KDARK });
+      addColl(px, pz, 0.34);
+      /* the pinwheel itself, on its own node so the wind can turn it */
+      const wheel = new THREE.Group();
+      const mdW = MD();
+      for (let k = 0; k < 6; k++) {
+        const wa = k / 6 * TAU;
+        box(mdW, { x: Math.cos(wa) * 0.42, y: Math.sin(wa) * 0.42, z: 0,
+          w: 0.34, d: 0.05, h: 0.16, rz: wa + 0.5,
+          col: k % 2 ? [0.72, 0.66, 0.5] : [0.58, 0.53, 0.4] });
+      }
+      lathe(mdW, [[0.16, 0], [0.12, 0.06], [0, 0.09]], { seg: 8, col: C_KBRASS });
+      const wm = mdMesh(mdW, TOON);
+      wm.frustumCulled = false;
+      wheel.add(wm);
+      wheel.position.set(px, y + 2.6 + (i % 3) * 0.3 + 0.5, pz);
+      wheel.rotation.y = a + Math.PI / 2;
+      wheel.visible = false;
+      scene.add(wheel);
+      K_PINWHEELS.push(wheel);
+    }
+    /* the shrine stone in the middle: a cupped bowl the wind used to sing in */
+    const y = crownY(sx, sz);
+    latheW(md, [[2.2, 0], [2.0, 0.6], [1.4, 0.9]], { seg: 12, x: sx, y: y - 0.1, z: sz, flat: true, warm: true,
+      col: C_KSTONE, cols: [C_KSTONE2, C_KSTONE] });
+    latheW(md, [[1.3, 0.9], [1.0, 0.55], [0, 0.6]], { seg: 12, x: sx, y, z: sz, flat: true, col: C_KDARK });
+    addColl(sx, sz, 2.0);
+  }
+
+  /* ── the order's small things: benches, a fallen ladder, a rain barrel ── */
+  for (const [bx, bz, ba] of [[2078, 1348, 0.6], [2150, 1400, 1.2], [2168, 1452, -0.5], [2246, 1338, 2.1]]) {
+    const y = crownY(bx, bz);
+    boxW(md, { x: bx, y, z: bz, w: 1.2, d: 0.32, h: 0.46, ry: ba, col: C_KBARK, colB: C_KBARK2 });
+    boxW(md, { x: bx - Math.cos(ba) * 1.0, y, z: bz + Math.sin(ba) * 1.0, w: 0.12, d: 0.28, h: 0.42, ry: ba, col: C_KBARK2 });
+    boxW(md, { x: bx + Math.cos(ba) * 1.0, y, z: bz - Math.sin(ba) * 1.0, w: 0.12, d: 0.28, h: 0.42, ry: ba, col: C_KBARK2 });
+  }
+  /* ── THE GROUND'S OWN DETAIL ──
+     A watch-garden with nothing on its floor reads as one pale plane from
+     every angle — the failure mode this repo keeps rediscovering. Dry
+     tufts, kerb stones along every terrace lip, fallen orchard wood and
+     loose scree, all baked into the same buffer. */
+  {
+    const C_TUFT = col(0x8a7440), C_TUFT2 = col(0x6b5a30), C_DEAD = col(0x6d5a3a);
+    let placed = 0;
+    for (let i = 0; i < 9000 && placed < 1150; i++) {
+      const x = KBOX.x0 + rnd() * (KBOX.x1 - KBOX.x0);
+      const z = KBOX.z0 + rnd() * (KBOX.z1 - KBOX.z0);
+      if (crownDG(x, z) > K_WALK - 1) continue;
+      if (Math.hypot(x - K_PLINTH.x, z - K_PLINTH.z) < 4.2) continue;
+      const y = crownY(x, z);
+      const r = rnd();
+      placed++;
+      if (r < 0.52) {
+        /* a tuft of dry grass: three crossed blades, no two alike */
+        const c = rnd() > 0.5 ? C_TUFT : C_TUFT2;
+        const s2 = 0.75 + rnd() * 0.7;
+        for (let k = 0; k < 3; k++) {
+          const a = rnd() * TAU;
+          boxW(md, { x: x + Math.cos(a) * 0.12, y: y - 0.05, z: z + Math.sin(a) * 0.12,
+            w: 0.035 * s2, d: 0.05 * s2, h: (0.22 + rnd() * 0.26) * s2,
+            tw: 0.008, td: 0.008, shx: Math.cos(a) * 0.14, shz: Math.sin(a) * 0.14,
+            ry: a, noBottom: true, warm: true, col: k % 2 ? c : C_TUFT2 });
+        }
+      } else if (r < 0.8) {
+        /* a loose stone */
+        const R = 0.18 + rnd() * 0.42;
+        latheW(md, [[R, 0], [R * 0.8, R * 0.9], [0, R * 1.2]],
+          { seg: 5, x, y: y - R * 0.3, z, ry: rnd() * TAU, flat: true, warm: true,
+            col: rnd() > 0.5 ? C_KSTONE : C_KSTONE2 });
+      } else {
+        /* fallen orchard wood */
+        boxW(md, { x, y: y + 0.03, z, w: 0.5 + rnd() * 0.7, d: 0.07, h: 0.07,
+          ry: rnd() * TAU, rz: (rnd() - 0.5) * 0.2, warm: true, col: C_DEAD });
+      }
+    }
+    /* the terrace lips: a kerb of set stones, broken where the ramps run */
+    for (const [z0, y0] of [[1409, 122], [1449, 117]]) {
+      for (let x = 2112; x <= 2210; x += 2.4) {
+        if (x > 2149 && x < 2171) continue;                 // the ramp's own gap
+        if (crownDG(x, z0) > K_WALK) continue;
+        const y = crownY(x, z0);
+        boxW(md, { x, y: y - 0.35, z: z0, w: 1.1, d: 0.42, h: 0.5 + ((x | 0) % 3) * 0.06,
+          ry: 0, warm: true, col: ((x | 0) % 2) ? C_KSTONE : C_KSTONE2, colB: C_KDARK });
+      }
+    }
+  }
+  crownPropMesh = mdMesh(md, WORLD_MAT, false);
+  crownPropMesh.matrixAutoUpdate = false; crownPropMesh.updateMatrix();
+  crownPropMesh.visible = false;
+  scene.add(crownPropMesh);
+
+  crownGlowMesh = mdMesh(mdG, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.3,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  crownGlowMesh.matrixAutoUpdate = false; crownGlowMesh.updateMatrix();
+  crownGlowMesh.visible = false;
+  scene.add(crownGlowMesh);
+})();
+
+/* ── THE VIEW ──
+   From the parapet the whole healed world should be in one frame, but the
+   bay is 2.4 km away — past the fog wall and nearly past the far plane.
+   So the horizon is AUTHORED: a pale silhouette band ringing the Crown at
+   1.6 km, drawn without fog (the sea-line's trick, grown up), carrying the
+   sea, the isles, the headland and Finn's lighthouse. Real geometry fades
+   into the haze in front of it and the two read as one distance.        */
+let crownVista = null;
+(function buildCrownVista() {
+  const md = MD();
+  const R = 1580;
+  const cx = 2080, cz = 1360;                 // centred on the ledge
+  const y0 = 138;         // eye height on the ledge: the band sits ON the horizon
+  const band = (a0, a1, h0, h1, c) => {
+    const p0 = [cx + Math.cos(a0) * R, cz + Math.sin(a0) * R];
+    const p1 = [cx + Math.cos(a1) * R, cz + Math.sin(a1) * R];
+    pushQuad(md, [p0[0], y0 - 70, p0[1]], [p1[0], y0 - 70, p1[1]],
+      [p1[0], y0 + h1, p1[1]], [p0[0], y0 + h0, p0[1]], c);
+  };
+  /* the sea: a pale silver floor under everything, west and south-west */
+  const A0 = Math.PI * 0.62, A1 = Math.PI * 1.42;
+  const N = 40;
+  for (let i = 0; i < N; i++) {
+    const a0 = A0 + (A1 - A0) * i / N, a1 = A0 + (A1 - A0) * (i + 1) / N;
+    band(a0, a1, 1.2, 1.2, [0.74, 0.79, 0.82]);
+  }
+  /* the far hills of the Parched Forest, nearer the north */
+  for (let i = 0; i < 22; i++) {
+    const a0 = Math.PI * 1.10 + i * 0.026, a1 = a0 + 0.028;
+    const h = 16 + Math.sin(i * 0.9) * 8 + Math.sin(i * 0.31 + 1.2) * 6;
+    const h1 = 16 + Math.sin((i + 1) * 0.9) * 8 + Math.sin((i + 1) * 0.31 + 1.2) * 6;
+    band(a0, a1, h, h1, [0.60, 0.58, 0.51]);
+  }
+  /* the drowned isles, low on the water */
+  for (const [aa, w, h] of [[3.02, 0.035, 3.2], [3.20, 0.025, 2.2], [3.44, 0.045, 4.0],
+                            [3.70, 0.02, 1.8], [3.92, 0.03, 2.8]]) {
+    band(aa, aa + w * 0.5, h * 0.5, h, [0.56, 0.57, 0.55]);
+    band(aa + w * 0.5, aa + w, h, h * 0.4, [0.56, 0.57, 0.55]);
+  }
+  /* Brightharbor's headland, and Finn's lighthouse standing on it */
+  band(3.30, 3.36, 5, 8, [0.60, 0.58, 0.50]);
+  band(3.36, 3.42, 8, 5, [0.60, 0.58, 0.50]);
+  band(3.364, 3.372, 20, 20, [0.82, 0.80, 0.72]);      // Finn's lighthouse, from 2.4 km
+  crownVista = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.5, fog: false,
+    depthWrite: false, side: THREE.DoubleSide,
+  }), false);
+  crownVista.renderOrder = -5;
+  crownVista.frustumCulled = false;
+  crownVista.visible = false;
+  scene.add(crownVista);
+})();
+
+/* ── THE GLINT: what the low sun catches on the summit ──
+   The order's SIGHTING MAST: a watch-mirror on a six-metre brass mast,
+   still standing at the parapet. The height is not decoration — from the
+   fire-watch tower the Dried Falls' own cliff face stands in the way, and
+   the mirror has to clear it by a metre to be a star on the mountain
+   instead of a light behind a rock (measured: it needs six metres). */
+const K_GLINT = { x: 2054, z: 1330 };
+let glintMesh = null, glintCoreMat = null, glintFlareMat = null, glintMount = null;
+(function buildGlint() {
+  const gy = crownY(K_GLINT.x, K_GLINT.z);
+  /* the thing itself */
+  const md = MD();
+  /* the plinth it stands on, the mast, and the guys the wind used to sing in */
+  latheW(md, [[1.1, 0], [1.0, 0.4], [0.7, 0.55]], { seg: 10, x: 0, y: 0, z: 0, flat: true, warm: true,
+    col: C_KSTONE, cols: [C_KSTONE2, C_KSTONE] });
+  boxW(md, { x: 0, y: 0.5, z: 0, w: 0.22, d: 0.22, h: 5.6, tw: 0.13, td: 0.13, warm: true,
+    col: C_KBRASS2, colB: C_KDARK });
+  for (let i = 0; i < 3; i++) {
+    boxW(md, { x: 0, y: 1.2 + i * 1.5, z: 0, w: 0.3, d: 0.3, h: 0.12, warm: true, col: C_KBRASS });
+  }
+  for (let i = 0; i < 3; i++) {
+    const a = i / 3 * TAU + 0.4;
+    boxW(md, { x: Math.cos(a) * 0.55, y: 0.5, z: Math.sin(a) * 0.55, w: 0.05, d: 0.05, h: 4.4,
+      rx: Math.sin(a) * 0.12, rz: -Math.cos(a) * 0.12, warm: true, col: C_KBRASS2 });
+  }
+  latheW(md, [[0.55, 6.1], [0.46, 6.24], [0.22, 6.3]], { seg: 10, x: 0, y: 0, z: 0, flat: true, warm: true, col: C_KBRASS });
+  for (let i = 0; i < 3; i++) {
+    boxW(md, { x: 0, y: 6.2 + i * 0.02, z: 0, w: 0.66 - i * 0.06, d: 0.06, h: 0.66 - i * 0.06,
+      rx: -0.9, ry: 0.6, warm: true, col: i === 2 ? C_KPALE : C_KBRASS2 });
+  }
+  glintMount = mdMesh(md, WORLD_MAT, false);
+  glintMount.frustumCulled = false;
+  glintMount.position.set(K_GLINT.x, gy, K_GLINT.z);
+  glintMount.visible = false;
+  scene.add(glintMount);
+  addColl(K_GLINT.x, K_GLINT.z, 0.9);
+  /* the star it throws */
+  glintMesh = new THREE.Group();
+  glintCoreMat = new THREE.MeshBasicMaterial({
+    map: DOT_TEX, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const core = new THREE.Mesh(new THREE.PlaneGeometry(11, 11), glintCoreMat);
+  core.frustumCulled = false;
+  glintMesh.add(core);
+  glintFlareMat = new THREE.MeshBasicMaterial({
+    map: DOT_TEX, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const flare = new THREE.Mesh(new THREE.PlaneGeometry(30, 3.2), glintFlareMat);
+  flare.frustumCulled = false;
+  glintMesh.add(flare);
+  glintMesh.position.set(K_GLINT.x, gy + 6.8, K_GLINT.z);
+  glintMesh.visible = false;
+  scene.add(glintMesh);
+})();
+
+/* ── the chests, the heart, and the salt the seams give up ── */
+const crownChest1 = { x: 2186, z: 1398, opened: false, lid: null, group: null };
+const crownChest2 = { x: 2252, z: 1318, opened: false, lid: null, group: null };
+{
+  let m = buildChestMesh(crownChest1.x, crownChest1.z, 1.1);
+  crownChest1.group = m.group; crownChest1.lid = m.lid;
+  crownChest1.group.visible = false;
+  m = buildChestMesh(crownChest2.x, crownChest2.z, -0.6);
+  crownChest2.group = m.group; crownChest2.lid = m.lid;
+  crownChest2.group.visible = false;
+}
+FCHESTS.push({ ch: crownChest1, key: 'crownChest1', salt: 5, big: 'SALT CACHE',
+  small: 'Five crystals, kept dry under a terrace stone.' });
+FCHESTS.push({ ch: crownChest2, key: 'crownChest2', salt: 6, big: 'THE SHRINE HOARD',
+  small: 'Offerings to a wind that stopped coming.' });
+const beaconChest = { x: K_BEACON.x + 1.6, z: K_BEACON.z + 1.2, opened: false, lid: null, group: null, heart: null };
+{
+  const m = buildChestMesh(beaconChest.x, beaconChest.z, 2.4);
+  beaconChest.group = m.group; beaconChest.lid = m.lid;
+  beaconChest.group.visible = false;
+  const h = buildHeartItem();
+  h.visible = false;
+  scene.add(h);
+  beaconChest.heart = h;
+}
+const K_SALT_SPOTS = [
+  [2148, 1398], [2154, 1404], [2143, 1409],           // the upper terrace seam
+  [2170, 1462], [2176, 1468],                          // by the plinth
+  [2252, 1340], [2246, 1326],                          // the shrine
+  [2070, 1352], [2058, 1360],                          // the ledge
+];
+for (const p of K_SALT_SPOTS) {
+  const m = new THREE.Mesh(SALT_GEO, SALT_MAT);
+  m.frustumCulled = false;
+  m.visible = false;
+  const y = crownY(p[0], p[1]) + 0.16;
+  m.position.set(p[0], y, p[1]);
+  scene.add(m);
+  fSalt.push({ x: p[0], z: p[1], got: false, mesh: m, baseY: y, ph: p[0] * 0.31, chimed: false });
+}
+</script>
+<script>
+/* ═══════════ p6g/3 — BUILDING THE FALLS STAIR ═══════════
+   Carved inside the rock the water used to pour over: five flights, three
+   tall landings, the bones of the order's rope-lifts, and the AEOLIAN
+   PIPES the whole mountain was built to play. Capped over its entire
+   footprint — the foundry lesson: no sky from inside a hill, ever.      */
+const C_SROCK = col(0x5d5449), C_SROCK2 = col(0x463f37), C_SDARK = col(0x24211d);
+const C_SCUT = col(0x7d7466), C_SPALE = col(0x9a927f), C_SMOSS = col(0x4a5340);
+const C_SPIPE = col(0x6f6754), C_SROPE = col(0x6b5a3c);
+
+const _sgc = [0, 0, 0];
+function stairColor(x, z, y) {
+  const n = vnoise(x * 0.3, z * 0.3), f = vnoise(x * 0.9 + 5, z * 0.9);
+  mix3(C_SROCK, C_SROCK2, clamp(0.5 + n * 0.7 + f * 0.2, 0, 1), _sgc);
+  /* the treads: the order cut steps, and a thousand feet polished them */
+  for (let i = 0; i < S_LEGS.length; i++) {
+    const l = S_LEGS[i];
+    const lat = sLegT(l, x, z);
+    if (lat < l.hw + 0.4) {
+      const step = (y * 1.6) % 1;
+      mix3(_sgc, step < 0.18 ? C_SDARK : C_SCUT, lat < l.hw * 0.7 ? 0.55 : 0.3, _sgc);
+    }
+  }
+  /* the landings are laid floors, pale and swept */
+  for (let i = 1; i <= 3; i++) {
+    const n2 = S_NODES[i];
+    const d = Math.hypot(x - n2.x, z - n2.z);
+    if (d < n2.r + 0.5) {
+      mix3(_sgc, C_SPALE, 0.55 * smoothstep((n2.r + 0.5 - d) / 2.5), _sgc);
+      if (((x * 0.5) % 1) < 0.08 || ((z * 0.5) % 1) < 0.08) mix3(_sgc, C_SDARK, 0.4, _sgc);
+    }
+  }
+  /* damp where the water still finds its way in */
+  if (f < -0.42) mix3(_sgc, C_SMOSS, 0.5, _sgc);
+  return _sgc;
+}
+
+let stairFloorMesh = null, stairWallMesh = null, stairCapMesh = null;
+let stairPropMesh = null, stairDressMesh = null, stairMouthGlow = null;
+(function buildStairFloor() {
+  const md = MD();
+  const gc = (x, z) => {
+    const y = stairHMesh(x, z);
+    const c = stairColor(x, z, y);
+    return [c[0], c[1], c[2], y];
+  };
+  const cell = (x, z, s) => {
+    const c00 = gc(x, z), c10 = gc(x + s, z), c01 = gc(x, z + s), c11 = gc(x + s, z + s);
+    pushTriWV(md, x, c00[3], z, x, c01[3], z + s, x + s, c11[3], z + s, c00, c01, c11);
+    pushTriWV(md, x, c00[3], z, x + s, c11[3], z + s, x + s, c10[3], z, c00, c11, c10);
+  };
+  for (let x = SBOX.x0; x < SBOX.x1; x += 4) {
+    for (let z = SBOX.z0; z < SBOX.z1; z += 4) {
+      if (!(inStairFieldQ(x, z) || inStairFieldQ(x + 4, z) ||
+            inStairFieldQ(x, z + 4) || inStairFieldQ(x + 4, z + 4))) continue;
+      const h = 2;
+      cell(x, z, h); cell(x + h, z, h); cell(x, z + h, h); cell(x + h, z + h, h);
+    }
+  }
+  stairFloorMesh = mdMesh(md, WORLD_MAT, false);
+  stairFloorMesh.matrixAutoUpdate = false; stairFloorMesh.updateMatrix();
+  stairFloorMesh.visible = false;
+  scene.add(stairFloorMesh);
+})();
+
+/* ── walls marched along the SAME boundary collision answers (the v4 law),
+   inward liners so the flights read as cut passages, and ONE cap over the
+   whole footprint so a gap between rocks shows stone shadow, never sky ── */
+(function buildStairShell() {
+  const md = MD();
+  const wallRock = (x, z, R0, seedv, base) => {
+    latheW(md, [[R0, 0], [R0 * 1.1, 3.0], [R0 * 0.55, 7.0], [0, 9.2]],
+      { seg: 6, ex: 0.88, x, y: base - 1.4, z, ry: seedv * 2.13, flat: true, segJitter: 0.14,
+        col: C_SROCK2, cols: [C_SDARK, C_SROCK2, C_SROCK] });
+  };
+  const intrudes = (x, z, R0) => {
+    if (stairOpenCore(x, z)) return true;
+    for (let p = 0; p < 6; p++) {
+      const a = p / 6 * TAU;
+      if (stairOpenCore(x + Math.cos(a) * R0 * 0.6, z + Math.sin(a) * R0 * 0.6)) return true;
+    }
+    return false;
+  };
+  const tryRock = (x, z, R0, seedv) => {
+    if (intrudes(x, z, R0)) return;
+    if (Math.hypot(x - S_NODE.mouth.x, z - S_NODE.mouth.z) < S_NODE.mouth.r + 2.2) return;
+    if (Math.hypot(x - S_NODE.out.x, z - S_NODE.out.z) < S_NODE.out.r + 2.6) return;
+    wallRock(x, z, R0, seedv, stairY(x, z));
+  };
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    const cnt = Math.ceil((TAU * (n.r + 2)) / 2.1);
+    for (let k = 0; k < cnt; k++) {
+      const a = k / cnt * TAU;
+      const R0 = 1.3 + (hash2((n.x * 7 + k) | 0, (n.z + k * 3) | 0) * 0.5 + 0.5) * 0.6;
+      tryRock(n.x + Math.cos(a) * (n.r + 0.6 + R0), n.z + Math.sin(a) * (n.r + 0.6 + R0), R0, k + a);
+    }
+  }
+  for (let i = 0; i < S_LEGS.length; i++) {
+    const l = S_LEGS[i];
+    const len = Math.hypot(l.bx - l.ax, l.bz - l.az);
+    const ux = (l.bx - l.ax) / len, uz = (l.bz - l.az) / len;
+    const px = -uz, pz = ux;
+    const cnt = Math.ceil(len / 1.9);
+    for (let k = 0; k <= cnt; k++) {
+      const t = k / cnt;
+      for (const sg of [-1, 1]) {
+        const R0 = 1.25 + (hash2((k * 7 + sg * 3) | 0, (l.ax + l.bz) | 0) * 0.5 + 0.5) * 0.55;
+        const off = l.hw + R0;
+        tryRock(l.ax + ux * len * t + px * off * sg, l.az + uz * len * t + pz * off * sg, R0, k * 2 + sg);
+      }
+    }
+  }
+  stairWallMesh = mdMesh(md, WORLD_MAT, false);
+  stairWallMesh.matrixAutoUpdate = false; stairWallMesh.updateMatrix();
+  stairWallMesh.visible = false;
+  scene.add(stairWallMesh);
+
+  /* the liners + the cap, one double-sided dark mesh */
+  const mdD = MD();
+  const quad = (a, b, c, d, cc) => {
+    mdD.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2],
+               a[0], a[1], a[2], c[0], c[1], c[2], d[0], d[1], d[2]);
+    for (let i = 0; i < 6; i++) mdD.c.push(cc[0], cc[1], cc[2]);
+  };
+  /* landings: an inward drum, so a tall room reads as a ROOM */
+  for (let i = 0; i < S_NODES.length; i++) {
+    const n = S_NODES[i];
+    const H = sHead(n.id);
+    latheW(mdD, [[n.r + 1.4, -0.5], [n.r + 0.9, H * 0.4], [n.r * 0.55, H * 0.86], [0, H + 0.6]], {
+      seg: 12, x: n.x, y: n.y, z: n.z, inward: true, flat: true, segJitter: 0.12,
+      col: C_SROCK2, cols: [C_SDARK, C_SROCK2, C_SROCK],
+      skip: (t0) => {
+        for (let k = 0; k < S_LEGS.length; k++) {
+          const l = S_LEGS[k];
+          if (l.a !== n.id && l.b !== n.id) continue;
+          const oa = l.a === n.id ? Math.atan2(l.bz - l.az, l.bx - l.ax) : Math.atan2(l.az - l.bz, l.ax - l.bx);
+          let d = Math.abs(((t0 - oa) % TAU + TAU) % TAU);
+          if (d > Math.PI) d = TAU - d;
+          if (d < 0.42) return true;
+        }
+        return false;
+      },
+    });
+  }
+  /* flights: side walls and a ceiling that climbs with the treads */
+  for (let i = 0; i < S_LEGS.length; i++) {
+    const l = S_LEGS[i];
+    const len = Math.hypot(l.bx - l.ax, l.bz - l.az);
+    const ux = (l.bx - l.ax) / len, uz = (l.bz - l.az) / len;
+    const px = -uz, pz = ux;
+    const segs = Math.max(3, Math.ceil(len / 9));
+    for (let k = 0; k < segs; k++) {
+      const t0 = k / segs, t1 = (k + 1) / segs;
+      const y0 = lerp(l.ay, l.by, smoothstep(t0)), y1 = lerp(l.ay, l.by, smoothstep(t1));
+      const p0x = l.ax + ux * len * t0, p0z = l.az + uz * len * t0;
+      const p1x = l.ax + ux * len * t1, p1z = l.az + uz * len * t1;
+      const h0 = stairCeilY(p0x, p0z) - y0, h1 = stairCeilY(p1x, p1z) - y1;
+      const throat = stairThroatQ((p0x + p1x) / 2, (p0z + p1z) / 2);
+      const lat = l.hw + 1.9;
+      for (const side of [-1, 1]) {
+        const cc = mix3(k % 2 ? C_SROCK : C_SROCK2, C_SDARK, 0.2 + 0.12 * (k % 3));
+        quad([l.ax + ux * len * t0 + px * lat * side, y0 - 0.6, l.az + uz * len * t0 + pz * lat * side],
+             [l.ax + ux * len * t1 + px * lat * side, y1 - 0.6, l.az + uz * len * t1 + pz * lat * side],
+             [l.ax + ux * len * t1 + px * lat * side, y1 + h1, l.az + uz * len * t1 + pz * lat * side],
+             [l.ax + ux * len * t0 + px * lat * side, y0 + h0, l.az + uz * len * t0 + pz * lat * side], cc);
+      }
+      /* the ceiling of the flight */
+      if (throat) continue;
+      const w = l.hw + 3.2;
+      quad([l.ax + ux * len * t0 - px * w, y0 + h0, l.az + uz * len * t0 - pz * w],
+           [l.ax + ux * len * t1 - px * w, y1 + h1, l.az + uz * len * t1 - pz * w],
+           [l.ax + ux * len * t1 + px * w, y1 + h1, l.az + uz * len * t1 + pz * w],
+           [l.ax + ux * len * t0 + px * w, y0 + h0, l.az + uz * len * t0 + pz * w],
+           mix3(C_SROCK2, C_SDARK, 0.5));
+    }
+  }
+  /* THE CAP. The marched rocks and the liners leave gaps; through every one
+     of them, on the foundry's evidence, pours blue sky. One dark lid over
+     the whole footprint — held clear of BOTH doorways so their daylight
+     stays daylight. */
+  {
+    const CAPC = [C_SDARK[0] * 0.5, C_SDARK[1] * 0.5, C_SDARK[2] * 0.5];
+    /* every block carries a SKIRT: the cap steps with the stair, and a
+       stepped lid without skirts is a venetian blind — thirteen pixels of
+       sky at the top turn, found by the magenta probe */
+    const capBlock = (x, z, s) => {
+      const y = stairCeilY(x + s / 2, z + s / 2) + 0.5;
+      quad([x, y, z], [x, y, z + s], [x + s, y, z + s], [x + s, y, z], CAPC);
+      quad([x, y, z], [x + s, y, z], [x + s, y, z + s], [x, y, z + s], CAPC);
+      const d = 2.6;
+      quad([x, y, z], [x + s, y, z], [x + s, y - d, z], [x, y - d, z], CAPC);
+      quad([x, y, z + s], [x, y - d, z + s], [x + s, y - d, z + s], [x + s, y, z + s], CAPC);
+      quad([x, y, z], [x, y - d, z], [x, y - d, z + s], [x, y, z + s], CAPC);
+      quad([x + s, y, z], [x + s, y, z + s], [x + s, y - d, z + s], [x + s, y - d, z], CAPC);
+    };
+    for (let x = SBOX.x0; x < SBOX.x1; x += 4) {
+      for (let z = SBOX.z0; z < SBOX.z1; z += 4) {
+        const cx = x + 2, cz = z + 2;
+        if (!inStairFieldQ(cx, cz)) continue;
+        if (stairThroatQ(cx, cz)) continue;
+        capBlock(x, z, 4);
+      }
+    }
+  }
+  stairCapMesh = mdMesh(mdD, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  stairCapMesh.matrixAutoUpdate = false; stairCapMesh.updateMatrix();
+  stairCapMesh.visible = false;
+  scene.add(stairCapMesh);
+})();
+
+/* ── the portals: a door has to READ as a door from both sides, and what
+   you see through it has to be framed light and never a bare hole ── */
+(function buildStairPortals() {
+  const md = MD();
+  const mdG = MD();
+  const frame = (x, z, y, ry, w, h, warm) => {
+    for (const s of [-1, 1]) {
+      boxW(md, { x: x + Math.cos(ry) * s * (w + 0.55), y: y - 0.4, z: z - Math.sin(ry) * s * (w + 0.55),
+        w: 0.9, d: 1.3, h: h + 0.6, ry: -ry, col: C_SDARK, colB: C_SDARK });
+      boxW(md, { x: x + Math.cos(ry) * s * (w - 0.05), y: y - 0.4, z: z - Math.sin(ry) * s * (w - 0.05),
+        w: 0.4, d: 0.9, h: h, ry: -ry, col: C_SROCK2 });
+    }
+    boxW(md, { x, y: y + h, z, w: w + 1.5, d: 1.4, h: 0.9, ry: -ry, col: C_SDARK });
+    boxW(md, { x, y: y + h - 0.35, z, w: w + 0.3, d: 0.9, h: 0.45, ry: -ry, col: C_SROCK2 });
+    /* the light that stands in the doorway — a soft gradient, never a slab */
+    const c0 = warm ? [1.0, 0.86, 0.58] : [0.85, 0.90, 1.0];
+    for (let i = 0; i < 4; i++) {
+      const k = i / 4;
+      pushQuad(mdG,
+        [x - Math.cos(ry) * w * (1 - k * 0.2), y + h * k * 0.9, z + Math.sin(ry) * w * (1 - k * 0.2)],
+        [x + Math.cos(ry) * w * (1 - k * 0.2), y + h * k * 0.9, z - Math.sin(ry) * w * (1 - k * 0.2)],
+        [x + Math.cos(ry) * w * (1 - (k + 0.25) * 0.2), y + h * (k + 0.25) * 0.9, z - Math.sin(ry) * w * (1 - (k + 0.25) * 0.2)],
+        [x - Math.cos(ry) * w * (1 - (k + 0.25) * 0.2), y + h * (k + 0.25) * 0.9, z + Math.sin(ry) * w * (1 - (k + 0.25) * 0.2)],
+        [c0[0] * (1 - k * 0.5), c0[1] * (1 - k * 0.5), c0[2] * (1 - k * 0.5)]);
+    }
+  };
+  const m = S_NODE.mouth, o = S_NODE.out;
+  const mAng = Math.atan2(S_NODE.l1.z - m.z, S_NODE.l1.x - m.x);
+  frame(m.x, m.z, m.y, mAng, 2.5, 3.4, true);
+  const oAng = Math.atan2(o.z - S_NODE.b.z, o.x - S_NODE.b.x);
+  frame(o.x - Math.cos(oAng) * 2.2, o.z - Math.sin(oAng) * 2.2, o.y, oAng, 2.5, 3.4, false);
+  /* the order's mark over the inner door: eight phases, the fourth cut deep */
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * TAU;
+    latheW(md, [[i === 3 ? 0.22 : 0.14, 0], [0, 0.1]],
+      { seg: 6, x: m.x + Math.cos(mAng + Math.PI / 2) * Math.cos(a) * 1.1,
+        y: m.y + 3.9 + Math.sin(a) * 1.1, z: m.z - Math.sin(mAng + Math.PI / 2) * Math.cos(a) * 1.1,
+        flat: true, col: i === 3 ? C_SPALE : C_SCUT });
+  }
+  stairPropMesh = mdMesh(md, WORLD_MAT, false);
+  stairPropMesh.matrixAutoUpdate = false; stairPropMesh.updateMatrix();
+  stairPropMesh.visible = false;
+  scene.add(stairPropMesh);
+  stairMouthGlow = mdMesh(mdG, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.24,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  stairMouthGlow.matrixAutoUpdate = false; stairMouthGlow.updateMatrix();
+  stairMouthGlow.visible = false;
+  scene.add(stairMouthGlow);
+})();
+</script>
+<script>
+/* ═══════════ p6g/4 — THE WIND ORGAN ═══════════
+   The mountain is an instrument and it has been silent for a year. A
+   chord hums from somewhere above you, always, never explained. Each
+   landing has stone vents with shutters you HOLD ✕ to turn; turning bends
+   the note, continuously, like tuning a radio. When a note comes true its
+   pipe warms; when a landing's notes are all true the landing SINGS and
+   its door grinds open. There is no text anywhere in it — the only
+   teacher is your ear, and it teaches on the first landing with one vent.
+
+   Tuned for a fumbling seven-year-old (the 15-second-tone law): a window
+   about a semitone wide, a note that latches after half a second inside
+   it, and a latch that holds whether or not the button is still down. */
+const ORG_LO = 165, ORG_SPAN = 4;          // the shutter's full turn = two octaves
+const ORG_TOL = 0.30;                      // ≈ a semitone either side
+const ORG_LOCK = 0.45;                     // seconds inside the window to latch
+const ORG_RATE = 0.62;                     // radians per second while ✕ is held
+const ORG_CHORD = [110, 220, 330];         // the hum from above: the dawn call's root
+function organFreq(a) {
+  let t = (a % TAU + TAU) % TAU;
+  return ORG_LO * Math.pow(ORG_SPAN, t / TAU);
+}
+function organAngFor(f) { return TAU * Math.log(f / ORG_LO) / Math.log(ORG_SPAN); }
+
+const ORGAN = {
+  landings: [
+    { key: 'organ1', node: 'l1', door: 0, vents: [], sang: false },
+    { key: 'organ2', node: 'l2', door: 1, vents: [], sang: false },
+    { key: 'organ3', node: 'l3', door: 2, vents: [], sang: false },
+  ],
+  gust: 0, gustOn: false, grace: 0, near: -1, dawnFired: false,
+};
+const ORG_VENTS = [];
+(function layOutVents() {
+  const spec = [
+    ['organ1', [[2005.4, 1271.2, 330]]],
+    ['organ2', [[2020.6, 1297.6, 275], [2027.8, 1296.6, 440]]],
+    ['organ3', [[2041.6, 1324.8, 220], [2047.6, 1326.4, 275], [2051.6, 1321.0, 330]]],
+  ];
+  for (const [key, list] of spec) {
+    const L = ORGAN.landings.find(l => l.key === key);
+    for (const [x, z, f] of list) {
+      const v = {
+        x, z, y: stairY(x, z), freq: f, tAng: organAngFor(f),
+        ang: 0, locked: false, lockT: 0, da: 9, wob: 0,
+        land: L, group: null, capN: null, glowM: null, ang0: 0, idx: ORG_VENTS.length,
+      };
+      /* every shutter starts BELOW its note, so holding ✕ walks the pitch
+         UP toward true: the distance shrinks the whole way and a child
+         hears it closing in. Different offsets, so a landing's vents never
+         come true on the same beat. */
+      v.ang = (v.tAng - (2.1 + 0.5 * ORG_VENTS.length % 3) + TAU * 2) % TAU;
+      v.ang0 = v.ang;
+      L.vents.push(v);
+      ORG_VENTS.push(v);
+    }
+  }
+})();
+
+/* ── the vents and their pipes ──
+   THEIR COLLIDERS ARE MODE-GATED. p4's collider list is flat and has no
+   idea about height: a stone drum on the first landing is also a stone
+   drum in the Chandelier Vault fifteen metres below it, and one in the
+   Wyrm's own basin. They exist only while the player is inside the stair. */
+const ORG_COLL = [];
+(function buildVents() {
+  for (const v of ORG_VENTS) {
+    const g = new THREE.Group();
+    /* the drum, sunk in the landing floor */
+    const md = MD();
+    latheW(md, [[1.05, 0], [1.15, 0.35], [1.0, 0.75]],
+      { seg: 10, x: 0, y: 0, z: 0, flat: true, col: C_SROCK, cols: [C_SROCK2, C_SROCK] });
+
+    /* the shutter cap: four cut vanes that turn over the mouth */
+    const capN = new THREE.Group();
+    const mdC = MD();
+    latheW(mdC, [[0.98, 0.75], [0.9, 0.9]], { seg: 10, flat: true, col: C_SPALE, cols: [C_SPALE, C_SROCK] });
+    for (let i = 0; i < 4; i++) {
+      const a = i / 4 * TAU;
+      boxW(mdC, { x: Math.cos(a) * 0.5, y: 0.86, z: Math.sin(a) * 0.5, w: 0.42, d: 0.14, h: 0.16,
+        ry: a, col: i % 2 ? C_SCUT : C_SROCK2 });
+    }
+    boxW(mdC, { x: 0, y: 0.9, z: 0, w: 0.14, d: 0.14, h: 0.5, tw: 0.09, td: 0.09, col: C_SCUT });
+    const cap = mdMesh(mdC, WORLD_MAT, false);
+    cap.frustumCulled = false;
+    capN.add(cap);
+    capN.position.y = 0;
+    g.add(capN);
+    /* the pipe: a carved stone throat climbing into the dark above. Baked
+       into the SAME buffer as the drum — only the shutter cap turns, so the
+       vent costs two draw calls and not four. */
+    const mdP = md;
+    latheW(mdP, [[0.55, 1.4], [0.48, 4.2], [0.52, 6.6], [0.44, S_LAND_H + 0.4]],
+      { seg: 8, x: 0, y: 0, z: 0, flat: true, segJitter: 0.08,
+        col: C_SPIPE, cols: [C_SROCK2, C_SPIPE, C_SPIPE] });
+    for (let i = 0; i < 3; i++) {
+      latheW(mdP, [[0.62, 2.0 + i * 2.2], [0.58, 2.25 + i * 2.2]],
+        { seg: 8, x: 0, y: 0, z: 0, flat: true, col: C_SCUT });
+    }
+    const stone = mdMesh(md, WORLD_MAT, false);
+    stone.frustumCulled = false;
+    g.add(stone);
+    /* the warm glow that answers a true note */
+    const mdG = MD();
+    lathe(mdG, [[0.74, 0.8], [0.66, 1.5]], { seg: 10, col: [1.0, 0.78, 0.36] });
+    lathe(mdG, [[0.7, 1.6], [0.62, S_LAND_H]], { seg: 8, col: [0.9, 0.6, 0.24] });
+    const glow = mdMesh(mdG, new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+    }), false);
+    glow.frustumCulled = false;
+    g.add(glow);
+    g.position.set(v.x, v.y, v.z);
+    g.visible = false;
+    scene.add(g);
+    v.group = g; v.capN = capN; v.glowM = glow;
+    const cl = addColl(v.x, v.z, 0.95);
+    cl.off = true;
+    ORG_COLL.push(cl);
+  }
+})();
+
+/* ── the doors: carved slabs that grind down into the tread ── */
+(function buildStairDoors() {
+  for (let i = 0; i < S_DOORS.length; i++) {
+    const d = S_DOORS[i];
+    const md = MD();
+    boxW(md, { x: 0, y: 0, z: 0, w: 3.5, d: 0.5, h: 5.2, tw: 3.2, ry: d.ry,
+      col: C_SROCK, colB: C_SDARK });
+    for (let k = 0; k < 4; k++) {
+      boxW(md, { x: 0, y: 0.7 + k * 1.15, z: 0, w: 3.3, d: 0.6, h: 0.16, ry: d.ry, col: C_SDARK });
+    }
+    /* how many notes this door is waiting for — carved, not written */
+    const n = ORGAN.landings[i].vents.length;
+    for (let k = 0; k < n; k++) {
+      latheW(md, [[0.28, 0], [0.22, 0.12], [0, 0.17]],
+        { seg: 8, x: Math.cos(d.ry) * ((k - (n - 1) / 2) * 0.8), y: 3.4,
+          z: -Math.sin(d.ry) * ((k - (n - 1) / 2) * 0.8), flat: true, col: C_SPALE });
+    }
+    const slab = mdMesh(md, WORLD_MAT, false);
+    slab.frustumCulled = false;
+    const g = new THREE.Group();
+    g.add(slab);
+    g.position.set(d.x, d.y - 0.25, d.z);
+    g.visible = false;
+    scene.add(g);
+    d.group = g; d.baseY = d.y - 0.25; d.k = 0;
+  }
+})();
+
+/* ── the rope-lift bones and the dry plunge shafts (dressing that says the
+   order worked here, and that water once fell down this rock) ── */
+(function buildStairDressing() {
+  const md = MD();
+  const rnd = mulberry32(6041);
+  for (let i = 1; i <= 3; i++) {
+    const n = S_NODES[i];
+    /* a windlass, its rope long since rotted to a stub */
+    const a0 = i * 1.7;
+    const wx = n.x + Math.cos(a0) * (n.r - 1.8), wz = n.z + Math.sin(a0) * (n.r - 1.8);
+    const wy = stairY(wx, wz);
+    for (const s of [-1, 1]) {
+      boxW(md, { x: wx + Math.cos(a0 + Math.PI / 2) * s * 0.7, y: wy,
+        z: wz - Math.sin(a0 + Math.PI / 2) * s * 0.7, w: 0.16, d: 0.16, h: 1.3, col: C_SROPE });
+    }
+    latheW(md, [[0.34, 0.9], [0.34, 1.3]], { seg: 8, x: wx, y: wy, z: wz, ry: a0 + Math.PI / 2,
+      ex: 1, flat: true, col: C_SROPE });
+    boxW(md, { x: wx, y: wy + 1.1, z: wz, w: 0.06, d: 0.06, h: 0.9, rz: 0.5, col: C_SROPE });
+    /* coiled rope on the floor */
+    for (let k = 0; k < 3; k++) {
+      latheW(md, [[0.5 - k * 0.1, k * 0.1], [0.42 - k * 0.1, k * 0.1 + 0.09]],
+        { seg: 9, x: wx + 1.4, y: wy, z: wz + 0.6, flat: true, col: C_SROPE });
+    }
+    /* the dry plunge shaft: a scoured chimney in the ceiling, capped above */
+    const sx = n.x + Math.cos(a0 + 2.4) * (n.r - 2.6), sz = n.z + Math.sin(a0 + 2.4) * (n.r - 2.6);
+    latheW(md, [[1.6, S_LAND_H - 1.4], [1.5, S_LAND_H + 1.6], [1.7, S_LAND_H + 3.0]],
+      { seg: 9, x: sx, y: n.y, z: sz, inward: true, flat: true, segJitter: 0.12, col: C_SROCK2 });
+    latheW(md, [[1.75, S_LAND_H + 3.0], [0, S_LAND_H + 3.4]],
+      { seg: 9, x: sx, y: n.y, z: sz, inward: true, flat: true, col: C_SDARK });
+    /* fallen scree under it */
+    for (let k = 0; k < 5; k++) {
+      const a = rnd() * TAU, d = rnd() * 2.2;
+      const px = sx + Math.cos(a) * d, pz = sz + Math.sin(a) * d;
+      latheW(md, [[0.3 + rnd() * 0.3, 0], [0, 0.35 + rnd() * 0.3]],
+        { seg: 5, x: px, y: stairY(px, pz), z: pz, flat: true, col: C_SROCK2 });
+    }
+  }
+  const m = mdMesh(md, WORLD_MAT, false);
+  m.matrixAutoUpdate = false; m.updateMatrix();
+  m.frustumCulled = false;
+  m.visible = false;
+  scene.add(m);
+  stairDressMesh = m;
+})();
+
+/* ══ the organ's VOICE — continuous, spatialised by the climb ══
+   Every other sound in this game is a one-shot. This one has to be there
+   the whole time you are inside the mountain, or the puzzle has no
+   target: six shutter voices, a three-note hum from above, and the wind
+   itself. All lazily built the first time the player is in the stair with
+   an audio context alive, and silenced the instant they leave.          */
+const ORG_AUD = { built: false, master: null, drone: [], droneG: null, voices: [], gustG: null };
+function organAudioBuild() {
+  if (ORG_AUD.built || !AC || !master) return;
+  ORG_AUD.built = true;
+  const out = AC.createGain(); out.gain.value = 0; out.connect(master);
+  ORG_AUD.master = out;
+  const dg = AC.createGain(); dg.gain.value = 0.55; dg.connect(out);
+  ORG_AUD.droneG = dg;
+  for (let i = 0; i < ORG_CHORD.length; i++) {
+    const o = AC.createOscillator();
+    o.type = 'sine'; o.frequency.value = ORG_CHORD[i];
+    const g = AC.createGain(); g.gain.value = [0.5, 0.3, 0.2][i];
+    o.connect(g); g.connect(dg); o.start();
+    ORG_AUD.drone.push(o);
+  }
+  for (let i = 0; i < ORG_VENTS.length; i++) {
+    const o = AC.createOscillator();
+    o.type = 'triangle'; o.frequency.value = ORG_VENTS[i].freq;
+    const bp = AC.createBiquadFilter();
+    bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.7;
+    const g = AC.createGain(); g.gain.value = 0;
+    o.connect(bp); bp.connect(g); g.connect(out); o.start();
+    ORG_AUD.voices.push({ o, g });
+  }
+  /* the wind through the shafts */
+  const len = AC.sampleRate * 2, buf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  let last = 0;
+  for (let i = 0; i < len; i++) { const w = Math.random() * 2 - 1; last = (last + 0.03 * w) / 1.03; d[i] = last * 3.2; }
+  const src = AC.createBufferSource(); src.buffer = buf; src.loop = true;
+  const lp = AC.createBiquadFilter(); lp.type = 'bandpass'; lp.frequency.value = 620; lp.Q.value = 0.6;
+  const gg = AC.createGain(); gg.gain.value = 0;
+  src.connect(lp); lp.connect(gg); gg.connect(out); src.start();
+  ORG_AUD.gustG = gg;
+}
+function organAudioUpdate(inside) {
+  if (!ORG_AUD.built) { if (inside) organAudioBuild(); if (!ORG_AUD.built) return; }
+  const live = inside && state === 'play';
+  /* the hum comes from ABOVE: it swells the higher you climb */
+  const climb = clamp((P.fy - S_NODE.mouth.y) / (S_NODE.out.y - S_NODE.mouth.y || 1), 0, 1);
+  const want = live ? 0.55 + 0.45 * climb : 0;
+  const m = ORG_AUD.master.gain;
+  m.value += (want - m.value) * 0.06;
+  ORG_AUD.droneG.gain.value = 0.035 + 0.05 * climb;
+  for (let i = 0; i < ORG_VENTS.length; i++) {
+    const v = ORG_VENTS[i], V = ORG_AUD.voices[i];
+    const d = Math.hypot(P.x - v.x, P.z - v.z);
+    const near = clamp(1 - (d - 3) / 22, 0, 1);
+    V.o.frequency.value = organFreq(v.ang + v.wob);
+    const g = live ? 0.055 * near * (v.locked ? 0.85 : 1) : 0;
+    V.g.gain.value += (g - V.g.gain.value) * 0.12;
+  }
+  const gw = (live && ORGAN.gustOn) ? 0.09 : 0;
+  ORG_AUD.gustG.gain.value += (gw - ORG_AUD.gustG.gain.value) * 0.05;
+}
+
+SFX.ventLock = function () {
+  if (!AC) return; const t = AC.currentTime;
+  tone(660, t, 0.9, 0.07, 'sine'); tone(990, t + 0.05, 0.7, 0.035, 'sine');
+  tone(1320, t + 0.1, 0.5, 0.018, 'sine');
+  noiseBurst(t, 0.1, 0.04, 2400, 1400, 2.0);
+};
+SFX.ventSing = function () {
+  if (!AC) return; const t = AC.currentTime;
+  [220, 275, 330, 440].forEach((f, i) => tone(f, t + i * 0.06, 2.6 - i * 0.3, 0.06, 'sine'));
+  noiseBurst(t, 0.3, 0.05, 700, 1800, 0.7, 'lowpass');
+};
+SFX.stoneGrind = function () {
+  if (!AC) return; const t = AC.currentTime;
+  for (let i = 0; i < 10; i++) noiseBurst(t + i * 0.14, 0.2, 0.11, 200 + hash2(i, 7) * 70, 130, 1.8, 'lowpass');
+  tone(62, t, 1.5, 0.14, 'sine', null, 44);
+};
+SFX.dawnCall = function () {
+  if (!AC) return; const t = AC.currentTime;
+  /* the order's dawn call: the chord opening out, twice, over the drone */
+  [110, 220, 275, 330, 440, 550].forEach((f, i) => {
+    tone(f, t + i * 0.34, 7.5 - i * 0.5, 0.075 - i * 0.007, 'sine');
+    tone(f * 2, t + i * 0.34 + 0.02, 3.5, 0.02, 'sine');
+  });
+  [330, 440, 550, 660].forEach((f, i) => tone(f, t + 4.2 + i * 0.28, 4.0, 0.045, 'sine'));
+  noiseBurst(t + 0.1, 3.4, 0.03, 400, 1600, 0.6, 'lowpass');
+};
+SFX.windGust = function () {
+  if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 2.2, 0.07, 300, 900, 0.6, 'lowpass');
+  noiseBurst(t + 0.4, 1.8, 0.04, 1200, 500, 0.8);
+};
+
+/* ── the verb, and what listening to it earns ── */
+function organLandingOf(x, z) {
+  for (let i = 0; i < ORGAN.landings.length; i++) {
+    const n = S_NODE[ORGAN.landings[i].node];
+    if (Math.hypot(x - n.x, z - n.z) < n.r + 4) return i;
+  }
+  return -1;
+}
+function organVentNear(x, z) {
+  let best = null, bd = 3.1;
+  for (const v of ORG_VENTS) {
+    if (v.locked) continue;
+    const d = Math.hypot(x - v.x, z - v.z);
+    if (d < bd) { bd = d; best = v; }
+  }
+  return best;
+}
+function organSing(L) {
+  L.sang = true;
+  if (SAVE) { SAVE[L.key] = true; storeSave(); }
+  organOpen[L.door] = true;
+  SFX.ventSing();
+  SFX.stoneGrind();
+  CAM.shake = 0.22;
+  rumble({ duration: 520, strong: 0.45, weak: 0.8 });
+  const n = S_NODE[L.node];
+  burst(psSparkle, n.x, n.y + 3.0, n.z, 26, 2.2, 1.6, 1.3);
+  if (L.key === 'organ3') startCine('dawnCall');
+}
+function tickOrgan(ctx) {
+  const inside = stairMode;
+  ORGAN.near = inside ? organLandingOf(P.x, P.z) : -1;
+  /* THE GUSTS, third landing only. Long calms, short gusts, and a grace
+     window the moment you arrive: a seven-year-old gets to hear the vents
+     before the wind ever touches them. */
+  if (ORGAN.near === 2 && !ORGAN.landings[2].sang) {
+    if (ORGAN.grace > 0) { ORGAN.grace -= DT; ORGAN.gustOn = false; }
+    else {
+      ORGAN.gust += DT;
+      if (!ORGAN.gustOn && ORGAN.gust > 15) { ORGAN.gustOn = true; ORGAN.gust = 0; SFX.windGust(); }
+      else if (ORGAN.gustOn && ORGAN.gust > 6.5) { ORGAN.gustOn = false; ORGAN.gust = 0; }
+    }
+  } else { ORGAN.gustOn = false; ORGAN.gust = 0; ORGAN.grace = 10; }
+
+  const held = ctx && ctx.id === 'organVent' && IN.atkHeld && state === 'play';
+  for (let i = 0; i < ORG_VENTS.length; i++) {
+    const v = ORG_VENTS[i];
+    if (v.locked) { v.wob = 0; v.da = 0; continue; }
+    if (held && ctx.vent === v) {
+      v.ang += ORG_RATE * DT;
+      if (v.ang > TAU) v.ang -= TAU;
+    }
+    /* the wind bends what is not yet fixed — audibly, and well past the
+       window, so a gust cannot be mistaken for a near miss */
+    v.wob = (ORGAN.gustOn && v.land.key === 'organ3')
+      ? Math.sin(simTick * 0.021 + i) * 0.42 + Math.sin(simTick * 0.0092 + i * 2) * 0.3 : 0;
+    let da = (v.ang + v.wob) - v.tAng;
+    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
+    v.da = da;
+    if (Math.abs(da) < ORG_TOL) {
+      v.lockT += DT;
+      if (v.lockT >= ORG_LOCK) {
+        v.locked = true; v.lockT = 0; v.ang = v.tAng; v.da = 0; v.wob = 0;
+        SFX.ventLock();
+        rumble({ duration: 140, strong: 0.2, weak: 0.55 });
+        burst(psSparkle, v.x, v.y + 1.4, v.z, 14, 1.2, 1.4, 1.1);
+      }
+    } else v.lockT = Math.max(0, v.lockT - DT * 1.6);
+  }
+  for (let i = 0; i < ORGAN.landings.length; i++) {
+    const L = ORGAN.landings[i];
+    if (L.sang) continue;
+    let all = true;
+    for (const v of L.vents) if (!v.locked) all = false;
+    if (all) organSing(L);
+  }
+  organAudioUpdate(inside);
+}
+
+/* ── THE DAWN CALL: when the last landing sings, the whole stair plays ── */
+function tickDawnCall(t) {
+  const l1 = S_NODE.l1, l2 = S_NODE.l2, l3 = S_NODE.l3, out = S_NODE.out;
+  const na = S_NODE.a, nb = S_NODE.b;
+  if (cineSeen('dawnCall') && t > 0.9 && IN.confirm) { finishDawnCall(); return; }
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    SFX.dawnCall();
+    rumble({ duration: 1400, strong: 0.35, weak: 0.7 });
+  }
+  /* the camera rides UP THE SHAFT ITSELF, landing by landing, as each one
+     lights. It stays ON the carved centreline — a three-metre orbit put it
+     inside the rock, and from in there the shot is a black slab and the
+     open sky (found by looking at it). */
+  const k = clamp(t / 9.2, 0, 1);
+  /* every node on the way, in order: the last flight is a dog-leg, and a
+     straight line from the third landing to the doorway flies the camera
+     through thirty metres of mountain */
+  const path = [
+    [l3.x, l3.y + 2.4, l3.z], [l2.x, l2.y + 3.0, l2.z],
+    [l1.x, l1.y + 3.0, l1.z], [l2.x, l2.y + 3.6, l2.z],
+    [l3.x, l3.y + 4.2, l3.z], [na.x, na.y + 2.6, na.z],
+    [nb.x, nb.y + 2.6, nb.z], [out.x, out.y + 1.8, out.z],
+  ];
+  const seg = clamp(k * (path.length - 1), 0, path.length - 1.001);
+  const si = Math.floor(seg), sf = smoothstep(seg - si);
+  const a = path[si], b = path[si + 1];
+  const sway = Math.sin(t * 0.9) * 0.7;
+  const cx = lerp(a[0], b[0], sf), cy = lerp(a[1], b[1], sf), cz = lerp(a[2], b[2], sf);
+  const nf = Math.min(1, sf + 0.28);
+  cineCam(cx + sway, cy, cz - sway,
+    lerp(a[0], b[0], nf), lerp(a[1], b[1], nf) + 1.2, lerp(a[2], b[2], nf));
+  /* THE SONG RUNNING UP THE STAIR: motes streaming past the camera, so a
+     dark ride through a mountain reads as a mountain playing */
+  if ((simTick % 2) === 0) {
+    const fx = lerp(a[0], b[0], nf), fz = lerp(a[2], b[2], nf), fy = lerp(a[1], b[1], nf);
+    psSparkle.spawn(fx + (Math.random() - 0.5) * 4, fy - 1.6 + Math.random() * 3.4,
+      fz + (Math.random() - 0.5) * 4, 0, 2.4 + Math.random() * 2, 0, 1.3);
+  }
+  if (CINE.step === 1 && t > 3.0) { CINE.step = 2; SFX.chime(0.8); }
+  if (CINE.step === 2 && t > 6.4) { CINE.step = 3; SFX.chime(1.4); }
+  if (CINE.step === 3 && t > 8.6) {
+    CINE.step = 4;
+    SFX.stoneGrind();
+    CAM.shake = 0.3;
+    rumble({ duration: 900, strong: 0.7, weak: 0.9 });
+  }
+  if (t > 11.4) finishDawnCall();
+}
+function finishDawnCall() {
+  markCineSeen('dawnCall');
+  organOpen[2] = true;
+  endCine();
+  showCaption('The mountain remembers the song.', 3400);
+}
+</script>
+<script>
+/* ═══════════ p6g/5 — EMBER FAWNS, and THE ASH STAG ═══════════
+   Nothing on the Crown dies. The fawns are cured in two hits and bound
+   away warm brown; the Stag is cured, bows, and hands you the phase it
+   has been carrying in its antlers for a year.                         */
+SFX.fawnCry = function () { if (!AC) return; const t = AC.currentTime;
+  tone(880, t, 0.16, 0.05, 'triangle', null, 1180);
+  tone(1320, t + 0.08, 0.12, 0.025, 'sine'); };
+SFX.fawnHop = function () { if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.1, 0.07, 900, 400, 1.0);
+  tone(300, t, 0.1, 0.04, 'sine', null, 460); };
+SFX.stagHuff = function () { if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.24, 0.2, 240, 100, 0.9, 'lowpass');
+  noiseBurst(t + 0.28, 0.2, 0.16, 300, 120, 0.9, 'lowpass');
+  tone(64, t, 0.3, 0.16, 'sine', null, 46); };
+SFX.stagCharge = function () { if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.7, 0.2, 380, 130, 0.8, 'lowpass');
+  for (let i = 0; i < 6; i++) tone(70, t + i * 0.11, 0.09, 0.1, 'sine', null, 50); };
+SFX.stagCry = function () { if (!AC) return; const t = AC.currentTime;
+  tone(148, t, 1.2, 0.12, 'sawtooth', null, 96);
+  tone(297, t + 0.07, 0.9, 0.05, 'triangle', null, 210);
+  noiseBurst(t, 0.6, 0.09, 800, 260, 1.2); };
+SFX.emberFall = function () { if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.9, 0.09, 2200, 700, 1.1);
+  tone(520, t, 0.5, 0.03, 'sine', null, 300); };
+SFX.stagBow = function () { if (!AC) return; const t = AC.currentTime;
+  [196, 262, 330, 392, 523].forEach((f, i) => tone(f, t + i * 0.3, 2.4, 0.06, 'sine'));
+  noiseBurst(t + 0.2, 1.6, 0.04, 500, 1400, 0.7, 'lowpass'); };
+
+/* ── THE WAXING SLIVER: the fourth phase, a thin curved blade of moonglass ── */
+function buildSliverItem() {
+  const g = new THREE.Group();
+  const md = MD();
+  const C_SL = [0.88, 0.92, 0.98], C_SL2 = [0.7, 0.78, 0.88];
+  /* a crescent so thin it is nearly a line — the moon four nights old */
+  const R = 0.66, n = 12;
+  for (let i = 0; i < n; i++) {
+    const a0 = -1.15 + i / n * 2.3, a1 = -1.15 + (i + 1) / n * 2.3;
+    const in0 = R * 0.86 - Math.cos(a0) * 0.1, in1 = R * 0.86 - Math.cos(a1) * 0.1;
+    pushQuad(md, [Math.cos(a0) * in0, Math.sin(a0) * in0, 0], [Math.cos(a1) * in1, Math.sin(a1) * in1, 0],
+      [Math.cos(a1) * R, Math.sin(a1) * R, 0], [Math.cos(a0) * R, Math.sin(a0) * R, 0],
+      i % 2 ? C_SL : C_SL2);
+    pushQuad(md, [Math.cos(a0) * in0, Math.sin(a0) * in0, -0.05], [Math.cos(a0) * R, Math.sin(a0) * R, -0.05],
+      [Math.cos(a1) * R, Math.sin(a1) * R, -0.05], [Math.cos(a1) * in1, Math.sin(a1) * in1, -0.05],
+      i % 2 ? C_SL2 : C_SL);
+  }
+  const m = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+  m.frustumCulled = false;
+  g.add(m);
+  const halo = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 2.0), new THREE.MeshBasicMaterial({
+    map: DOT_TEX, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  halo.frustumCulled = false;
+  g.add(halo);
+  g.userData.halo = halo;
+  return g;
+}
+const sliverItem = buildSliverItem();
+sliverItem.visible = false;
+scene.add(sliverItem);
+
+/* ── EMBER FAWNS: small, quick, and a pounce you can read from across the
+   terrace. They are SUN creatures — every spawn stands in open sun. ── */
+function buildEmberFawn() {
+  /* ONE merged body mesh plus ONE glow: eight of these share a terrace
+     with a boss, and five more run the stampede — a fawn that costs five
+     draw calls costs the frame budget the whole fight. */
+  const root = new THREE.Group();
+  /* a FAWN: shoulder-high on a seven-year-old, not on Wick. At full size
+     they read as a herd of adult deer and the Stag stops being the big one */
+  root.scale.setScalar(0.62);
+  const mat = TOON.clone();
+  const md = MD();
+  const coat = [0.55, 0.42, 0.3], coat2 = [0.42, 0.32, 0.24], hoof = [0.2, 0.17, 0.15];
+  const body = node(root, 0, 0.52, 0);
+  lathe(md, [[0, -0.5], [0.3, -0.2], [0.32, 0.3], [0.2, 0.55]], { seg: 7, ex: 1.5, col: coat });
+  for (const [ox, oz] of [[-0.2, 0.26], [0.2, 0.26], [-0.2, -0.26], [0.2, -0.26]]) {
+    box(md, { x: ox, y: -0.52, z: oz, w: 0.06, d: 0.06, h: 0.55, col: coat2 });
+    box(md, { x: ox, y: -0.56, z: oz, w: 0.07, d: 0.07, h: 0.08, col: hoof });
+  }
+  box(md, { x: 0, y: 0.1, z: -0.45, w: 0.05, d: 0.12, h: 0.22, rx: -0.6, col: coat2 });   // tail
+  /* the head, in the same buffer */
+  lathe(md, [[0.12, 0.22], [0.15, 0.6], [0.13, 0.82]], { seg: 6, x: 0, y: 0, z: 0.42, col: coat });
+  lathe(md, [[0.16, 0.82], [0.2, 1.0], [0.1, 1.16], [0, 1.2]], { seg: 7, ex: 1.4, x: 0, y: 0, z: 0.42, col: coat });
+  for (const s of [-1, 1]) box(md, { x: s * 0.13, y: 1.04, z: 0.4, w: 0.05, d: 0.03, h: 0.14, rz: s * 0.5, col: coat2 });
+  const bm = mdMesh(md, mat); bm.frustumCulled = false;
+  body.add(bm);
+  /* the ember in it: eyes and a line of coals down the spine, one buffer */
+  const mdG = MD();
+  for (const s of [-1, 1]) box(mdG, { x: s * 0.09, y: 1.02, z: 0.58, w: 0.045, d: 0.03, h: 0.045, col: [1, 0.6, 0.2] });
+  for (let i = 0; i < 4; i++) {
+    box(mdG, { x: 0, y: 0.34 + i * 0.02, z: 0.22 - i * 0.2, w: 0.05, d: 0.06, h: 0.05, col: [1, 0.55, 0.18] });
+  }
+  const glow = mdMesh(mdG, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false,
+  }), false);
+  glow.frustumCulled = false;
+  body.add(glow);
+  const shadow = blobShadow(0.42);
+  root.add(shadow);
+  root.visible = false;
+  scene.add(root);
+  return { root, body, m: bm, glow, eyes: glow, mat, shadow };
+}
+/* every spawn is checked into OPEN SUN by the probe — a sun creature that
+   lives in the shade is the shade-fizzle bug wearing a costume */
+/* SUN creatures: every one of these stands in open sun, and the probe
+   fails the build if one ever ends up under a bough */
+const FAWN_SPOTS = [
+  [2160, 1452], [2148, 1470], [2172, 1470], [2160, 1488], [2140, 1428], [2180, 1428],
+];
+const FAWNS = FAWN_SPOTS.map((p, i) => ({
+  c: buildEmberFawn(), sx: p[0], sz: p[1], x: p[0], z: p[1], y: 0,
+  hp: 2, st: 'graze', t: i * 0.7, ang: i * 1.1, dead: false, cured: false,
+  flash: 0, cd: 0, hopT: 0, hopFrom: null, hopTo: null, area: 'crown',
+}));
+let fawnsCured = 0;
+const STAMPEDE = [];
+for (let i = 0; i < 5; i++) STAMPEDE.push({ c: buildEmberFawn(), x: 0, z: 0, on: false, ph: i });
+
+function fawnCure(f) {
+  f.cured = true; f.st = 'leave'; f.t = 0;
+  fawnsCured++;
+  f.c.glow.visible = false;
+  f.c.eyes.visible = false;
+  f.c.mat.color.setRGB(1.15, 0.95, 0.8);
+  SFX.fawnCry();
+  SFX.pop();
+  burst(psSparkle, f.x, f.y + 0.7, f.z, 14, 1.4, 1.2, 1.0);
+  rumble({ duration: 70, strong: 0.2, weak: 0.4 });
+}
+function hitFawn(f) {
+  if (f.dead || f.cured) return;
+  f.hp--;
+  f.flash = 0.16;
+  SFX.hit();
+  P.hitstop = 3;
+  burst(psSpark, f.x, f.y + 0.6, f.z, 8, 1.6, 1.2, 0.4);
+  if (f.hp <= 0) fawnCure(f);
+  else { f.st = 'flee'; f.t = 0; f.ang = Math.atan2(f.x - P.x, f.z - P.z); }
+}
+function moveFawn(f, tx, tz, sp) {
+  const d = Math.hypot(tx - f.x, tz - f.z) || 1;
+  const nx = f.x + (tx - f.x) / d * sp * DT, nz = f.z + (tz - f.z) / d * sp * DT;
+  const c = collide(nx, nz, 0.4);
+  const r = resolveSolid(f.x, f.z, c[0], c[1]);
+  f.x = r[0]; f.z = r[1];
+  f.ang = Math.atan2(tx - f.x, tz - f.z);
+}
+function tickFawn(f) {
+  if (f.dead) return;
+  f.t += DT;
+  if (f.flash > 0) f.flash -= DT;
+  if (f.cd > 0) f.cd -= DT;
+  f.y = groundH(f.x, f.z);
+  const d2p = Math.hypot(P.x - f.x, P.z - f.z);
+  if (f.st === 'leave') {
+    moveFawn(f, f.x + Math.sin(f.ang) * 8, f.z + Math.cos(f.ang) * 8, 6.5);
+    if (f.t > 3.4) { f.dead = true; f.c.root.visible = false; }
+    return;
+  }
+  if (f.st === 'graze') {
+    const a = Math.sin(f.t * 0.5 + f.sx) * 2.2;
+    moveFawn(f, f.sx + Math.cos(a) * 5, f.sz + Math.sin(a * 1.3) * 5, 1.3);
+    if (d2p < 13) { f.st = 'alert'; f.t = 0; SFX.fawnCry(); }
+  } else if (f.st === 'alert') {
+    f.ang = Math.atan2(P.x - f.x, P.z - f.z);
+    if (d2p > 18) { f.st = 'graze'; f.t = 0; }
+    else if (f.t > 0.5 && f.cd <= 0 && d2p < 9) { f.st = 'crouch'; f.t = 0; SFX.fawnHop(); }
+    else if (f.t > 0.5 && d2p >= 9) moveFawn(f, P.x, P.z, 3.2);
+  } else if (f.st === 'crouch') {
+    /* THE TELEGRAPH: it drops, it stares, and only then does it jump */
+    f.ang = Math.atan2(P.x - f.x, P.z - f.z);
+    if ((simTick % 6) === 0) psSpark.spawn(f.x, f.y + 0.4, f.z, 0, 0.6, 0, 0.35);
+    if (f.t > 0.62) {
+      f.st = 'pounce'; f.t = 0; f.hopT = 0;
+      f.hopFrom = [f.x, f.z];
+      const d = d2p || 1;
+      f.hopTo = [f.x + (P.x - f.x) / d * Math.min(d + 1.2, 6.5), f.z + (P.z - f.z) / d * Math.min(d + 1.2, 6.5)];
+      SFX.fawnHop();
+    }
+  } else if (f.st === 'pounce') {
+    f.hopT += DT / 0.62;
+    const k = clamp(f.hopT, 0, 1);
+    f.x = lerp(f.hopFrom[0], f.hopTo[0], k);
+    f.z = lerp(f.hopFrom[1], f.hopTo[1], k);
+    f.y = groundH(f.x, f.z) + Math.sin(k * Math.PI) * 1.5;
+    if (k > 0.35 && k < 0.9 && Math.hypot(P.x - f.x, P.z - f.z) < 1.25 && P.fy - groundH(P.x, P.z) < 1.1) {
+      hurtPlayer(1, f.x, f.z, f.c.root);
+      f.hopT = 1;
+    }
+    if (f.hopT >= 1) { f.st = 'flee'; f.t = 0; f.cd = 1.5; f.ang = Math.atan2(f.x - P.x, f.z - P.z); }
+  } else if (f.st === 'flee') {
+    moveFawn(f, f.x + Math.sin(f.ang) * 6, f.z + Math.cos(f.ang) * 6, 5.2);
+    if (f.t > 1.1) { f.st = 'alert'; f.t = 0; }
+  }
+  /* the arena is theirs; they never wander off the Crown */
+  const dA = Math.hypot(f.x - K_ARENA.x, f.z - K_ARENA.z);
+  if (dA > K_ARENA.r) {
+    f.x = K_ARENA.x + (f.x - K_ARENA.x) / dA * K_ARENA.r;
+    f.z = K_ARENA.z + (f.z - K_ARENA.z) / dA * K_ARENA.r;
+  }
+}
+function fawnSwingHits() {
+  let any = false;
+  for (const f of FAWNS) {
+    if (f.dead || f.cured) continue;
+    if (inSwingArc(f.x, f.z, 2.5, 1.4) && P.fy - f.y < 2.2) { hitFawn(f); any = true; }
+  }
+  return any;
+}
+
+/* ═══════════ THE ASH STAG ═══════════
+   A great deer of ash and ember with the WAXING SLIVER caught in its
+   antlers. It charges, and a charge into a terrace wall is the whole
+   fight's answer. Body chips ALWAYS land. Proximity always wakes it. */
+function buildAshStag() {
+  const root = new THREE.Group();
+  /* big, but not so big that a player standing in its swing arc sees only
+     legs: at full size the fight read as two grey pillars and a bar */
+  root.scale.setScalar(0.78);
+  const mat = TOON.clone();
+  const ash = [0.52, 0.5, 0.48], ash2 = [0.4, 0.38, 0.37], dark = [0.28, 0.27, 0.26];
+  const horn = [0.62, 0.58, 0.5];
+  const bodyN = new THREE.Group();
+  const md = MD();
+  /* barrel and haunches: big, dry, cracked */
+  lathe(md, [[0, -1.5], [0.85, -0.9], [0.98, 0.4], [0.8, 1.4], [0, 1.9]], { seg: 8, ex: 1.35, col: ash });
+  lathe(md, [[0.7, 1.1], [0.86, 1.7], [0.5, 2.2]], { seg: 7, ex: 1.1, col: ash2 });
+  for (const [ox, oz] of [[-0.62, 0.95], [0.62, 0.95], [-0.6, -1.05], [0.6, -1.05]]) {
+    lathe(md, [[0.2, 0], [0.24, 0.5], [0.16, 1.5]], { seg: 6, x: ox, y: -1.9, z: oz, col: ash2 });
+    box(md, { x: ox, y: -2.0, z: oz, w: 0.16, d: 0.2, h: 0.18, col: dark });
+  }
+  box(md, { x: 0, y: 0.5, z: -1.75, w: 0.09, d: 0.2, h: 0.6, rx: -0.5, col: ash2 });
+  const bm = mdMesh(md, mat); bm.frustumCulled = false;
+  bodyN.add(bm);
+  bodyN.position.y = 2.05;
+  root.add(bodyN);
+  /* the neck and the head carry the phase */
+  const neckN = new THREE.Group();
+  neckN.position.set(0, 0.55, 1.5);
+  const mdN = MD();
+  lathe(mdN, [[0.34, -0.3], [0.4, 0.6], [0.3, 1.25]], { seg: 7, col: ash });
+  lathe(mdN, [[0.3, 1.2], [0.4, 1.55], [0.34, 1.95], [0.16, 2.15], [0, 2.2]], { seg: 8, ex: 1.5, col: ash });
+  box(mdN, { x: 0, y: 1.75, z: 0.5, w: 0.16, d: 0.16, h: 0.22, rx: 0.5, col: dark });
+  for (const s of [-1, 1]) box(mdN, { x: s * 0.25, y: 1.9, z: 0.02, w: 0.07, d: 0.05, h: 0.24, rz: s * 0.6, col: ash2 });
+  /* THE ANTLERS: six tines a side, and the Sliver caught in the crown of them */
+  for (const s of [-1, 1]) {
+    let px = s * 0.24, py = 2.05, pz = 0.05;
+    for (let i = 0; i < 5; i++) {
+      const nx = px + s * (0.24 + i * 0.05), ny = py + 0.42 - i * 0.04, nz = pz - 0.12 + i * 0.1;
+      box(mdN, { x: (px + nx) / 2, y: (py + ny) / 2, z: (pz + nz) / 2,
+        w: 0.075 - i * 0.008, d: 0.075 - i * 0.008, h: Math.hypot(nx - px, ny - py, nz - pz),
+        rz: -s * Math.atan2(nx - px, ny - py), rx: Math.atan2(nz - pz, ny - py), col: horn });
+      if (i % 2 === 0) {
+        box(mdN, { x: nx + s * 0.1, y: ny + 0.3, z: nz - 0.16,
+          w: 0.05, d: 0.05, h: 0.5, rz: -s * 0.5, rx: -0.4, col: horn });
+      }
+      px = nx; py = ny; pz = nz;
+    }
+  }
+  const nm = mdMesh(mdN, mat); nm.frustumCulled = false;
+  neckN.add(nm);
+  bodyN.add(neckN);
+  /* the ember eyes, and the coals burning along its back */
+  const mdE = MD();
+  for (const s of [-1, 1]) box(mdE, { x: s * 0.22, y: 1.86, z: 0.3, w: 0.09, d: 0.05, h: 0.08, col: [1, 0.58, 0.18] });
+  const eyeGlow = mdMesh(mdE, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false,
+  }), false);
+  eyeGlow.frustumCulled = false;
+  neckN.add(eyeGlow);
+  const mdC = MD();
+  for (let i = 0; i < 7; i++) {
+    box(mdC, { x: 0, y: 0.92 - i * 0.03, z: 1.3 - i * 0.45, w: 0.1, d: 0.14, h: 0.07, col: [1, 0.5 - i * 0.02, 0.16] });
+  }
+  const coalGlow = mdMesh(mdC, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
+  }), false);
+  coalGlow.frustumCulled = false;
+  bodyN.add(coalGlow);
+  /* the phase it wears */
+  const phase = buildSliverItem();
+  phase.scale.setScalar(0.95);
+  phase.position.set(0, 2.95, 0.1);
+  phase.rotation.set(-0.5, 0, 0.25);
+  neckN.add(phase);
+  /* hit flash */
+  const mdF = MD();
+  lathe(mdF, [[0, -1.6], [1.05, 0], [0, 2.0]], { seg: 8, ex: 1.35, col: [1, 1, 1] });
+  const flashM = mdMesh(mdF, new THREE.MeshBasicMaterial({
+    color: 0xfff2dc, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide,
+  }), false);
+  flashM.frustumCulled = false; flashM.visible = false;
+  bodyN.add(flashM);
+  const shadow = blobShadow(1.5);
+  root.add(shadow);
+  root.visible = false;
+  scene.add(root);
+  return { root, bodyN, neckN, eyeGlow, coalGlow, phase, flashM, shadow, mat };
+}
+
+const STAG_HP = 78;
+const STAG = {
+  c: null, active: false, defeated: false, sliverTaken: false,
+  phase: 0, st: 'sleep', t: 0, hp: STAG_HP, hpMax: STAG_HP,
+  x: K_PLINTH.x + 6, z: K_PLINTH.z - 6, ang: 3.0, flash: 0,
+  bodyHits: 0, wallHits: 0, chargeDir: [0, 1], chargeT: 0, barShown: false,
+  leapFrom: null, leapTo: null, leapT: 0, embers: [], emberT: 0,
+  stampT: 0, stampA: 0, stampDone: false, hintSeen: false, wokeAt: 0, altT: 0,
+};
+STAG.c = buildAshStag();
+for (let i = 0; i < 7; i++) STAG.embers.push({ x: 0, z: 0, t: -1, hit: false });
+function stagPhaseHp(ph) { return ph <= 1 ? STAG_HP : ph === 2 ? 52 : 26; }
+
+let stagBarW = -1, stagFlashTimer = 0;
+function refreshStagBar(hitFlash) {
+  const want = STAG.active && !STAG.defeated;
+  if (want !== STAG.barShown) {
+    STAG.barShown = want;
+    bossBarEl.classList.toggle('on', want);
+    if (want) bossNameEl.textContent = 'THE ASH STAG';
+    if (!want) bossBarEl.classList.remove('hit');
+    stagBarW = -1;
+  }
+  if (!want) return;
+  const w = Math.round(clamp(STAG.hp / STAG.hpMax, 0, 1) * 1000) / 10;
+  if (w !== stagBarW) {
+    stagBarW = w;
+    bossFillEl.style.width = `calc((100% - 4px) * ${w / 100})`;
+  }
+  if (hitFlash) {
+    bossBarEl.classList.add('hit');
+    clearTimeout(stagFlashTimer);
+    stagFlashTimer = setTimeout(() => bossBarEl.classList.remove('hit'), 130);
+  }
+}
+function calmStagEyes(t) {
+  const colA = STAG.c.eyeGlow.geometry.attributes.color;
+  for (let i = 0; i < colA.count; i++) colA.setXYZ(i, lerp(1.0, 0.4, t), lerp(0.58, 0.7, t), lerp(0.18, 0.55, t));
+  colA.needsUpdate = true;
+}
+/* NOT keepInArena: p6-game already owns that name for the King Crab, and
+   a top-level redeclaration in a later block silently replaces it — the
+   crab spent the whole world suite being dragged into the Crown's terraces
+   a kilometre and a half away, unhittable, HP untouched. Every helper in
+   this file is namespaced for exactly this reason. */
+function keepStagIn(o, margin) {
+  let hit = false;
+  const dx = o.x - K_ARENA.x, dz = o.z - K_ARENA.z;
+  const d = Math.hypot(dx, dz);
+  const mx = K_ARENA.r - margin;
+  if (d > mx) { o.x = K_ARENA.x + dx / d * mx; o.z = K_ARENA.z + dz / d * mx; hit = true; }
+  /* and it never leaves the garden for the crag: the terraces ARE the arena */
+  if (crownDG(o.x, o.z) > K_WALK - 1) {
+    const a = Math.atan2(K_ARENA.z - o.z, K_ARENA.x - o.x);
+    o.x += Math.cos(a) * 1.2; o.z += Math.sin(a) * 1.2;
+    hit = true;
+  }
+  return hit;
+}
+/* the retaining walls: what a charge is FOR */
+function stagWallHit(x, z) {
+  for (let i = 0; i < K_WALLS.length; i++) {
+    const w = K_WALLS[i];
+    if (distSeg(x, z, w.ax, w.az, w.bx, w.bz) < 2.4) return true;
+  }
+  return false;
+}
+function dealStagDamage(n) {
+  const S = STAG;
+  if (!S.active || S.defeated) return;
+  S.hp = Math.max(0, S.hp - n);
+  refreshStagBar(true);
+  if (S.hp <= 0) { startCine('stagCure'); return; }
+  const thr = S.phase === 1 ? 52 : S.phase === 2 ? 26 : 0;
+  if (S.phase < 3 && S.hp <= thr && S.st !== 'roar') {
+    S.st = 'roar'; S.t = 0;
+    SFX.stagCry(); CAM.shake = 0.35;
+  }
+}
+function hitStagBody() {
+  const S = STAG;
+  S.bodyHits++;
+  S.flash = 0.18;
+  SFX.hit();
+  P.hitstop = 3;
+  CAM.shake = 0.12;
+  rumble({ duration: 80, strong: 0.4, weak: 0.3 });
+  const d = Math.hypot(P.x - S.x, P.z - S.z) || 1;
+  const ex = S.x + (P.x - S.x) / d * 1.8, ez = S.z + (P.z - S.z) / d * 1.8;
+  burst(psSpark, ex, groundH(ex, ez) + 1.8, ez, 11, 2.0, 1.5, 0.45);
+  if (!S.hintSeen && !cineSeen('stagHint')) {
+    S.hintSeen = true;
+    markCineSeen('stagHint');
+    showCaption('Let it CHARGE — the terrace walls are harder than it is.', 3800);
+  }
+  dealStagDamage(3);
+}
+function hitStagStunned() {
+  const S = STAG;
+  S.flash = 0.24;
+  SFX.clawHit();
+  SFX.chime(1.1);
+  P.hitstop = 5;
+  CAM.shake = 0.24;
+  rumble({ duration: 150, strong: 0.75, weak: 0.45 });
+  burst(psSpark, S.x, groundH(S.x, S.z) + 2.0, S.z, 18, 2.5, 2.0, 0.5);
+  burst(psSparkle, S.x, groundH(S.x, S.z) + 2.4, S.z, 12, 1.4, 1.2, 0.85);
+  S.t = Math.min(S.t, 1.6);
+  dealStagDamage(12);
+}
+function stagSwingHits() {
+  const S = STAG;
+  if (!S.active || S.defeated || S.st === 'gone') return false;
+  if (!inSwingArc(S.x, S.z, 4.0, 1.45)) return false;
+  if (S.st === 'stagger') { hitStagStunned(); return true; }
+  hitStagBody();                                   // body chips ALWAYS land
+  return true;
+}
+function stagEmberDrop() {
+  const S = STAG;
+  for (const e of S.embers) {
+    if (e.t >= 0) continue;
+    const a = Math.random() * TAU, d = Math.random() * (K_ARENA.r - 8);
+    e.x = clamp(P.x + (Math.random() - 0.5) * 16, K_ARENA.x - K_ARENA.r + 6, K_ARENA.x + K_ARENA.r - 6);
+    e.z = clamp(P.z + (Math.random() - 0.5) * 16, K_ARENA.z - K_ARENA.r + 6, K_ARENA.z + K_ARENA.r - 6);
+    if (Math.random() < 0.3) { e.x = K_ARENA.x + Math.cos(a) * d; e.z = K_ARENA.z + Math.sin(a) * d; }
+    e.t = 0; e.hit = false;
+    return;
+  }
+}
+function underBough(x, z) {
+  for (let i = 0; i < K_BOUGHS.length; i++) {
+    const b = K_BOUGHS[i];
+    if (Math.hypot(x - b.x, z - b.z) < b.r) return true;
+  }
+  return false;
+}
+function tickStag() {
+  const S = STAG;
+  if (!S.c || S.defeated) return;
+  const inArena = Math.hypot(P.x - K_ARENA.x, P.z - K_ARENA.z) < K_ARENA.r + 2;
+  if (!S.active) {
+    if (inArena) {
+      /* proximity ALWAYS wakes a reachable guardian — the v4 law */
+      S.active = true;
+      if (S.phase === 0) S.phase = 1;
+      S.hp = stagPhaseHp(S.phase);
+      S.st = 'wake'; S.t = 0; S.wokeAt = simTick;
+      SFX.stagCry(); SFX.stagHuff();
+      CAM.shake = 0.32;
+      rumble({ duration: 420, strong: 0.7, weak: 0.7 });
+      refreshStagBar(false);
+    }
+    return;
+  }
+  if (!inArena && Math.hypot(P.x - K_ARENA.x, P.z - K_ARENA.z) > K_ARENA.r + 26) {
+    S.active = false; S.st = 'sleep'; S.t = 0;
+    S.hp = stagPhaseHp(S.phase);
+    S.x = K_PLINTH.x + 6; S.z = K_PLINTH.z - 6;
+    for (const e of S.embers) e.t = -1;
+    for (const r of STAMPEDE) r.on = false;
+    refreshStagBar(false);
+    return;
+  }
+  S.t += DT;
+  if (S.flash > 0) S.flash -= DT;
+  const d2p = Math.hypot(P.x - S.x, P.z - S.z);
+  const faceP = () => { S.ang = angLerp(S.ang, Math.atan2(P.x - S.x, P.z - S.z), 0.07); };
+  switch (S.st) {
+    case 'wake':
+      if (S.t > 1.5) { S.st = 'track'; S.t = 0; }
+      break;
+    case 'track': {
+      faceP();
+      const d = d2p || 1;
+      const sp = S.phase === 3 ? 3.8 : 3.2;   /* it comes back to you quickly */
+      S.x += (P.x - S.x) / d * sp * DT; S.z += (P.z - S.z) / d * sp * DT;
+      keepStagIn(S, 3.0);
+      if (S.t > (S.phase === 3 ? 1.3 : 1.7)) {
+        if (S.phase === 3 && !S.stampDone && d2p < 26) { S.st = 'stampTele'; S.t = 0; SFX.stagCry(); }
+        else if (S.phase >= 2 && (S.altT++ & 1) === 0) { S.st = 'leapTele'; S.t = 0; SFX.stagHuff(); }
+        else { S.st = 'paw'; S.t = 0; SFX.stagHuff(); }
+      }
+      break;
+    }
+    case 'paw':
+      /* THE TELEGRAPH: it plants, it paws, it huffs ember smoke, and the
+         line it will run down is drawn in the dust before it moves */
+      faceP();
+      if ((simTick % 4) === 0) {
+        psDust.spawn(S.x + Math.sin(S.ang) * 1.6, groundH(S.x, S.z) + 0.2, S.z + Math.cos(S.ang) * 1.6,
+          Math.sin(S.ang) * 1.2, 0.7, Math.cos(S.ang) * 1.2, 0.5);
+      }
+      if ((simTick % 7) === 0) {
+        psSpark.spawn(S.x + Math.sin(S.ang) * 2.2, groundH(S.x, S.z) + 1.4, S.z + Math.cos(S.ang) * 2.2,
+          Math.sin(S.ang) * 2.0, 0.5, Math.cos(S.ang) * 2.0, 0.45);
+      }
+      if (S.t > 1.05) {
+        S.st = 'charge'; S.t = 0; S.chargeT = 0;
+        S.chargeDir = [Math.sin(S.ang), Math.cos(S.ang)];
+        SFX.stagCharge();
+        rumble({ duration: 260, strong: 0.65, weak: 0.7 });
+      }
+      break;
+    case 'charge': {
+      const sp = S.phase === 3 ? 13.5 : 11.5;
+      const nx = S.x + S.chargeDir[0] * sp * DT, nz = S.z + S.chargeDir[1] * sp * DT;
+      const wall = stagWallHit(nx, nz);
+      /* THE END OF A CHARGE IS ALWAYS STONE. A retaining wall, the crag at
+         the garden's edge — or, and this is what makes a terraced arena a
+         terraced arena, the LIP of a terrace: it comes over the edge at
+         eleven metres a second and goes down in a heap. Without this a
+         charge straight up the garden's long axis ran out of clock in open
+         ground and the player never got the window at all (measured: zero
+         stagger in seventy seconds of phase one). */
+      const ahead = groundH(nx + S.chargeDir[0] * 2.6, nz + S.chargeDir[1] * 2.6);
+      const step = groundH(nx, nz) - ahead;
+      const bound = Math.hypot(nx - K_ARENA.x, nz - K_ARENA.z) > K_ARENA.r - 2.5 ||
+        crownDG(nx, nz) > K_WALK - 1.5 || Math.abs(step) > 1.0;
+      if (!wall && !bound) { S.x = nx; S.z = nz; }
+      if ((simTick % 3) === 0) {
+        psDust.spawn(S.x, groundH(S.x, S.z) + 0.3, S.z, (Math.random() - 0.5) * 2, 1.0, (Math.random() - 0.5) * 2, 0.5);
+      }
+      if (Math.hypot(P.x - S.x, P.z - S.z) < 2.2 && P.fy - groundH(P.x, P.z) < 1.2) {
+        hurtPlayer(1, S.x, S.z, S.c.root);
+      }
+      if (wall || bound) {
+        /* THE WINDOW: it brains itself on the order's stonework */
+        S.wallHits++;
+        S.st = 'stagger'; S.t = 0;
+        SFX.thump(true); SFX.stagCry();
+        CAM.shake = 0.5;
+        rumble({ duration: 320, strong: 0.95, weak: 0.55 });
+        burst(psDust, S.x, groundH(S.x, S.z) + 0.8, S.z, 28, 3.0, 2.4, 0.9);
+        burst(psSpark, S.x, groundH(S.x, S.z) + 2.2, S.z, 14, 2.2, 1.8, 0.5);
+      } else if (S.t > 2.8) { S.st = 'track'; S.t = 0; }
+      break;
+    }
+    case 'stagger':
+      /* head down, ash pouring off it — the big-damage window */
+      if (S.t > 3.0) { S.st = 'track'; S.t = 0; }
+      break;
+    case 'leapTele':
+      faceP();
+      if (S.t > 0.7) {
+        S.st = 'leap'; S.t = 0; S.leapT = 0;
+        S.leapFrom = [S.x, S.z];
+        /* it leaps a terrace level: pick the pad the player is NOT on */
+        const cand = [[K_PAD.t1.x, K_PAD.t1.z], [K_PAD.t2.x, K_PAD.t2.z], [K_PAD.t3.x, K_PAD.t3.z]];
+        let best = cand[0], bd = -1;
+        for (const c of cand) {
+          const d = Math.hypot(P.x - c[0], P.z - c[1]);
+          if (d > bd && d > 6) { bd = d; best = c; }
+        }
+        S.leapTo = [lerp(best[0], P.x, 0.45), lerp(best[1], P.z, 0.45)];
+        SFX.stagCharge();
+      }
+      break;
+    case 'leap': {
+      S.leapT += DT / 1.05;
+      const k = clamp(S.leapT, 0, 1);
+      S.x = lerp(S.leapFrom[0], S.leapTo[0], k);
+      S.z = lerp(S.leapFrom[1], S.leapTo[1], k);
+      S.ang = Math.atan2(S.leapTo[0] - S.leapFrom[0], S.leapTo[1] - S.leapFrom[1]);
+      if (S.leapT >= 1) {
+        S.st = 'ember'; S.t = 0; S.emberT = 0;
+        SFX.thump(true); SFX.emberFall();
+        CAM.shake = 0.3;
+        rumble({ duration: 240, strong: 0.7, weak: 0.5 });
+        burst(psDust, S.x, groundH(S.x, S.z) + 0.5, S.z, 22, 2.6, 2.0, 0.8);
+      }
+      break;
+    }
+    case 'ember':
+      /* it rains embers across the terrace; the dead boughs are the roof */
+      S.emberT += DT;
+      if (S.emberT > 0.55) { S.emberT = 0; stagEmberDrop(); }
+      if (S.t > 3.4) { S.st = 'track'; S.t = 0; }
+      break;
+    case 'stampTele':
+      faceP();
+      if ((simTick % 5) === 0) SFX.fawnCry();
+      if (S.t > 1.1) {
+        S.st = 'stampede'; S.t = 0; S.stampT = 0; S.stampDone = true;
+        /* the line comes across the arena, square-on: JUMP it */
+        S.stampA = Math.atan2(P.x - K_ARENA.x, P.z - K_ARENA.z) + Math.PI;
+        for (let i = 0; i < STAMPEDE.length; i++) {
+          const r = STAMPEDE[i];
+          r.on = true;
+          r.ph = (i - (STAMPEDE.length - 1) / 2) * 5.2;
+        }
+        SFX.stagCry();
+        rumble({ duration: 400, strong: 0.5, weak: 0.8 });
+      }
+      break;
+    case 'stampede': {
+      S.stampT += DT;
+      const ux = Math.sin(S.stampA), uz = Math.cos(S.stampA);
+      const px = -uz, pz = ux;
+      const travel = -K_ARENA.r - 6 + S.stampT * 24;
+      let hitLine = false;
+      for (const r of STAMPEDE) {
+        if (!r.on) continue;
+        r.x = K_ARENA.x + ux * travel + px * r.ph;
+        r.z = K_ARENA.z + uz * travel + pz * r.ph;
+      }
+      /* one line, one jump: the wyrm's tail sweep, on hooves */
+      const rel = (P.x - K_ARENA.x) * ux + (P.z - K_ARENA.z) * uz;
+      if (Math.abs(rel - travel) < 1.5 && P.fy - groundH(P.x, P.z) < 0.62) hitLine = true;
+      if (hitLine) hurtPlayer(1, K_ARENA.x + ux * travel, K_ARENA.z + uz * travel, STAMPEDE[0].c.root);
+      if ((simTick % 4) === 0) {
+        psDust.spawn(K_ARENA.x + ux * travel + px * (Math.random() - 0.5) * 24,
+          groundH(K_ARENA.x + ux * travel, K_ARENA.z + uz * travel) + 0.3,
+          K_ARENA.z + uz * travel + pz * (Math.random() - 0.5) * 24, 0, 1.2, 0, 0.6);
+      }
+      if (travel > K_ARENA.r + 8) {
+        for (const r of STAMPEDE) r.on = false;
+        S.st = 'track'; S.t = 0;
+        S.stampDone = false;
+      }
+      break;
+    }
+    case 'roar':
+      if (S.t > 1.4) {
+        S.phase++;
+        S.hp = stagPhaseHp(S.phase);
+        refreshStagBar(false);
+        S.st = 'track'; S.t = 0;
+        if (S.phase === 3) SFX.stagCry();
+      }
+      break;
+  }
+  /* the ember rain lives on its own clock, whatever it is doing */
+  for (const e of S.embers) {
+    if (e.t < 0) continue;
+    e.t += DT;
+    if (e.t < 0.85) {
+      if ((simTick % 5) === 0) {
+        psSpark.spawn(e.x + (Math.random() - 0.5) * 1.6, groundH(e.x, e.z) + 3.5 + Math.random() * 2,
+          e.z + (Math.random() - 0.5) * 1.6, 0, -2.4, 0, 0.5);
+      }
+    } else if (!e.hit) {
+      e.hit = true;
+      burst(psSpark, e.x, groundH(e.x, e.z) + 0.5, e.z, 16, 2.4, 1.4, 0.5);
+      SFX.emberFall();
+      if (Math.hypot(P.x - e.x, P.z - e.z) < 2.0 && !underBough(P.x, P.z)) {
+        hurtPlayer(1, e.x, e.z, STAG.c.root);
+      }
+    } else if (e.t > 1.5) e.t = -1;
+  }
+}
+</script>
+<script>
+/* ═══════════ p6g/6 — THE CURE, THE GLINT, AND ALL THE WIRING ═══════════ */
+
+/* ── THE CURE: the ash blows off grey-to-warm-brown, the fawns come to
+   it, it bows, and it dips the Sliver out of its antlers onto the order's
+   own plinth. Nothing dies on the Crown. ── */
+function stagAshK(k) {
+  /* the material tint carries the cure: cold ash → living warm brown */
+  const c = STAG.c.mat.color;
+  c.setRGB(lerp(1, 1.22, k), lerp(1, 0.92, k), lerp(1, 0.72, k));
+  STAG.c.coalGlow.material.opacity = 0.85 * (1 - k);
+}
+function finishStagCure() {
+  const S = STAG;
+  S.defeated = true; S.active = false; S.st = 'gone';
+  S.c.root.visible = false;
+  S.c.phase.visible = false;
+  for (const e of S.embers) e.t = -1;
+  for (const r of STAMPEDE) { r.on = false; r.c.root.visible = false; }
+  calmStagEyes(1);
+  stagAshK(1);
+  refreshStagBar(false);
+  if (SAVE && !SAVE.stagDone) { SAVE.stagDone = true; storeSave(); }
+  /* the Sliver waits on the plinth — the pickup is the player's beat, not
+     a gift handed out by a cutscene (the tortoise lesson) */
+  sliverItem.visible = !S.sliverTaken;
+  sliverItem.scale.setScalar(1.15);
+  sliverItem.position.set(plinthSocket[0], plinthSocket[1] + 0.5, plinthSocket[2]);
+  sliverItem.rotation.set(-0.4, 0.6, 0.2);
+  markCineSeen('stagCure');
+}
+function tickStagCure(t) {
+  const S = STAG, c = S.c;
+  if (cineSeen('stagCure') && t > 0.9 && IN.confirm) { finishStagCure(); endCine(); return; }
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    S.defeated = true;
+    if (SAVE) { SAVE.stagDone = true; storeSave(); }
+    for (const e of S.embers) e.t = -1;
+    for (const r of STAMPEDE) { r.on = false; r.c.root.visible = false; }
+    refreshStagBar(false);
+    SFX.stagCry();
+  }
+  const gy = groundH(S.x, S.z);
+  calmStagEyes(clamp(t / 2.2, 0, 1));
+  stagAshK(clamp((t - 0.6) / 3.0, 0, 1));
+  /* the ash actually leaves it: a year of it, blowing away downwind */
+  if (t < 4.2 && (simTick % 2) === 0) {
+    psDust.spawn(S.x + (Math.random() - 0.5) * 2.6, gy + 1.4 + Math.random() * 2.4, S.z + (Math.random() - 0.5) * 2.6,
+      1.6 + Math.random(), 0.9, 0.7, 1.1);
+  }
+  if (t > 1.4 && CINE.step === 1) {
+    CINE.step = 2;
+    /* the fawns come in — cured or not, they were always its herd */
+    for (const f of FAWNS) { if (!f.dead) { f.st = 'gather'; f.t = 0; f.cd = 99; } }
+  }
+  if (CINE.step >= 2) {
+    for (const f of FAWNS) {
+      if (f.dead || f.st !== 'gather') continue;
+      const d = Math.hypot(S.x - f.x, S.z - f.z) || 1;
+      if (d > 4.5) {
+        f.x += (S.x - f.x) / d * 3.4 * DT; f.z += (S.z - f.z) / d * 3.4 * DT;
+      }
+      f.ang = Math.atan2(S.x - f.x, S.z - f.z);
+      f.y = groundH(f.x, f.z);
+    }
+  }
+  /* the bow, and the dip */
+  if (t > 4.4 && t < 7.6) {
+    const k = smoothstep(clamp((t - 4.4) / 1.6, 0, 1));
+    c.bodyN.rotation.x = k * 0.34;
+    c.neckN.rotation.x = k * 0.85;
+    if (CINE.step === 2) { CINE.step = 3; SFX.stagBow(); rumble({ duration: 900, strong: 0.3, weak: 0.7 }); }
+  }
+  if (t >= 6.2 && CINE.step === 3) {
+    CINE.step = 4;
+    c.phase.visible = false;
+    sliverItem.visible = true;
+    sliverItem.scale.setScalar(1.15);
+    SFX.chime(1.4);
+    burst(psSparkle, plinthSocket[0], plinthSocket[1] + 0.6, plinthSocket[2], 22, 1.6, 1.3, 1.2);
+  }
+  if (CINE.step >= 4) {
+    const k = smoothstep(clamp((t - 6.2) / 1.6, 0, 1));
+    const hx = S.x + Math.sin(S.ang) * 1.9, hz = S.z + Math.cos(S.ang) * 1.9;
+    sliverItem.position.set(lerp(hx, plinthSocket[0], k), lerp(gy + 2.6, plinthSocket[1] + 0.5, k) + Math.sin(k * Math.PI) * 0.8,
+      lerp(hz, plinthSocket[2], k));
+    sliverItem.rotation.set(-0.4, 0.6 + k * 1.2, 0.2);
+  }
+  /* and it walks away up the terrace, its herd with it */
+  if (t > 8.0) {
+    const k = clamp((t - 8.0) / 3.2, 0, 1);
+    c.bodyN.rotation.x = lerp(0.34, 0, k);
+    c.neckN.rotation.x = lerp(0.85, 0, k);
+    const tx = K_PAD.east.x, tz = K_PAD.east.z;
+    S.ang = angLerp(S.ang, Math.atan2(tx - S.x, tz - S.z), 0.05);
+    S.x += Math.sin(S.ang) * 3.6 * DT; S.z += Math.cos(S.ang) * 3.6 * DT;
+    for (const f of FAWNS) {
+      if (f.dead || f.st !== 'gather') continue;
+      const d = Math.hypot(S.x - f.x, S.z - f.z) || 1;
+      if (d > 3.2) { f.x += (S.x - f.x) / d * 4.2 * DT; f.z += (S.z - f.z) / d * 4.2 * DT; }
+      f.y = groundH(f.x, f.z);
+    }
+  }
+  c.root.position.set(S.x, groundH(S.x, S.z), S.z);
+  c.root.rotation.y = S.ang;
+  c.root.visible = true;
+  /* ONE slow arc: the plinth in frame, the Stag leaving through it */
+  const k2 = smoothstep(clamp(t / 11.4, 0, 1));
+  const aa = lerp(S.ang + Math.PI + 0.6, S.ang + Math.PI - 0.9, k2);
+  const rr = lerp(10.5, 8.5, k2);
+  cineCam(plinthSocket[0] + Math.sin(aa) * rr, plinthSocket[1] + lerp(3.4, 2.4, k2), plinthSocket[2] + Math.cos(aa) * rr,
+    plinthSocket[0], plinthSocket[1] + lerp(1.0, 0.4, k2), plinthSocket[2]);
+  if (t > 11.9) { finishStagCure(); endCine(); }
+}
+
+/* ── THE GLINT: the sun you freed shows you the way ── */
+function crownGoldBand() {
+  try { return (typeof fSunLive !== 'undefined' && fSunLive) && (typeof fSunK === 'number') && fSunK > 0.55; }
+  catch (e) { return false; }
+}
+let glintSeenT = 0, glintPulse = 0;
+function onTowerDeck() {
+  return typeof TOWER !== 'undefined' &&
+    Math.hypot(P.x - TOWER.x, P.z - TOWER.z) < 6.5 && P.fy > _preCrownGroundH(TOWER.x, TOWER.z) + 13;
+}
+function tickGlint() {
+  const live = crownGoldBand();
+  if (!live || !SAVE) { glintSeenT = 0; return; }
+  if (SAVE.crownGlint) return;
+  if (!onTowerDeck() || state !== 'play') { glintSeenT = 0; return; }
+  glintSeenT += DT;
+  if (glintSeenT < 1.1) return;
+  SAVE.crownGlint = true; storeSave();
+  SFX.chime(1.6);
+  rumble({ duration: 420, strong: 0.25, weak: 0.7 });
+  const gy = crownY(K_GLINT.x, K_GLINT.z);
+  /* no caption: the camera turns and LOOKS at it, and the quest line
+     changes. That is the whole explanation anybody gets. */
+  /* the camera stands on the deck's EAST rail — the lookout roof sits in
+     the middle of that platform, and a beat that frames the roof instead
+     of the light is worse than no beat */
+  const gdx = K_GLINT.x - TOWER.x, gdz = K_GLINT.z - TOWER.z;
+  const gl = Math.hypot(gdx, gdz) || 1;
+  startMicro({
+    cam: [TOWER.x + gdx / gl * 4.0, _preCrownGroundH(TOWER.x, TOWER.z) + TOWER.deckY + 1.5,
+          TOWER.z + gdz / gl * 4.0],
+    look: [K_GLINT.x, gy + 6.8, K_GLINT.z],
+    dur: 3.0, at: 0.5,
+    onFire() { if (QUEST.q < 13) setQuest(13); },
+  });
+}
+
+DLG.warden4 = { name: 'THE FIRE WARDEN', lines: [
+  'That light’s off the old watch-garden, up on the Crown.',
+  'Nothing has caught the sun up there since the wind died.',
+], onDone: () => { SAVE.wardenTalked = 4; storeSave(); } };
+
+/* ── interactions ── */
+const _preCrownInteract = currentInteract;
+currentInteract = function () {
+  if (P.sailing) return _preCrownInteract();
+  const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
+  /* the crack in the Hollow's upper gallery */
+  if (SAVE && SAVE.crownGlint && !SAVE.stairOpen && !stairMode &&
+      near(STAIR_IN.x, STAIR_IN.z, 4.2) && inHollowAt(P.x, P.z)) {
+    return { id: 'stairCrack', label: '✕ LOOK' };
+  }
+  if (stairMode) {
+    const v = organVentNear(P.x, P.z);
+    if (v) return { id: 'organVent', vent: v, label: 'HOLD ✕ — TURN THE VENT' };
+    return null;
+  }
+  if (inGardenWalkQ(P.x, P.z)) {
+    if (STAG.active && !STAG.defeated) return null;          // no reading mid-fight
+    if (SAVE && SAVE.stagDone && !STAG.sliverTaken && !P.carrySliver &&
+        near(K_PLINTH.x, K_PLINTH.z, 5.2)) {
+      return { id: 'sliver', label: '✕ TAKE THE WAXING SLIVER' };
+    }
+    if (!beaconChest.opened && near(beaconChest.x, beaconChest.z, 1.8)) {
+      return { id: 'beaconChest', label: '✕ OPEN' };
+    }
+    if (beaconBowl && near(beaconBowl[0], beaconBowl[2], 3.0)) return { id: 'beaconLook', label: '✕ LOOK' };
+    if (near(K_SHRINE.x, K_SHRINE.z, 3.6)) return { id: 'shrineLook', label: '✕ LOOK' };
+  }
+  return _preCrownInteract();
+};
+const _preCrownDo = doInteract;
+doInteract = function (ctx) {
+  if (!ctx) return _preCrownDo(ctx);
+  /* the Warden has ONE new line, and only once the light has been seen —
+     after that she goes back to her springs and her boars */
+  if (ctx.id === 'wardenTalk' && SAVE && SAVE.crownGlint &&
+      (SAVE.wardenTalked || 0) >= 2 && (SAVE.wardenTalked || 0) < 4) {
+    startDialog('warden4', warden);
+    return;
+  }
+  if (ctx.id === 'stairCrack') {
+    SFX.stoneGrind();
+    CAM.shake = 0.2;
+    rumble({ duration: 420, strong: 0.4, weak: 0.6 });
+    startMicro({
+      cam: [STAIR_IN.x - 4.2, _preCrownGroundH(STAIR_IN.x, STAIR_IN.z) + 2.6, STAIR_IN.z - 3.6],
+      look: [S_NODE.mouth.x, S_NODE.mouth.y + 2.2, S_NODE.mouth.z],
+      dur: 2.6, at: 0.55,
+      caption: 'Gold light falls through here, evenings.', ms: 4200,
+      onFire() {
+        if (SAVE && !SAVE.stairOpen) { SAVE.stairOpen = true; storeSave(); }
+        stairInOpen = true;
+        if (QUEST.q < 14) setQuest(14);
+      },
+    });
+    return;
+  }
+  if (ctx.id === 'sliver') {
+    STAG.sliverTaken = true;
+    sliverItem.visible = false;
+    P.carrySliver = true;
+    itemGetT = 0;
+    itemToast('THE WAXING SLIVER', 'Fourth of eight. It is cool, and it smells of rain.');
+    SFX.itemGet(); SFX.chime(1.8);
+    burst(psSparkle, P.x, P.fy + 1.4, P.z, 20, 1.5, 1.2, 1.0);
+    setQuest(16);
+    return;
+  }
+  if (ctx.id === 'beaconChest') { openBeaconChest(); return; }
+  if (ctx.id === 'beaconLook') {
+    SFX.page();
+    startMicro({
+      cam: [beaconBowl[0] - 3.4, beaconBowl[1] + 1.6, beaconBowl[2] + 3.0],
+      look: [beaconBowl[0], beaconBowl[1], beaconBowl[2]],
+      dur: 2.4, at: 0.6,
+      caption: 'Ash, packed hard by a year of no rain. The last fire was a signal.', ms: 4200,
+    });
+    return;
+  }
+  if (ctx.id === 'shrineLook') {
+    SFX.hum();
+    startMicro({
+      cam: [K_SHRINE.x - 6.5, crownY(K_SHRINE.x, K_SHRINE.z) + 3.4, K_SHRINE.z + 5.5],
+      look: [K_SHRINE.x, crownY(K_SHRINE.x, K_SHRINE.z) + 3.2, K_SHRINE.z],
+      dur: 2.8, at: 0.6,
+      caption: 'Eight little wheels, and not one of them has turned in a year.', ms: 4400,
+    });
+    return;
+  }
+  _preCrownDo(ctx);
+};
+
+/* the beacon ruin's HEART CONTAINER */
+let beaconAnimT = -1, beaconHeartT = -1;
+function openBeaconChest() {
+  beaconChest.opened = true;
+  if (SAVE) { SAVE.beaconHeart = true; storeSave(); }
+  beaconAnimT = 0;
+  SFX.chestOpen();
+}
+function tickBeaconChest() {
+  if (beaconAnimT < 0) return;
+  beaconAnimT += DT;
+  beaconChest.lid.rotation.x = -smoothstep(clamp(beaconAnimT / 0.5, 0, 1)) * 1.9;
+  if (beaconAnimT > 0.4 && beaconHeartT < 0) {
+    beaconHeartT = 0;
+    beaconChest.heart.visible = true;
+  }
+  if (beaconHeartT >= 0) {
+    beaconHeartT += DT;
+    const y0 = crownY(beaconChest.x, beaconChest.z) + 0.5;
+    if (beaconHeartT < 1.0) {
+      beaconChest.heart.position.set(beaconChest.x, y0 + beaconHeartT * 0.9, beaconChest.z);
+      beaconChest.heart.rotation.y += DT * 3;
+    } else if (beaconHeartT < 1.7) {
+      const k = (beaconHeartT - 1.0) / 0.7;
+      beaconChest.heart.position.set(lerp(beaconChest.x, P.x, k), lerp(y0 + 0.9, P.fy + 1.9, k), lerp(beaconChest.z, P.z, k));
+      beaconChest.heart.rotation.y += DT * 6;
+    } else {
+      beaconChest.heart.visible = false;
+      beaconAnimT = -1; beaconHeartT = -1;
+      P.maxHearts = Math.min(8, P.maxHearts + 1);
+      P.hearts = P.maxHearts;
+      if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
+      itemGetT = 0;
+      itemToast('HEART CONTAINER', 'The last watcher’s, left where the fire used to be.');
+      SFX.heart();
+      burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+    }
+  }
+}
+
+/* ── the region tick ── */
+let crownSeenSession = false, crownPlayTicks = 0;
+function tickCrown() {
+  if (state !== 'play') { organAudioUpdate(false); return; }
+  crownPlayTicks++;
+  /* which world am I in? resolved from the REAL position, every tick */
+  stairMode = stairModeAt(P.x, P.z, P.fy);
+  const inGarden = inGardenWalkQ(P.x, P.z);
+  if (inGarden && SAVE && !SAVE.crownSeen) {
+    SAVE.crownSeen = true; storeSave();
+    if (QUEST.q < 15) setQuest(15);
+  }
+  if (inGarden && !crownSeenSession) {
+    crownSeenSession = true;
+    showCaption('THE CROWN', 4200);
+  }
+  tickGlint();
+  const ctx = (stairMode || inGarden) ? currentInteract() : null;
+  if (stairMode || ORG_AUD.built) tickOrgan(ctx);
+  if (inGarden || STAG.active) {
+    tickStag();
+    for (let i = 0; i < FAWNS.length; i++) tickFawn(FAWNS[i]);
+  }
+  tickBeaconChest();
+}
+
+/* ── the wraps ── */
+const _preCrownTickPlayer = tickPlayer;
+tickPlayer = function () {
+  /* FIRST: which world is this? p6c's tick runs inside the delegate below
+     and asks "am I in the Hollow?" — with the answer stale by one frame it
+     greeted the player with THE FALLS HOLLOW fifty metres up the stair */
+  stairMode = stairModeAt(P.x, P.z, P.fy);
+  for (let i = 0; i < ORG_COLL.length; i++) ORG_COLL[i].off = !stairMode;
+  _preCrownTickPlayer();
+  tickCrown();
+};
+const _preCrownSwing = swingHits;
+swingHits = function () {
+  let any = _preCrownSwing();
+  if (inGardenWalkQ(P.x, P.z)) {
+    if (fawnSwingHits()) any = true;
+    if (stagSwingHits()) any = true;
+  }
+  return any;
+};
+const _preCrownRespawn = respawnLeftBehind;
+respawnLeftBehind = function () {
+  _preCrownRespawn();
+  if (P.area === 'crown') return;
+  for (const f of FAWNS) {
+    if (!f.dead && !f.cured) continue;
+    f.dead = false; f.cured = false; f.hp = 2; f.st = 'graze'; f.t = 0; f.cd = 0;
+    f.x = f.sx; f.z = f.sz; f.flash = 0;
+    f.c.glow.visible = true; f.c.eyes.visible = true;
+    f.c.mat.color.setRGB(1, 1, 1);
+    f.c.root.visible = true;
+  }
+};
+const _preCrownObjPoint = objectivePoint;
+objectivePoint = function () {
+  if (SAVE) {
+    /* the sun moved and nobody has been up the tower since: a nudge, never
+       a caption — the compass leans toward the fire-watch tower */
+    if (QUEST.q === 12 && !SAVE.crownGlint && crownGoldBand() && typeof TOWER !== 'undefined') {
+      return { x: TOWER.x, z: TOWER.z };
+    }
+    if (QUEST.q === 13) return { x: STAIR_IN.x, z: STAIR_IN.z };
+    if (QUEST.q === 14) {
+      if (!SAVE.organ1) return { x: ORGAN.landings[0].vents[0].x, z: ORGAN.landings[0].vents[0].z };
+      if (!SAVE.organ2) return { x: ORGAN.landings[1].vents[0].x, z: ORGAN.landings[1].vents[0].z };
+      if (!SAVE.organ3) return { x: ORGAN.landings[2].vents[0].x, z: ORGAN.landings[2].vents[0].z };
+      return { x: S_NODE.out.x, z: S_NODE.out.z };
+    }
+    if (QUEST.q === 15) return { x: K_PLINTH.x, z: K_PLINTH.z };
+    if (QUEST.q >= 16) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+  }
+  return _preCrownObjPoint();
+};
+const _preCrownCamera = updateCamera;
+let crownCamDist = 3.3;
+updateCamera = function (dtv) {
+  if (CAM.mode === 'follow' && !P.sailing) {
+    /* the stair and the threshold notch are both narrow enough that a
+       three-metre camera ends up inside the rock behind you */
+    const tight = stairMode || kPadD(K_PAD.gate, P.x, P.z) <= K_WALK;
+    const want = tight ? 2.4 : 3.3;
+    crownCamDist += (want - crownCamDist) * Math.min(1, dtv * 2.6);
+    if (crownCamDist < 3.26) CAM.dist = crownCamDist;
+  }
+  _preCrownCamera(dtv);
+};
+const _preCrownStartCine = startCine;
+startCine = function (id) {
+  if (id === 'sunstruck' && STAG.active && !STAG.defeated) {
+    /* the checkpoint: the guardian re-arms at the phase you left it on */
+    STAG.st = 'sleep'; STAG.t = 0;
+    STAG.hp = stagPhaseHp(STAG.phase);
+    STAG.active = false;
+    STAG.x = K_PLINTH.x + 6; STAG.z = K_PLINTH.z - 6; STAG.ang = 3.0;
+    STAG.stampDone = false; STAG.altT = 0;
+    for (const e of STAG.embers) e.t = -1;
+    for (const r of STAMPEDE) r.on = false;
+    STAG.c.bodyN.rotation.x = 0; STAG.c.neckN.rotation.x = 0;
+    refreshStagBar(false);
+  }
+  _preCrownStartCine(id);
+  if (id === 'dawnCall' || id === 'stagCure') {
+    CAM.mode = 'cine';
+    dlgBox.classList.remove('on');
+  }
+};
+const _preCrownTickCine = tickCine;
+tickCine = function () {
+  if (CINE.id === 'dawnCall') { CINE.t += DT; tickDawnCall(CINE.t); return; }
+  if (CINE.id === 'stagCure') { CINE.t += DT; tickStagCure(CINE.t); return; }
+  _preCrownTickCine();
+};
+</script>
+<script>
+/* ═══════════ p6g/7 — the render frame, the derivation, the telemetry ═══════════ */
+const K_FOG = { col: col(0x1f1d1a), near: 10, far: 62 };
+let kFogT = 0, kClock = performance.now();
+const _preCrownCull = cullChunks;
+cullChunks = function (ccx, ccz) {
+  _preCrownCull(ccx, ccz);
+  const now = performance.now();
+  const dtv = Math.min(0.1, (now - kClock) / 1000);
+  kClock = now;
+  const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
+  /* the mode is a RENDER fact too: title screens and cinematics never run
+     tickCrown, and the stair still has to know which floor it is showing */
+  if (state !== 'play') stairMode = stairModeAt(P.x, P.z, P.fy);
+  const inGarden = inGardenWalkQ(P.x, P.z);
+  /* ── DRAW-CALL HYGIENE ──
+     The stair is sealed rock and the Crown is a hundred metres over the
+     Falls Hollow's roof: from inside either one, the other world and the
+     forest around it are drawing nothing a player can see. Measured at the
+     first landing before this: 95 calls, of which the hollow's ten and the
+     forest's twenty were behind solid stone. */
+  const deepStair = stairMode && P.fy > S_NODE.mouth.y + 7 &&
+    Math.hypot(P.x - S_NODE.out.x, P.z - S_NODE.out.z) > 15;
+  const inHollowNow = _preCrownInHollowAt(P.x, P.z);
+  /* THE GARDEN IS A WALLED ROOM. Its rim shuts out the whole world except
+     at the ledge's parapet, so from the terraces the forest below and its
+     far tier are drawing a hundred metres of rock's worth of nothing.
+     (Measured in the arena, mid-fight: 92 calls / 75k tris, of which the
+     forest was 20 calls and 55k tris behind a crag.) */
+  /* the ledge's court and the saddle gate above it both look north over
+     the falls; everywhere else in the garden the rim IS the horizon (and
+     a culled world behind a rim you can see over is a hole in it — the
+     structure probe casts for exactly that) */
+  const atTheView = kPadD(K_PAD.ledge, P.x, P.z) <= K_WALK + 2 ||
+    kPadD(K_PAD.saddle, P.x, P.z) <= K_WALK + 2;
+  const walled = inGarden && !atTheView;
+  const hideHollow = deepStair || inGarden;
+  if (hideHollow) {
+    hollowFloorMesh.visible = false; hollowWallMesh.visible = false;
+    hollowDomeMesh.visible = false; hollowPropMesh.visible = false;
+    hollowGlowMesh.visible = false; hollowPoolMesh.visible = false;
+    glyphDoor1.group.visible = false; glyphDoor2.group.visible = false;
+    hm1.group.visible = false; hm2.group.visible = false; hmRelay.group.visible = false;
+    hollowChest.group.visible = false;
+    hBeam1.visible = false; hBeam2.visible = false; hBeamR.visible = false;
+  }
+  /* DEEP IN THE FALLS HOLLOW the Parched Forest's far tier is still
+     drawing thirty-five impression tiles through a hundred metres of hill
+     (measured at the crack: 114 calls, 4 of them this part's). The near
+     chunks stay — the throat's framed daylight is made of them. */
+  if (inHollowNow && Math.hypot(P.x - BASIN.x, P.z - BASIN.z) > 34) {
+    for (let i = 0; i < farTier.length; i++) if (farTier[i]) farTier[i].visible = false;
+  }
+  if (deepStair || walled) {
+    for (let i = 0; i < chunks.length; i++) if (chunks[i].mesh) chunks[i].mesh.visible = false;
+    for (let i = 0; i < farTier.length; i++) if (farTier[i]) farTier[i].visible = false;
+    towerMesh.visible = false; cedarMesh.visible = false; fallsMesh.visible = false;
+    rockfallMesh.visible = false; rockfallOpenMesh.visible = false;
+    window.__springsMesh.visible = false; cedarGlow.visible = false;
+    if (typeof seaLine !== 'undefined' && seaLine) seaLine.visible = false;
+  }
+  /* at the parapet the far tier IS the view — out to where the fog has
+     eaten it and the authored horizon band takes over (past ~1 km the
+     forest's own impressions are 80% fog colour and cost a draw call each) */
+  if (inGarden && !deepStair) {
+    for (let i = 0; i < farTier.length; i++) {
+      const m = farTier[i];
+      if (!m || !m.visible) continue;
+      const bs = m.geometry.boundingSphere;
+      if (!bs) continue;
+      const dx = bs.center.x - ccx, dz = bs.center.z - ccz;
+      if (dx * dx + dz * dz > 1050 * 1050) m.visible = false;
+    }
+  }
+  const kVis = !deepStair && !inHollowNow &&
+    (near2(K_ARENA.x, K_ARENA.z, 430) || near2(K_PAD.ledge.x, K_PAD.ledge.z, 430));
+  crownFloorMesh.visible = kVis;
+  crownPropMesh.visible = kVis;
+  crownGlowMesh.visible = kVis && near2(K_PLINTH.x, K_PLINTH.z, 120);
+  /* the authored horizon belongs to the parapet and nowhere else */
+  crownVista.visible = inGarden || (stairMode && P.fy > S_NODE.b.y);
+  glintMount.visible = kVis && near2(K_GLINT.x, K_GLINT.z, 140);
+  crownChest1.group.visible = kVis && near2(crownChest1.x, crownChest1.z, 44);
+  crownChest2.group.visible = kVis && near2(crownChest2.x, crownChest2.z, 44);
+  beaconChest.group.visible = kVis && near2(beaconChest.x, beaconChest.z, 40);
+  for (let i = 0; i < K_PINWHEELS.length; i++) {
+    K_PINWHEELS[i].visible = kVis && near2(K_SHRINE.x, K_SHRINE.z, 44);
+  }
+  /* THE GLINT — a star on the summit through the whole gold band, and the
+     only thing in the world that pulses like that */
+  {
+    const live = crownGoldBand();
+    /* it PULSES, but it never nearly goes out: a star that dips to a tenth
+       of itself reads as a flicker, and half the time it is not there at
+       all for a player scanning the ridge */
+    glintPulse = live ? (0.66 + 0.34 * Math.sin(now / 260)) : 0;
+    /* it has to read as a STAR from the fire-watch tower a kilometre west
+       and as a spark on a brass mirror from two metres away: the sprite is
+       sized in screen space, not world space */
+    const gd = Math.hypot(camera.position.x - K_GLINT.x, camera.position.y - (glintMesh.position.y),
+      camera.position.z - K_GLINT.z);
+    glintMesh.scale.setScalar(clamp(gd / 620, 0.045, 1.6));
+    const op = live ? 0.85 * glintPulse * clamp(0.35 + gd / 90, 0.35, 1) : 0;
+    glintCoreMat.opacity = op;
+    glintFlareMat.opacity = op * 0.32;
+    glintMesh.visible = op > 0.02;
+    if (glintMesh.visible) glintMesh.lookAt(camera.position);
+  }
+  /* ── the stair ── */
+  /* from the gallery, all you can see of the stair is its doorway: the
+     whole climb behind it is a hundred metres of stone away */
+  /* before the crack is answered there is nothing behind it but stone, and
+     the Hollow's gallery is an expensive frame already */
+  const atMouth = stairInOpen && near2(S_NODE.mouth.x, S_NODE.mouth.z, 26);
+  const sVis = stairMode || atMouth || near2(S_NODE.out.x, S_NODE.out.z, 22);
+  const sDeep = stairMode || (stairInOpen && near2(S_NODE.mouth.x, S_NODE.mouth.z, 12)) ||
+    near2(S_NODE.out.x, S_NODE.out.z, 22);
+  stairFloorMesh.visible = sDeep;
+  stairWallMesh.visible = sDeep;
+  stairCapMesh.visible = stairMode || near2(S_NODE.out.x, S_NODE.out.z, 22);
+  stairPropMesh.visible = sVis;
+  stairDressMesh.visible = stairMode;
+  stairMouthGlow.visible = sVis;
+  for (let i = 0; i < S_DOORS.length; i++) {
+    const d = S_DOORS[i];
+    d.group.visible = sVis && near2(d.x, d.z, 20);
+    const wantK = organOpen[i] ? 1 : 0;
+    d.k += (wantK - d.k) * Math.min(1, dtv * 1.6);
+    d.group.position.y = d.baseY - smoothstep(d.k) * 5.6;
+  }
+  for (let i = 0; i < ORG_VENTS.length; i++) {
+    const v = ORG_VENTS[i];
+    const vis = sVis && near2(v.x, v.z, 20);
+    v.group.visible = vis;
+    if (!vis) continue;
+    v.capN.rotation.y = -(v.ang + v.wob);
+    /* CONSONANCE IS THE TELL: the pipe warms as the note comes true, and
+       stays warm once it is. Nobody is told that; everybody sees it. */
+    const close = v.locked ? 1 : clamp(1 - Math.abs(v.da) / 0.9, 0, 1);
+    let glow = v.locked ? 0.3 + 0.07 * Math.sin(now / 520)
+      : close * close * (0.34 + 0.2 * Math.sin(now / 130));
+    /* THE DAWN CALL: the whole instrument plays, and every pipe the camera
+       rides past blazes with the note it is holding */
+    if (CINE.id === 'dawnCall') glow = Math.max(glow, 0.45 + 0.35 * Math.sin(now / 150 + i * 1.7));
+    v.glowM.material.opacity = glow;
+    if (v.locked && Math.random() < 0.04) {
+      psSparkle.spawn(v.x + (Math.random() - 0.5) * 1.2, v.y + 1.2 + Math.random() * 4,
+        v.z + (Math.random() - 0.5) * 1.2, 0, 0.7, 0, 1.0);
+    }
+  }
+  /* the fog inside the mountain */
+  const inS = stairMode && state !== 'title';
+  kFogT += ((inS ? 1 : 0) - kFogT) * Math.min(1, dtv * 2.6);
+  if (kFogT > 0.01) {
+    scene.fog.color.setRGB(
+      lerp(scene.fog.color.r, K_FOG.col[0], kFogT),
+      lerp(scene.fog.color.g, K_FOG.col[1], kFogT),
+      lerp(scene.fog.color.b, K_FOG.col[2], kFogT));
+    scene.fog.near = lerp(scene.fog.near, K_FOG.near, kFogT);
+    scene.fog.far = lerp(scene.fog.far, K_FOG.far, kFogT);
+  }
+  /* ── the creatures ── */
+  animateFawns(dtv, now, ccx, ccz);
+  animateStag(dtv, now, ccx, ccz);
+  /* the carried Sliver rides Wick's back */
+  if (P.carrySliver && (state === 'play' || state === 'dialog' || state === 'pause')) {
+    sliverItem.visible = true;
+    sliverItem.scale.setScalar(0.6);
+    sliverItem.position.set(
+      P.x - Math.sin(P.heading) * 0.3, P.fy + 1.15, P.z - Math.cos(P.heading) * 0.3);
+    sliverItem.rotation.set(0, P.heading + Math.PI, 0.3);
+  }
+  if (sliverItem.visible) {
+    sliverItem.userData.halo.material.opacity = 0.22 + 0.1 * Math.sin(now / 520);
+    sliverItem.userData.halo.lookAt(camera.position);
+  }
+  extendCrownDebugOnce();
+};
+
+function animateFawns(dtv, now, ccx, ccz) {
+  const w = now / 1000;
+  for (let i = 0; i < FAWNS.length; i++) {
+    const f = FAWNS[i];
+    if (f.dead) { f.c.root.visible = false; continue; }
+    const dx = f.x - ccx, dz = f.z - ccz;
+    const d2 = dx * dx + dz * dz;
+    const vis = d2 < 30 * 30;
+    f.c.root.visible = vis;
+    if (!vis) continue;
+    /* the ember in them is an extra draw call each, and six fawns share a
+       terrace with a boss: only the near ones burn */
+    f.c.glow.visible = d2 < 17 * 17 && !f.cured;
+    f.c.root.position.set(f.x, f.y, f.z);
+    f.c.root.rotation.y = f.ang;
+    const moving = f.st === 'graze' || f.st === 'flee' || f.st === 'leave' || f.st === 'gather';
+    f.c.body.rotation.x = f.st === 'crouch' ? 0.3 : f.st === 'pounce' ? -0.35 : 0;
+    f.c.body.position.y = 0.52 + (moving ? Math.abs(Math.sin(w * 9 + i)) * 0.06 : 0)
+      + (f.st === 'crouch' ? -0.16 : 0);
+    f.c.m.material.color.setRGB(
+      f.cured ? 1.15 : (f.flash > 0 ? 2.2 : 1),
+      f.cured ? 0.95 : (f.flash > 0 ? 2.2 : 1),
+      f.cured ? 0.8 : (f.flash > 0 ? 2.2 : 1));
+    f.c.shadow.position.y = groundH(f.x, f.z) - f.y + 0.04;
+    if (f.st === 'crouch' && !LOWFX && Math.random() < 0.25) {
+      psSpark.spawn(f.x, f.y + 0.5, f.z, 0, 0.5, 0, 0.3);
+    }
+  }
+  /* the stampede runs as ONE piece of geometry — five silhouettes abreast */
+  for (let i = 0; i < STAMPEDE.length; i++) {
+    const r = STAMPEDE[i];
+    r.c.root.visible = r.on;
+    if (!r.on) continue;
+    r.c.root.position.set(r.x, groundH(r.x, r.z) + Math.abs(Math.sin(w * 14 + i)) * 0.5, r.z);
+    r.c.root.rotation.y = STAG.stampA;
+  }
+}
+function animateStag(dtv, now, ccx, ccz) {
+  const S = STAG, c = S.c;
+  const w = now / 1000;
+  const dx = S.x - ccx, dz = S.z - ccz;
+  const near = dx * dx + dz * dz < 90 * 90;
+  if (S.defeated && CINE.id !== 'stagCure') { c.root.visible = false; refreshStagBar(false); return; }
+  const on = near && (S.active || S.st === 'sleep') && S.st !== 'gone';
+  if (CINE.id !== 'stagCure') {
+    c.root.visible = on;
+    if (!on) { refreshStagBar(false); return; }
+    c.root.position.set(S.x, groundH(S.x, S.z) + (S.st === 'leap' ? Math.sin(clamp(S.leapT, 0, 1) * Math.PI) * 4.2 : 0), S.z);
+    c.root.rotation.y = S.ang;
+  }
+  const run = S.st === 'charge' || S.st === 'track' || S.st === 'leap';
+  c.bodyN.position.y = 2.05 + (run ? Math.abs(Math.sin(w * (S.st === 'charge' ? 16 : 6))) * 0.12 : Math.sin(w * 1.1) * 0.03);
+  if (CINE.id !== 'stagCure') {
+    c.bodyN.rotation.x = S.st === 'paw' ? 0.12 + Math.sin(w * 22) * 0.03
+      : S.st === 'charge' ? -0.1
+      : S.st === 'stagger' ? 0.3 + Math.sin(w * 8) * 0.07
+      : S.st === 'leap' ? -0.22 : 0;
+    c.neckN.rotation.x = S.st === 'stagger' ? 0.75 + Math.sin(w * 7) * 0.1
+      : S.st === 'paw' ? 0.3 : S.st === 'roar' ? -0.5 + Math.sin(w * 17) * 0.06 : 0;
+    c.root.rotation.z = S.st === 'stagger' ? Math.sin(w * 5) * 0.07 : 0;
+  }
+  /* the weak point is a POSTURE, not a hidden number: head down, ash off */
+  const vuln = S.active && !S.defeated && S.st === 'stagger';
+  c.coalGlow.material.opacity = S.defeated ? 0 : (vuln ? 0.35 + 0.3 * Math.sin(now / 90) : 0.85);
+  if (vuln && !LOWFX && Math.random() < 0.4) {
+    psDust.spawn(S.x + (Math.random() - 0.5) * 2.4, groundH(S.x, S.z) + 1.6 + Math.random() * 2,
+      S.z + (Math.random() - 0.5) * 2.4, 0.8, 0.6, 0.4, 0.8);
+  }
+  c.flashM.visible = S.flash > 0;
+  if (S.flash > 0) c.flashM.material.opacity = 0.35 + Math.sin(now / 26) * 0.25;
+  if (c.phase.visible) {
+    const h = c.phase.userData.halo;
+    h.material.opacity = vuln ? 0.5 : 0.18 + 0.08 * Math.sin(now / 500);
+    h.lookAt(camera.position);
+  }
+  refreshStagBar(false);
+}
+
+/* ═══ THE ONE DERIVATION — every phase-four fact flows from the save, both
+   ways. A finished save taken to NEW GAME must shut the crack, untune the
+   organ, put the ash back on the Stag and the Sliver back in its antlers. ═══ */
+let crownHookErr = null, crownHookRuns = 0;
+window.__worldStateHooks.push(function (S) {
+  crownHookRuns++;
+  try { crownDeriveWorld(S); crownHookErr = null; }
+  catch (e) { crownHookErr = String(e && e.message || e); throw e; }
+});
+function crownDeriveWorld(S) {
+  /* the crack, and the three doors */
+  stairInOpen = !!S.stairOpen;
+  const keys = ['organ1', 'organ2', 'organ3'];
+  for (let i = 0; i < ORGAN.landings.length; i++) {
+    const L = ORGAN.landings[i];
+    L.sang = !!S[keys[i]];
+    organOpen[i] = L.sang;
+    S_DOORS[i].k = L.sang ? 1 : 0;
+    S_DOORS[i].group.position.y = S_DOORS[i].baseY - (L.sang ? 5.6 : 0);
+    for (const v of L.vents) {
+      v.locked = L.sang;
+      v.lockT = 0; v.wob = 0;
+      v.ang = L.sang ? v.tAng : v.ang0;
+      v.da = L.sang ? 0 : 9;
+      if (v.capN) v.capN.rotation.y = -v.ang;
+      if (v.glowM) v.glowM.material.opacity = L.sang ? 0.55 : 0;
+    }
+  }
+  ORGAN.gust = 0; ORGAN.gustOn = false; ORGAN.grace = 10; ORGAN.near = -1;
+  /* the chests (the two salt ones ride p6b's FCHESTS derivation) */
+  beaconChest.opened = !!S.beaconHeart;
+  beaconChest.lid.rotation.x = S.beaconHeart ? -1.9 : 0;
+  beaconChest.heart.visible = false;
+  beaconAnimT = -1; beaconHeartT = -1;
+  /* THE ASH STAG — fully re-derived in both directions */
+  const G = STAG;
+  G.defeated = !!S.stagDone;
+  G.active = false;
+  G.bodyHits = 0; G.wallHits = 0; G.t = 0; G.flash = 0;
+  G.hpMax = STAG_HP; G.stampDone = false; G.altT = 0; G.leapT = 0;
+  G.c.bodyN.rotation.set(0, 0, 0);
+  G.c.neckN.rotation.set(0, 0, 0);
+  G.c.root.rotation.set(0, G.ang, 0);
+  G.c.flashM.visible = false;
+  for (const e of G.embers) e.t = -1;
+  for (const r of STAMPEDE) { r.on = false; r.c.root.visible = false; }
+  if (S.stagDone) {
+    G.phase = 3; G.hp = 0; G.st = 'gone';
+    G.x = K_PAD.east.x; G.z = K_PAD.east.z;
+    G.c.root.visible = false;
+    calmStagEyes(1); stagAshK(1);
+  } else {
+    G.phase = 0; G.hp = STAG_HP; G.st = 'sleep';
+    G.x = K_PLINTH.x + 6; G.z = K_PLINTH.z - 6; G.ang = 3.0;
+    G.c.root.visible = false;
+    calmStagEyes(0); stagAshK(0);
+  }
+  refreshStagBar(false);
+  /* THE WAXING SLIVER: in the antlers, on the plinth, carried, or slotted */
+  G.sliverTaken = S.q >= 16 || S.sky >= 4;
+  G.c.phase.visible = !S.stagDone && !G.sliverTaken;
+  P.carrySliver = S.q === 16 && !!S.stagDone && S.sky < 4;
+  sliverItem.visible = false;
+  sliverItem.scale.setScalar(0.6);
+  if (S.stagDone && !G.sliverTaken) {
+    sliverItem.visible = true;
+    sliverItem.scale.setScalar(1.15);
+    sliverItem.position.set(plinthSocket[0], plinthSocket[1] + 0.5, plinthSocket[2]);
+    sliverItem.rotation.set(-0.4, 0.6, 0.2);
+  }
+  /* the fawns */
+  for (const f of FAWNS) {
+    f.dead = false; f.cured = false; f.hp = 2; f.st = 'graze'; f.t = 0; f.cd = 0;
+    f.x = f.sx; f.z = f.sz; f.y = crownY(f.x, f.z); f.flash = 0;
+    f.c.glow.visible = true; f.c.eyes.visible = true;
+    f.c.m.material.color.setRGB(1, 1, 1);
+    f.c.root.visible = false;
+  }
+  fawnsCured = 0;
+  /* the pinwheels stand still until p6h's wind comes home */
+  for (const wpin of K_PINWHEELS) wpin.rotation.z = 0;
+  crownSeenSession = false;
+  glintSeenT = 0;
+  /* NOT stairMode: the derivation runs INSIDE applySave, which has already
+     resolved which world the saved position belongs to and is about to ask
+     groundH for its height. Clearing it here put a player who quit on a
+     landing back on the Hollow's roof, fifty metres out. */
+}
+
+/* ── telemetry: everything the harness needs to assert on ──
+   the arrays are hoisted and filled in place: syncTelemetry runs every
+   single frame, and six vents × four .map()s is twenty-four allocations a
+   frame in the hot path (the standing rule, and the Pi keeps it) */
+const _tVentDa = [], _tVentLock = [], _tVentFreq = [], _tVentCents = [], _tDoors = [];
+window.__telemetryHooks.push(function (T) {
+  T.inStair = stairMode;
+  T.inCrown = inGardenWalkQ(P.x, P.z);
+  T.crownArea = areaAt(P.x, P.z);
+  T.crownGlint = !!(SAVE && SAVE.crownGlint);
+  T.glintLive = crownGoldBand();
+  T.glintOn = !!(glintMesh && glintMesh.visible);
+  T.onTowerDeck = onTowerDeck();
+  T.stairOpen = !!(SAVE && SAVE.stairOpen);
+  T.organ1 = !!(SAVE && SAVE.organ1);
+  T.organ2 = !!(SAVE && SAVE.organ2);
+  T.organ3 = !!(SAVE && SAVE.organ3);
+  T.organLanding = ORGAN.near;
+  T.organGust = ORGAN.gustOn;
+  for (let i = 0; i < 3; i++) _tDoors[i] = organOpen[i];
+  T.organDoors = _tDoors;
+  /* the puzzle's own instrument: how far each vent is from true, in
+     radians of shutter and in cents of pitch. A gate that says "the door
+     opened" proves nothing; a gate that says "the distance SHRANK while
+     ✕ was held, and then the door opened" proves the mechanic. */
+  for (let i = 0; i < ORG_VENTS.length; i++) {
+    const v = ORG_VENTS[i], f = organFreq(v.ang + v.wob);
+    _tVentDa[i] = Math.round(Math.abs(v.da) * 1e4) / 1e4;
+    _tVentLock[i] = v.locked;
+    _tVentFreq[i] = Math.round(f * 100) / 100;
+    _tVentCents[i] = Math.round(1200 * Math.log2(f / v.freq) * 10) / 10;
+  }
+  T.ventDa = _tVentDa; T.ventLocked = _tVentLock;
+  T.ventFreq = _tVentFreq; T.ventCents = _tVentCents;
+  T.organAudio = ORG_AUD.built;
+  T.crownSeen = !!(SAVE && SAVE.crownSeen);
+  T.stagActive = STAG.active; T.stagPhase = STAG.phase; T.stagSt = STAG.st;
+  T.stagHp = STAG.hp; T.stagHpMax = STAG.hpMax;
+  T.stagBody = STAG.bodyHits; T.stagWall = STAG.wallHits;
+  T.stagDone = !!(SAVE && SAVE.stagDone);
+  T.stagX = STAG.x; T.stagZ = STAG.z;
+  T.stagVis = STAG.c.root.visible;
+  let fa = 0;
+  for (let i = 0; i < FAWNS.length; i++) if (!FAWNS[i].dead && !FAWNS[i].cured) fa++;
+  T.fawnsAlive = fa;
+  T.fawnsCured = fawnsCured;
+  T.beaconHeart = !!(SAVE && SAVE.beaconHeart);
+  T.crownChest1 = crownChest1.opened; T.crownChest2 = crownChest2.opened;
+  T.sliverTaken = STAG.sliverTaken;
+  T.carrySliver = !!P.carrySliver;
+  T.crownHookErr = crownHookErr; T.crownHookRuns = crownHookRuns;
+});
+
+/* ── debug additions (lazy — __fmDebug is born in p7, which loads last) ── */
+let crownDbgDone = false;
+function extendCrownDebugOnce() {
+  if (crownDbgDone || !window.__fmDebug) return;
+  crownDbgDone = true;
+  /* CONTINUE places the player before any tick has run, so the stair's
+     ground authority has to be resolved from the saved position itself —
+     otherwise a save made on a landing wakes up inside the Hollow's roof. */
+  if (typeof applySave === 'function') {
+    const _preCrownApplySave = applySave;
+    applySave = function () {
+      const p = SAVE && SAVE.lastPos;
+      stairMode = !!(p && p.length > 2 && stairModeAt(p[0], p[1], p[2]));
+      _preCrownApplySave();
+      stairMode = stairModeAt(P.x, P.z, P.fy);
+    };
+  }
+  /* WHERE YOU STOOD, IN THREE DIMENSIONS. p7 records lastPos as [x, z] —
+     which was a complete address until the Falls Stair put a second floor
+     over the Falls Hollow. The third number is the one that says which. */
+  if (typeof recordLastPos === 'function') {
+    const _preCrownRecordPos = recordLastPos;
+    recordLastPos = function () {
+      const before = SAVE && SAVE.lastPos;
+      _preCrownRecordPos();
+      const after = SAVE && SAVE.lastPos;
+      if (after && after !== before) {
+        after[2] = Math.round(P.fy * 100) / 100;
+        storeSave();
+      }
+    };
+  }
+  const SPOTS = {
+    crack: [STAIR_IN.x, STAIR_IN.z], mouth: [S_NODE.mouth.x, S_NODE.mouth.z],
+    l1: [S_NODE.l1.x, S_NODE.l1.z], l2: [S_NODE.l2.x, S_NODE.l2.z], l3: [S_NODE.l3.x, S_NODE.l3.z],
+    top: [S_NODE.b.x, S_NODE.b.z], out: [S_NODE.out.x, S_NODE.out.z],
+    ledge: [K_PAD.ledge.x, K_PAD.ledge.z], saddle: [K_PAD.saddle.x, K_PAD.saddle.z],
+    t1: [K_PAD.t1.x, K_PAD.t1.z], t2: [K_PAD.t2.x, K_PAD.t2.z], t3: [K_PAD.t3.x, K_PAD.t3.z],
+    plinth: [K_PLINTH.x, K_PLINTH.z - 8], beacon: [K_BEACON.x + 6, K_BEACON.z - 4],
+    shrine: [K_SHRINE.x - 6, K_SHRINE.z], east: [K_PAD.east.x, K_PAD.east.z],
+    glint: [K_GLINT.x + 3, K_GLINT.z + 3], tower: [1100, 806],
+  };
+  const warpTo = (name) => {
+    const s = SPOTS[name];
+    if (!s) return null;
+    stairMode = stairModeAt(s[0], s[1], stairY(s[0], s[1]));
+    window.__fmDebug.warp(s[0], s[1]);
+    stairMode = stairModeAt(P.x, P.z, P.fy);
+    return { at: name, x: s[0], z: s[1], y: +P.fy.toFixed(2), area: areaAt(P.x, P.z) };
+  };
+  Object.assign(window.__fmDebug, {
+    /* setup helpers only: they put the player where a mechanic lives, they
+       never perform one */
+    warpStair(n) {
+      const name = n === 0 ? 'mouth' : n === 1 ? 'l1' : n === 2 ? 'l2' : n === 3 ? 'l3' : 'top';
+      return warpTo(name);
+    },
+    warpCrown(where) { return warpTo(where || 'ledge'); },
+    organInfo() {
+      return {
+        landings: ORGAN.landings.map(L => ({
+          key: L.key, sang: L.sang,
+          vents: L.vents.map(v => ({
+            freq: v.freq, now: +organFreq(v.ang + v.wob).toFixed(1),
+            da: +v.da.toFixed(3), cents: +(1200 * Math.log2(organFreq(v.ang + v.wob) / v.freq)).toFixed(1),
+            locked: v.locked,
+          })),
+        })),
+        near: ORGAN.near, gust: ORGAN.gustOn, doors: organOpen.slice(),
+        tol: ORG_TOL, rate: ORG_RATE, audio: ORG_AUD.built,
+      };
+    },
+    stagInfo() {
+      return {
+        st: STAG.st, phase: STAG.phase, hp: STAG.hp, active: STAG.active,
+        done: STAG.defeated, body: STAG.bodyHits, wall: STAG.wallHits,
+        x: +STAG.x.toFixed(1), z: +STAG.z.toFixed(1),
+        fawns: FAWNS.filter(f => !f.dead && !f.cured).length, cured: fawnsCured,
+        sliver: { taken: STAG.sliverTaken, carried: !!P.carrySliver, vis: sliverItem.visible },
+      };
+    },
+    glintNow(on) {
+      /* setup: park the sun in the gold band so the glint can be LOOKED at.
+         It never sets crownGlint — standing on the tower does that. */
+      if (window.__fmDebug.sunSet) window.__fmDebug.sunSet(on === false ? 0.05 : 0.82);
+      return { live: crownGoldBand(), on: !!(glintMesh && glintMesh.visible),
+        k: (typeof fSunK === 'number' ? +fSunK.toFixed(3) : null) };
+    },
+    crownInfo() {
+      return {
+        pads: K_PADS.map(p => ({ id: p.id, y: p.y, ground: +crownY(p.x, p.z).toFixed(2) })),
+        stair: S_NODES.map(n => ({ id: n.id, y: +n.y.toFixed(2), ground: +stairY(n.x, n.z).toFixed(2) })),
+        mode: { stair: stairMode, garden: inGardenWalkQ(P.x, P.z) },
+      };
+    },
+  });
+}
+</script>

@@ -30,6 +30,37 @@ readable lines.
 | `p6e-isles.html` | (after p6d) | **Phase 3** — the Foundry, the three-verb puzzle, the Hour Tortoise, the sun-moves payoff, both end cards |
 | `p7-flow.html` | (last) | state flow, HUD, telemetry, main loop |
 
+## Phase 4 at a glance
+
+`p6g-crown.html` (~3,300 lines): the gold-hour glint, the Falls Stair, THE
+WIND ORGAN (tuned by ear — hold ✕, pitch bends toward true, latches inside
+a semitone; L1 one vent, L2 chord, L3 three vents in gusts), the Crown
+watch-garden, ember fawns, the ASH STAG. `p6h-green.html` (~2,300 lines):
+the sliverWheel payoff, the LIVE RE-GREEN (896k vertices relerped by a
+wave-front, 1.6ms/frame budgeted), the swelter's retirement (exposure
+starved + FX wrapped, p6b untouched), the LIVING SILVERRUN (authored
+2,212m navigable surface — the bed is a swale, not a canyon), the SKIFF,
+sky step 4, the phase-4 end card. Quests 13-17.
+
+Load-bearing facts unique to phase 4:
+- TWO new ground authorities (the stair's analytic floor; the river's
+  authored surface). Near the falls basin, BUILD AGAINST `forestHMesh` —
+  `groundH` there is owned by p6c's hollow field and answers with the
+  cavern floor, 50m below the mountain p6b still draws.
+- `lastPos` is now THREE numbers — a stair crossing over a cave made two
+  coordinates stop being an address. Old two-element saves still resolve.
+- Top-level names collide silently across parts (a `keepInArena` redecl
+  once dragged the King Crab 1.5km onto the Crown): audit every new
+  top-level name against all earlier parts before shipping a region.
+- p4's collider list has no HEIGHT: anything you addColl on an upper floor
+  is also solid on whatever lies below it — gate colliders by region mode.
+- p6b's `buildWaterwheel` places all twelve paddles on one axis
+  (`Math.cos(a) * R * 0.0`); p6h PARKS those vertices by position and
+  draws its own wheels — fixing p6b's builder without updating p6h's
+  parking will double the wheels.
+- The falls forecourt is a pre-existing 86-92 draw-call hotspot (33 far
+  tiles); p6g culls the forest far tier when deep in the hollow.
+
 Phase 3 line numbers are deliberately omitted: p6d and p6e are ~3,000 lines
 each and shift every rebuild. Grep by symbol instead — the pinned constants
 below are stable.

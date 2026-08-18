@@ -868,13 +868,13 @@ let towerMesh = null;
       boxW(md, { x, y: y - 0.14, z, w: F.dx ? 0.42 : 0.6, d: F.dx ? 0.6 : 0.42, h: 0.14, col: i % 2 ? PLANK : PLANK2 });
       // stringer post every 3rd step
       if (i % 3 === 0) boxW(md, { x, y: gy, z, w: 0.09, d: 0.09, h: y - gy - 0.1, col: TIMB2 });
-      addColl(x, z, 0.72, y).plat = true;
+      addColl(x, z, 0.9, y).plat = true;   // generous vs the 0.6m plank: a stick-sloppy climb must still hold
     }
     // corner landing
     const lx = tx + F.fx + F.dx * 8.7, lz = tz + F.fz + F.dz * 8.7;
     const ly = gy + (fl + 1) * STEPS * RISE;
     boxW(md, { x: lx, y: ly - 0.16, z: lz, w: 0.75, d: 0.75, h: 0.16, col: PLANK });
-    addColl(lx, lz, 1.0, ly).plat = true;
+    addColl(lx, lz, 1.25, ly).plat = true;
   }
   // deck walk surface: a grid of platform tops
   for (const ox of [-2.8, 0, 2.8]) {

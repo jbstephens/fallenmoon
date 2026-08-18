@@ -1,0 +1,2291 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PHASE 4, PART TWO — COOL WINDS COME HOME
+
+   Owns: the payoff cinematic (the grass-wave re-green sweeping the forest
+   IN FRAME), the swelter's permanent retirement, the LIVING SILVERRUN
+   (water, wheels turning, the falls pouring), the SKIFF, sky step 4, the
+   fourth star, and the phase-4 end card (Full Mirror tease).
+
+   Concatenated AFTER p6g-crown.html — its pinned constants are in scope.
+   Derives EVERYTHING from the save, both ways, via __worldStateHooks.
+   ═══════════════════════════════════════════════════════════════════════ */
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
+
+/* Part one's pinned geography (KROWN, STAIR_*, K_*) is in scope but not
+   needed here: everything this file touches lives in the Parched Forest,
+   at the Moonwheel, or on the river. What IS taken from p6g is taken by
+   feature detection — the Sliver item, the shrine's pinwheels — so this
+   file builds and runs whether or not part one has landed yet. */
+
+/* ═══════════ THE WIND'S SOURCE ═══════════
+   One front, one origin. The wind that re-greens the forest and the water
+   that fills the bed are the SAME arrival, so they share a source point —
+   the foot of the Dried Falls — and a single radial front distance. */
+const WIND_SRC = { x: BASIN.x, z: BASIN.z };
+const WIND_REACH = 2260;            // metres to the far side of the region
+
+/* ═══════════ THE LIVING SILVERRUN — authored channel ═══════════
+   The bed p6b carved is a shallow swale over rolling ground, not a canyon:
+   measured, the channel holds a median 2.45 m of water between its crests
+   and as little as 0.1 m at the pass. So the surface is authored, not
+   simulated — thalweg-tracked, crest-clamped, longitudinally smoothed —
+   and the skiff is constrained to the channel that authoring guarantees.
+   Navigable stretch stops well short of the basin: the plunge pool is the
+   Falls Hollow's mouth and must never take on water. */
+const RUN_D0 = 34, RUN_D1 = 2246, RUN_STEP = 6;
+const RUN_MINDEP = 0.85;            // guaranteed depth at the thalweg
+const RUN_SPILL = 0.35;             // most the surface may stand over a crest
+const RUN_WCAP = 13;                // half-width cap (the pines start at 10 m)
+const SKIFF_DRAFT = 0.32;           // a flat-bottomed punt draws almost nothing
+
+/* a coarse river-distance mask (8 m) — riverAt is a 14-segment scan and the
+   green snapshot asks the question 800,000 times */
+const RVM_X0 = 100, RVM_Z0 = -48, RVM_S = 8;
+const RVM_W = Math.ceil((2200 - RVM_X0) / RVM_S), RVM_H = Math.ceil((1420 - RVM_Z0) / RVM_S);
+const RVMASK = new Uint8Array(RVM_W * RVM_H);
+(function bakeRiverMask() {
+  for (let ix = 0; ix < RVM_W; ix++) {
+    for (let iz = 0; iz < RVM_H; iz++) {
+      const d = riverAt(RVM_X0 + ix * RVM_S + RVM_S / 2, RVM_Z0 + iz * RVM_S + RVM_S / 2)[0];
+      RVMASK[iz * RVM_W + ix] = Math.min(255, Math.round(d));
+    }
+  }
+})();
+function nearRiverM(x, z) {
+  const ix = Math.floor((x - RVM_X0) / RVM_S), iz = Math.floor((z - RVM_Z0) / RVM_S);
+  if (ix < 0 || iz < 0 || ix >= RVM_W || iz >= RVM_H) return 255;
+  return RVMASK[iz * RVM_W + ix];
+}
+
+/* the stations: position, thalweg (the deepest line, which wanders off the
+   authored polyline by up to 9 m), the crest that contains the water, the
+   surface, and the wetted half-widths */
+const RUN = [];
+(function buildRunProfile() {
+  const N = Math.floor((RUN_D1 - RUN_D0) / RUN_STEP) + 1;
+  for (let i = 0; i < N; i++) {
+    const d = RUN_D0 + i * RUN_STEP;
+    const p = riverPoint(d), p2 = riverPoint(Math.min(RIVER_LEN, d + 3));
+    const tx = p2[0] - p[0], tz = p2[1] - p[1], L = Math.hypot(tx, tz) || 1;
+    const nx = -tz / L, nz = tx / L;
+    const h = (u) => groundH(p[0] + nx * u, p[1] + nz * u);
+    let thal = 1e9, tu = 0;
+    for (let u = -9; u <= 9; u += 0.75) { const v = h(u); if (v < thal) { thal = v; tu = u; } }
+    let cl = -1e9, cr = -1e9;
+    for (let u = tu - 17; u <= tu - 3; u += 1) cl = Math.max(cl, h(u));
+    for (let u = tu + 3; u <= tu + 17; u += 1) cr = Math.max(cr, h(u));
+    RUN.push({
+      d, px: p[0], pz: p[1], x: p[0] + nx * tu, z: p[1] + nz * tu,
+      fx: tx / L, fz: tz / L, nx, nz, tu,
+      thal, crest: Math.min(cl, cr), y: 0, wl: 4, wr: 4,
+    });
+  }
+  const sm = (arr, w) => arr.map((v, i) => {
+    let s = 0, n = 0;
+    for (let k = -w; k <= w; k++) { const j = i + k; if (j < 0 || j >= arr.length) continue; s += arr[j]; n++; }
+    return s / n;
+  });
+  /* THE SPINE IS SMOOTHED. The raw thalweg jumps up to nine metres from one
+     station to the next, so a hull perfectly centred at one station sits on
+     the bank of the next, the clamp fires, and the clamp's speed penalty
+     eats her way upstream a tenth at a time. Smooth the offset, and every
+     station's frame agrees with its neighbours'. */
+  {
+    const tuS = sm(RUN.map(s => s.tu), 5);
+    for (let i = 0; i < RUN.length; i++) {
+      const s = RUN[i];
+      s.tu = tuS[i];
+      s.x = s.px + s.nx * s.tu;
+      s.z = s.pz + s.nz * s.tu;
+      /* the depth that matters is under the SPINE, not under the deepest
+         point within four metres of it: once the spine is smoothed the two
+         are no longer the same place, and a bar under the smoothed line came
+         out fourteen centimetres ABOVE its own water surface. Take the
+         highest ground the hull will pass over, including between stations. */
+      let bed = -1e9;
+      for (let a = -3; a <= 3; a += 1.5) bed = Math.max(bed, groundH(s.x + s.fx * a, s.z + s.fz * a));
+      s.thal = bed;
+    }
+  }
+  const thalS = sm(RUN.map(s => s.thal), 6);
+  let surf = RUN.map((s, i) => Math.min(s.crest - 0.25, thalS[i] + 1.7));
+  surf = sm(surf, 4);
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < RUN.length; i++) {
+      surf[i] = Math.max(Math.min(surf[i], RUN[i].crest + RUN_SPILL), RUN[i].thal + RUN_MINDEP);
+    }
+    if (pass < 2) surf = sm(surf, 3);
+  }
+  for (let i = 0; i < RUN.length; i++) {
+    const s = RUN[i];
+    s.y = surf[i];
+    /* THE SHORELINE: outward to where the water is a hand deep, which is
+       where a river visibly stops. (The first cut ran the sheet out to the
+       containing crest — up to 13 m a side — and the Silverrun read as a
+       flooded meadow rather than a river.) Failing that, to the highest
+       ground inside the cap, so the sheet always lands ON ground and can
+       never end in mid-air over a hillside. */
+    for (const side of [-1, 1]) {
+      let best = 1.5, bestH = -1e9, w = 0;
+      for (let u = 1.5; u <= RUN_WCAP; u += 0.5) {
+        const hh = groundH(s.x + s.nx * u * side, s.z + s.nz * u * side);
+        if (hh > s.y - 0.16) { w = u; break; }
+        if (hh > bestH) { bestH = hh; best = u; }
+        w = best;
+      }
+      if (side < 0) s.wl = w; else s.wr = w;
+    }
+    /* THE NAVIGABLE BAND, inside the wetted one: the shoreline is where the
+       water is a hand deep, and a hull steered out there would touch bottom
+       even though it never left the river. The skiff is clamped to where
+       there is half a metre under her, measured, not assumed. */
+    for (const side of [-1, 1]) {
+      const wMax = side < 0 ? s.wl : s.wr;
+      let nav = 0;
+      for (let u = 0; u <= wMax; u += 0.25) {
+        if (s.y - groundH(s.x + s.nx * u * side, s.z + s.nz * u * side) < 0.55) break;
+        nav = u;
+      }
+      if (side < 0) s.navL = nav; else s.navR = nav;
+    }
+  }
+  /* the band is smoothed and made to agree with its neighbours the same way:
+     a channel that narrows by four metres in six is a channel that stops a
+     boat dead */
+  {
+    const nl = sm(RUN.map(s => s.navL), 4), nr = sm(RUN.map(s => s.navR), 4);
+    for (let i = 0; i < RUN.length; i++) {
+      RUN[i].navL = Math.min(RUN[i].navL, nl[i]);
+      RUN[i].navR = Math.min(RUN[i].navR, nr[i]);
+    }
+  }
+})();
+const RUN_LO = RUN[0], RUN_HI = RUN[RUN.length - 1];
+
+/* station lookup by world position (linear scan over 370 stations is far
+   too slow per frame — bucket by the authored polyline parameter instead) */
+function runIndexAtD(d) {
+  return clamp(Math.round((d - RUN_D0) / RUN_STEP), 0, RUN.length - 1);
+}
+function runNear(x, z) {
+  const rv = riverAt(x, z);
+  const i = runIndexAtD(rv[1] * RIVER_LEN);
+  let bi = i, bd = 1e9;
+  for (let k = Math.max(0, i - 10); k <= Math.min(RUN.length - 1, i + 10); k++) {
+    const s = RUN[k], dd = (s.x - x) * (s.x - x) + (s.z - z) * (s.z - z);
+    if (dd < bd) { bd = dd; bi = k; }
+  }
+  const s = RUN[bi];
+  const off = (x - s.x) * s.nx + (z - s.z) * s.nz;       // lateral, + = right bank
+  const along = (x - s.x) * s.fx + (z - s.z) * s.fz;
+  return { i: bi, s, off, dist: Math.hypot(x - s.x, z - s.z), along };
+}
+/* is this point inside the wetted channel, and how deep? */
+function riverSurfaceAt(x, z) {
+  const r = runNear(x, z);
+  const w = r.off < 0 ? r.s.wl : r.s.wr;
+  if (Math.abs(r.off) > w + 0.6) return null;
+  return r.s.y;
+}
+function riverDepthAt(x, z) {
+  /* the 8 m river mask is one array lookup and answers "nowhere near the
+     water" for the boars, the hornets and every walking step in the region
+     without touching the 14-segment polyline scan */
+  if (nearRiverM(x, z) > 22) return 0;
+  const y = riverSurfaceAt(x, z);
+  if (y === null) return 0;
+  return Math.max(0, y - groundH(x, z));
+}
+const riverWet = () => !!(SAVE && (SAVE.riverWet || SAVE.sky >= 4));
+
+/* ── the three landings (board / hop out) ── */
+const LANDINGS = [
+  { id: 'falls', d: 2222, label: 'THE FALLS POOL' },
+  { id: 'ferry', d: 1432, label: 'THE FERRY LANDING' },
+  { id: 'camp',  d: 96,   label: 'THE PASS CAMP' },
+];
+for (const L of LANDINGS) {
+  const s = RUN[runIndexAtD(L.d)];
+  L.i = runIndexAtD(L.d);
+  L.x = s.x; L.z = s.z; L.y = s.y;
+}
+
+/* ═══════════ palettes: burnt → living ═══════════
+   Both ends are baked at build. The transform is a hue and value remap of the
+   ALREADY-BAKED vertex colour, so every form-shading step the noon bake put
+   there survives the change of season. Stone, salt and the spring greens
+   are recognised by chroma and left alone — a green crag is worse than a
+   burnt one. */
+const GR_LO = col(0x3c5a2a), GR_MID = col(0x5d8737), GR_HI = col(0x9cb45c);
+const PN_LO = col(0x27411f), PN_MID = col(0x3d6a2d), PN_HI = col(0x66924a);
+const WET_STONE = col(0x6d6a5c);
+function greenify(r, g, b, x, z, canopy, out) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const sat = mx - mn;
+  const lum = 0.32 * r + 0.55 * g + 0.13 * b;
+  if (!canopy) {
+    if (sat < 0.055) {                        // stone, salt, ash — untouched
+      out[0] = r; out[1] = g; out[2] = b; return out;
+    }
+    if (g > r + 0.01) {                       // the springs were already alive
+      out[0] = r; out[1] = g; out[2] = b; return out;
+    }
+    const rd = nearRiverM(x, z);
+    if (rd < 7) {                             // the bed itself: wet stone, not lawn
+      const k = 0.5 * (1 - rd / 7);
+      out[0] = lerp(r, WET_STONE[0] * (0.6 + lum * 0.7), k);
+      out[1] = lerp(g, WET_STONE[1] * (0.6 + lum * 0.7), k);
+      out[2] = lerp(b, WET_STONE[2] * (0.6 + lum * 0.75), k);
+      return out;
+    }
+  }
+  const LO = canopy ? PN_LO : GR_LO, MI = canopy ? PN_MID : GR_MID, HI = canopy ? PN_HI : GR_HI;
+  const t = clamp((lum - (canopy ? 0.13 : 0.20)) / (canopy ? 0.34 : 0.42), 0, 1);
+  const n = vnoise(x * 0.021 + 4, z * 0.021 - 7) * 0.5 + 0.5;   // patchy, not painted
+  let cr, cg, cb;
+  if (t < 0.5) { const k = t * 2; cr = lerp(LO[0], MI[0], k); cg = lerp(LO[1], MI[1], k); cb = lerp(LO[2], MI[2], k); }
+  else { const k = (t - 0.5) * 2; cr = lerp(MI[0], HI[0], k); cg = lerp(MI[1], HI[1], k); cb = lerp(MI[2], HI[2], k); }
+  const nk = 0.86 + n * 0.26;
+  cr *= nk; cg *= nk * 1.02; cb *= nk * 0.92;
+  const keep = canopy ? 0.13 : 0.17;          // a little of the old ground shows through
+  out[0] = clamp(lerp(cr, r, keep), 0, 1);
+  out[1] = clamp(lerp(cg, g, keep), 0, 1);
+  out[2] = clamp(lerp(cb, b, keep), 0, 1);
+  return out;
+}
+</script>
+<script>
+/* ═══════════ p6h/2 — THE RE-GREEN: a live vertex-colour relerp ═══════════
+   The forest's ground sheets and canopies are baked into 88 merged chunk
+   meshes plus the far tier. Nothing is rebuilt: a build-time snapshot
+   records, per mesh, exactly which vertex ranges belong to GROUND and to
+   CANOPY (the ground sheet is each chunk's prefix by construction; every
+   canopy's vertex range is in p6b's own render audit), their burnt colours
+   and their distance from the wind's source. The front then relerps only
+   the vertices it is crossing — budgeted per frame, priority to what the
+   camera can actually see. Everything behind the front is snapped once. */
+const GRN = {
+  parts: [],            // { mesh, colA, ranges, n, burnt, dist, dmin, dmax, cx, cz, st, cursor }
+  built: false,
+  k: 0,                 // 0 burnt … 1 green (the permanent world state)
+  front: -1,            // metres from WIND_SRC; <0 = no wave running
+  band: 130,            // how wide the wave-front blend is
+  budget: 26000,        // vertices per frame outside the visible set
+  doneParts: 0, lastWork: 0, waveT: 0,
+};
+const _gcol = [0, 0, 0];
+function grnSnapshot() {
+  if (GRN.built) return;
+  GRN.built = true;
+  const t0 = performance.now();
+  /* 1 — the ground prefix of every forest chunk (FGROUND_N, computed once) */
+  const gcount = FGROUND_N;
+  /* 2 — the canopies, from p6b's per-tree render audit */
+  const canopies = new Map();
+  for (const t of (window.__fmTreeAudit || [])) {
+    if (t.bare || t.v1 <= t.vTrunk) continue;
+    let a = canopies.get(t.key);
+    if (!a) { a = []; canopies.set(t.key, a); }
+    a.push(t.vTrunk, t.v1);
+  }
+  const mkPart = (mesh, ranges, cx, cz, canopyFrom) => {
+    const colA = mesh.geometry.attributes.color, pos = mesh.geometry.attributes.position;
+    let n = 0;
+    for (let i = 0; i < ranges.length; i += 2) n += ranges[i + 1] - ranges[i];
+    if (!n) return;
+    const burnt = new Uint8Array(n * 3), dist = new Uint16Array(n);
+    let slot = 0, dmin = 1e9, dmax = -1e9;
+    for (let r = 0; r < ranges.length; r += 2) {
+      for (let v = ranges[r]; v < ranges[r + 1]; v++, slot++) {
+        burnt[slot * 3] = Math.round(clamp(colA.getX(v), 0, 1) * 255);
+        burnt[slot * 3 + 1] = Math.round(clamp(colA.getY(v), 0, 1) * 255);
+        burnt[slot * 3 + 2] = Math.round(clamp(colA.getZ(v), 0, 1) * 255);
+        const d = Math.hypot(pos.getX(v) - WIND_SRC.x, pos.getZ(v) - WIND_SRC.z);
+        dist[slot] = Math.min(65535, Math.round(d));
+        if (d < dmin) dmin = d;
+        if (d > dmax) dmax = d;
+      }
+    }
+    GRN.parts.push({
+      mesh, colA, ranges, n, burnt, dist, dmin, dmax, cx, cz,
+      canopyFrom: canopyFrom | 0, st: 0, k: 0,
+    });
+  };
+  for (const c of chunks) {
+    if (!c.forest || !c.mesh) continue;
+    const key = Math.floor(c.cx / FCH) + 'f' + Math.floor(c.cz / FCH);
+    const gn = Math.min(gcount.get(key) || 0, c.mesh.geometry.attributes.position.count);
+    const ranges = [];
+    if (gn > 0) ranges.push(0, gn);
+    const cn = canopies.get(key);
+    let canopyFrom = gn > 0 ? gn : 0;
+    if (cn) {
+      /* the audit is emitted tree by tree in build order, so the ranges are
+         already sorted and disjoint; merge touching ones to keep the list
+         short (11,208 trees would otherwise be 11,208 range pairs) */
+      for (let i = 0; i < cn.length; i += 2) {
+        const a = cn[i], b = cn[i + 1];
+        if (ranges.length >= 2 && ranges[ranges.length - 1] === a) ranges[ranges.length - 1] = b;
+        else ranges.push(a, b);
+      }
+    }
+    mkPart(c.mesh, ranges, c.cx, c.cz, canopyFrom);
+  }
+  /* 3 — the far tier: the horizon must change season with the near ground,
+     or the forest re-greens inside a burnt-orange ring. Its forest tiles
+     carry nothing but ground quads and canopy blobs, so the whole mesh is
+     one range; the bay tiles are skipped by their own flag. */
+  for (const t of farTiles) {
+    if (t.bh || !t.mesh) continue;
+    mkPart(t.mesh, [0, t.mesh.geometry.attributes.position.count],
+      t.bx !== undefined ? t.bx : 0, t.bz !== undefined ? t.bz : 0, -1);
+  }
+  GRN.snapMs = Math.round(performance.now() - t0);
+  GRN.totalVerts = GRN.parts.reduce((a, p) => a + p.n, 0);
+}
+/* write one part at blend k (0 burnt, 1 green) — or, when a front is
+   supplied, per-vertex against the front's distance */
+function grnWritePart(p, k, front, band) {
+  const colA = p.colA, burnt = p.burnt, dist = p.dist;
+  const pos = p.mesh.geometry.attributes.position;
+  let slot = 0, moved = 0;
+  for (let r = 0; r < p.ranges.length; r += 2) {
+    const canopy = p.canopyFrom >= 0 && p.ranges[r] >= p.canopyFrom;
+    for (let v = p.ranges[r]; v < p.ranges[r + 1]; v++, slot++) {
+      let kk = k;
+      if (front >= 0) {
+        kk = clamp((front - dist[slot]) / band, 0, 1);
+        kk *= k;
+      }
+      const br = burnt[slot * 3] / 255, bg = burnt[slot * 3 + 1] / 255, bb = burnt[slot * 3 + 2] / 255;
+      if (kk <= 0.001) { colA.setXYZ(v, br, bg, bb); continue; }
+      greenify(br, bg, bb, pos.getX(v), pos.getZ(v), canopy, _gcol);
+      if (kk >= 0.999) colA.setXYZ(v, _gcol[0], _gcol[1], _gcol[2]);
+      else colA.setXYZ(v, lerp(br, _gcol[0], kk), lerp(bg, _gcol[1], kk), lerp(bb, _gcol[2], kk));
+      moved++;
+    }
+  }
+  colA.needsUpdate = true;
+  return slot;
+}
+/* the permanent state, both ways — the world-state hook's own hammer */
+function grnSet(k) {
+  grnSnapshot();
+  GRN.k = k;
+  GRN.front = -1;
+  for (const p of GRN.parts) {
+    if (p.st === (k > 0.5 ? 1 : 0)) continue;      // already there; skip the upload
+    grnWritePart(p, k, -1, 1);
+    p.st = k > 0.5 ? 1 : 0;
+    p.k = k;
+  }
+  GRN.doneParts = GRN.parts.filter(p => p.st === 1).length;
+}
+/* THE WAVE. Front distance advances in metres; every part it is crossing is
+   relerped, visible parts first, the rest inside a per-frame budget. */
+function grnWave(front) {
+  grnSnapshot();
+  GRN.k = 1;
+  GRN.front = front;
+  const band = GRN.band;
+  const ccx = camera.position.x, ccz = camera.position.z;
+  const crossing = [], behind = [];
+  for (const p of GRN.parts) {
+    if (p.st === 1) continue;
+    if (p.dmin > front) continue;                  // the wind has not reached it
+    if (p.dmax < front - band) behind.push(p);     // wholly passed: one snap
+    else crossing.push(p);
+  }
+  const key = (p) => (p.mesh.visible ? 0 : 1e9) + (p.cx - ccx) * (p.cx - ccx) + (p.cz - ccz) * (p.cz - ccz);
+  crossing.sort((a, b) => key(a) - key(b));
+  behind.sort((a, b) => key(a) - key(b));
+  let work = 0;
+  for (const p of crossing) {
+    const vis = p.mesh.visible;
+    if (!vis && work > GRN.budget) continue;       // off-screen may lag a frame
+    work += grnWritePart(p, 1, front, band);
+    p.k = clamp((front - (p.dmin + p.dmax) / 2) / band, 0, 1);
+  }
+  for (const p of behind) {
+    if (work > GRN.budget * 1.6) break;
+    grnWritePart(p, 1, -1, 1);
+    p.st = 1; p.k = 1;
+    work += p.n;
+  }
+  GRN.lastWork = work;
+  GRN.doneParts = GRN.parts.filter(p => p.st === 1).length;
+}
+</script>
+<script>
+/* ═══════════ p6h/3 — THE LIVING SILVERRUN ═══════════
+   One owner per stretch of water: the sheet below is the ONLY thing that
+   renders the river, from the spring head under the falls to the pass camp
+   pool. It never touches the plunge basin — that is the Falls Hollow's
+   mouth, and a dungeon that has not heard water in a year does not get
+   flooded by its own payoff. */
+/* every static thing the wind leaves standing — ford stones, the wheels'
+   frames, the softened thickets — shares ONE mesh and therefore one draw
+   call; declared here because the wheels fill it before the fords do */
+const WETPROP_MD = MD();
+let wetPropMesh = null;
+const C_SHOAL = [0.56, 0.70, 0.56], C_MID = [0.26, 0.52, 0.55], C_DEEP = [0.11, 0.28, 0.44];
+const C_FOAM = [0.93, 0.97, 0.97], C_FOAM2 = [0.78, 0.88, 0.9];
+const _rvc = [0, 0, 0];
+/* a CONTINUOUS depth ramp, sampled per vertex. The first cut banded the
+   sheet in four flat steps chosen from each segment's average depth, and
+   the river came out as a chequerboard of teal and navy patches. */
+function rivColAt(depth, jitter) {
+  const t = clamp(depth / 2.4, 0, 1);
+  if (t < 0.42) mix3(C_SHOAL, C_MID, t / 0.42, _rvc);
+  else mix3(C_MID, C_DEEP, (t - 0.42) / 0.58, _rvc);
+  const j = 1 + jitter * 0.06;
+  return [_rvc[0] * j, _rvc[1] * j, _rvc[2] * j];
+}
+let riverMesh = null, riverColA = null, riverPos = null;
+let fallsPourK = 0;        // 0..1 — the falls come on during the payoff
+const RIV_SEG = [];        // per segment: { v0, v1, x, z, grade }
+(function buildRiverSheet() {
+  const md = MD();
+  const triV = (md2, A, B, C, cA, cB, cC) => {
+    md2.p.push(A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]);
+    md2.c.push(cA[0], cA[1], cA[2], cB[0], cB[1], cB[2], cC[0], cC[1], cC[2]);
+  };
+  const quadV = (md2, A, B, C, D, cA, cB, cC, cD) => {
+    triV(md2, A, B, C, cA, cB, cC);
+    triV(md2, A, C, D, cA, cC, cD);
+  };
+  const SPANS = 4;                       // across the half-width, each side
+  const node = (st, u) => {
+    const x = st.x + st.nx * u, z = st.z + st.nz * u;
+    const gy = groundH(x, z);
+    const dep = st.y - gy;
+    /* the rim of the sheet lies ON the ground it meets, so the river can
+       never end in a wall of water over a hillside */
+    const y = dep <= 0.05 ? Math.min(st.y, gy + 0.06) : st.y;
+    return { p: [x, y, z], c: rivColAt(Math.max(0, dep), vnoise(x * 0.05, z * 0.05)) };
+  };
+  for (let i = 0; i < RUN.length - 1; i++) {
+    const a = RUN[i], b = RUN[i + 1];
+    const v0 = md.p.length / 3;
+    const us = [];
+    for (let k = -SPANS; k <= SPANS; k++) {
+      us.push(k < 0 ? (k / SPANS) * a.wl : (k / SPANS) * a.wr);
+    }
+    const usB = [];
+    for (let k = -SPANS; k <= SPANS; k++) {
+      usB.push(k < 0 ? (k / SPANS) * b.wl : (k / SPANS) * b.wr);
+    }
+    for (let k = 0; k < us.length - 1; k++) {
+      const A = node(a, us[k]), B = node(a, us[k + 1]);
+      const C = node(b, usB[k + 1]), D = node(b, usB[k]);
+      /* WOUND UP: n is perp(f), so A(left)→B(right)→C→D is counter-clockwise
+         seen from above at every station. The first cut of this sheet went
+         round the other way and the whole river was backface-culled into a
+         handful of stray triangles — the bed stayed dry in every screenshot. */
+      quadV(md, A.p, B.p, C.p, D.p, A.c, B.c, C.c, D.c);
+    }
+    RIV_SEG.push({ v0, v1: md.p.length / 3, x: (a.x + b.x) / 2, z: (a.z + b.z) / 2,
+      grade: (b.y - a.y) / RUN_STEP, y: a.y });
+  }
+  buildWhiteWater(md);
+  riverMesh = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false,
+  }), false);
+  riverMesh.renderOrder = 2;
+  riverMesh.frustumCulled = false;
+  riverMesh.visible = false;
+  riverMesh.matrixAutoUpdate = false; riverMesh.updateMatrix();
+  scene.add(riverMesh);
+  riverColA = riverMesh.geometry.attributes.color;
+  riverPos = riverMesh.geometry.attributes.position;
+})();
+/* the base colours, kept so the flow animation is a modulation and never a
+   drift (a river that brightens forever is a river of milk) */
+const RIV_BASE = new Float32Array(riverColA.array);
+
+/* ── white water: riffles where the surface drops, and the spring head ── */
+/* the white water rides in the river's OWN mesh: on a 74-call riverbank
+   every separate sheet of foam is a draw call the Pi cannot spare */
+function buildWhiteWater(md) {
+  const C_FOAM_D = [0.80, 0.88, 0.90], C_FOAM_D2 = [0.66, 0.78, 0.83];
+  for (let i = 2; i < RUN.length - 2; i++) {
+    const s = RUN[i];
+    const grade = (RUN[i + 2].y - RUN[i - 2].y) / (RUN_STEP * 4);
+    if (grade > -0.035) continue;                 // only real drops foam
+    const w = Math.min(s.wl, s.wr) * 0.85;
+    for (let k = -2; k <= 2; k++) {
+      const u = k * w * 0.42;
+      const x = s.x + s.nx * u, z = s.z + s.nz * u;
+      const y = s.y + 0.05;
+      const L = 1.1 + Math.abs(hash2(i, k)) * 1.6, W = 0.45 + Math.abs(hash2(i + 3, k)) * 0.5;
+      pushQuad(md,
+        [x - s.fx * L - s.nx * W, y, z - s.fz * L - s.nz * W],
+        [x - s.fx * L + s.nx * W, y, z - s.fz * L + s.nz * W],
+        [x + s.fx * L + s.nx * W, y, z + s.fz * L + s.nz * W],
+        [x + s.fx * L - s.nx * W, y, z + s.fz * L - s.nz * W],
+        (i + k) % 2 ? C_FOAM_D : C_FOAM_D2);
+    }
+  }
+  /* THE SPRING HEAD — the Silverrun comes up out of the stones under the
+     falls (the plunge basin above is still sealed by night one's rockfall,
+     which is exactly why the water arrives here and not there) */
+  const h = RUN[RUN.length - 1];
+  for (let r = 0; r < 3; r++) {
+    for (let s2 = 0; s2 < 9; s2++) {
+      if (((s2 + r) % 3) === 0) continue;                 // broken water, not a target
+      const a0 = s2 / 9 * TAU + hash2(s2, r) * 0.25, a1 = a0 + TAU / 9 * (0.55 + Math.abs(hash2(r, s2)) * 0.5);
+      const rr = 1.2 + r * 1.45 + hash2(s2 + 3, r) * 0.5;
+      const w2 = 0.5 + Math.abs(hash2(s2, r + 5)) * 0.5;
+      const y = h.y + 0.08 + (2 - r) * 0.05;
+      pushQuad(md,
+        [h.x + Math.cos(a0) * rr, y, h.z + Math.sin(a0) * rr],
+        [h.x + Math.cos(a1) * rr, y, h.z + Math.sin(a1) * rr],
+        [h.x + Math.cos(a1) * (rr + w2), y, h.z + Math.sin(a1) * (rr + w2)],
+        [h.x + Math.cos(a0) * (rr + w2), y, h.z + Math.sin(a0) * (rr + w2)],
+        s2 % 2 ? C_FOAM_D : C_FOAM_D2);
+    }
+  }
+}
+
+/* ── THE DRIED FALLS, POURING ──
+   Mirrors p6b's chute exactly (same face angle, same lip, same 56 m) so the
+   water lands on the stone it wore away. Bands scroll down its own colour
+   array — 300 vertices, no geometry rebuilt, no shader. */
+let fallsWater = null, fallsWaterColA = null, fallsMist = null;
+const FALLS_A = Math.atan2(BASIN.z - CROWN.z, BASIN.x - CROWN.x);
+const FALLS_BASE = { x: CROWN.x + Math.cos(FALLS_A) * 86, z: CROWN.z + Math.sin(FALLS_A) * 86 };
+/* the falls hang on the RENDERED rock, and near the basin groundH is not it:
+   p6c's hollow field owns that footprint and answers with the cavern floor
+   (27.5 m) while the forest sheet still draws the mountain at 82 m. p6b
+   built the dry chute against the forest lattice — before p6c existed — so
+   the water has to be built against the same lattice or it hangs fifty
+   metres inside the hill, invisible, which is exactly where the first cut
+   of it went. */
+const FALLS_WALL_Y = forestHMesh(CROWN.x + Math.cos(FALLS_A) * 100, CROWN.z + Math.sin(FALLS_A) * 100) - 2;
+/* the wall's own profile, +2.6 so the water hangs clear of the rock columns
+   that stand proud of it (measured: they reach r≈101) */
+function fallsRadiusAt(t) { return lerp(108.5, 104.0, t); }
+(function buildFallsWater() {
+  const md = MD();
+  const ROWS = 30, Y0 = -5, Y1 = 58;
+  const ring = (t) => {
+    const y = FALLS_WALL_Y + lerp(Y0, Y1, t);
+    const r = fallsRadiusAt(t);
+    /* the column leaves the lip narrow and opens as it falls */
+    const w = (2.0 + (1 - t) * (1 - t) * 3.4) / r;
+    return { y, r, w, t };
+  };
+  const p = (rr, ang, y) => [CROWN.x + Math.cos(FALLS_A + ang) * rr, y, CROWN.z + Math.sin(FALLS_A + ang) * rr];
+  const colAt = (t, veil) => {
+    const c = [lerp(0.66, 0.95, t), lerp(0.80, 0.97, t), lerp(0.90, 0.99, t)];
+    return veil ? [c[0] * 0.9, c[1] * 0.93, c[2] * 0.97] : c;
+  };
+  for (let i = 0; i < ROWS; i++) {
+    const a0 = ring(i / ROWS), a1 = ring((i + 1) / ROWS);
+    const c0 = colAt(a0.t), c1 = colAt(a1.t);
+    /* the main fall */
+    md.p.push(...p(a0.r, -a0.w, a0.y), ...p(a0.r, a0.w, a0.y), ...p(a1.r, a1.w, a1.y));
+    md.c.push(...c0, ...c0, ...c1);
+    md.p.push(...p(a0.r, -a0.w, a0.y), ...p(a1.r, a1.w, a1.y), ...p(a1.r, -a1.w, a1.y));
+    md.c.push(...c0, ...c1, ...c1);
+  }
+  /* two veils, half a metre proud and narrower, so the column has thickness
+     from every angle instead of reading as one flat ribbon */
+  for (const side of [-1, 1]) {
+    for (let i = 0; i < ROWS; i++) {
+      const a0 = ring(i / ROWS), a1 = ring((i + 1) / ROWS);
+      const o0 = a0.w * 0.62 * side, o1 = a1.w * 0.62 * side;
+      const c0 = colAt(a0.t, true), c1 = colAt(a1.t, true);
+      const r0 = a0.r + 0.9, r1 = a1.r + 0.9;
+      md.p.push(...p(r0, o0 - a0.w * 0.42, a0.y), ...p(r0, o0 + a0.w * 0.42, a0.y), ...p(r1, o1 + a1.w * 0.42, a1.y));
+      md.c.push(...c0, ...c0, ...c1);
+      md.p.push(...p(r0, o0 - a0.w * 0.42, a0.y), ...p(r1, o1 + a1.w * 0.42, a1.y), ...p(r1, o1 - a1.w * 0.42, a1.y));
+      md.c.push(...c0, ...c1, ...c1);
+    }
+  }
+  /* the boil at the foot, where the column goes behind the rockfall ridge
+     into the sealed basin — the plunge pool is night one's seal, and it
+     stays sealed */
+  const b = ring(0);
+  const bx = CROWN.x + Math.cos(FALLS_A) * b.r, bz = CROWN.z + Math.sin(FALLS_A) * b.r;
+  for (let s2 = 0; s2 < 12; s2++) {
+    const a0 = s2 / 12 * TAU, a1 = (s2 + 1) / 12 * TAU, rr = 5.5 + Math.abs(hash2(s2, 3)) * 3;
+    pushQuad(md,
+      [bx, b.y + 0.5, bz],
+      [bx + Math.cos(a1) * rr, b.y + 0.1, bz + Math.sin(a1) * rr],
+      [bx + Math.cos(a0) * rr, b.y + 0.1, bz + Math.sin(a0) * rr],
+      [bx, b.y + 0.5, bz], s2 % 2 ? C_FOAM : C_FOAM2);
+  }
+  fallsWater = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.93, depthWrite: false, side: THREE.DoubleSide,
+  }), false);
+  fallsWater.renderOrder = 3;
+  fallsWater.frustumCulled = false;
+  fallsWater.visible = false;
+  fallsWater.matrixAutoUpdate = false; fallsWater.updateMatrix();
+  scene.add(fallsWater);
+  fallsWaterColA = fallsWater.geometry.attributes.color;
+  window.__fallsRows = ROWS;
+})();
+const FALLS_BASE_COL = new Float32Array(fallsWaterColA.array);
+const psMist = makePS(70, 0.9, 0xdff0f4, false, false);   // falls plume + bow spray
+
+/* ── the waterwheels turn, and the ferry floats ──
+   p6b bakes both into merged 200 m chunk meshes: there is no node to spin
+   and no hull to lift. So this file takes ownership of those few hundred
+   vertices — parks the baked ones out of the world (reversibly, both ways)
+   and builds its own turning wheel and floating barge on the same spot.
+   Changes wanted in p6b, noted for its owner: give buildWaterwheel a real
+   rim (its paddles all sit on one axis — `Math.cos(a) * R * 0.0`), and
+   return handles for the wheel and the ferry. */
+/* the forest chunks' GROUND PREFIX, recomputed from the same lattice p6b
+   lays its sheet on (one predicate, one truth). Both the prop surgery below
+   and the green snapshot need it: the sheet is each chunk's leading run of
+   vertices, so anything at or past the prefix is a prop. Parking props by
+   position alone punched holes straight through the ground and the sky came
+   up through the meadow — a pink quad lying over the mill. */
+const FGROUND_N = (function forestGroundCounts() {
+  const m = new Map();
+  const bump = (x, z, n) => {
+    const key = Math.floor(x / FCH) + 'f' + Math.floor(z / FCH);
+    m.set(key, (m.get(key) || 0) + n);
+  };
+  const STEP = 8;
+  for (let x = 110; x < 2180; x += STEP) {
+    for (let z = -38; z < 1398; z += STEP) {
+      if (FOREST_FINE(x, z)) {
+        const h = STEP / 2;
+        bump(x + h / 2, z + h / 2, 6); bump(x + h + h / 2, z + h / 2, 6);
+        bump(x + h / 2, z + h + h / 2, 6); bump(x + h + h / 2, z + h + h / 2, 6);
+      } else bump(x + STEP / 2, z + STEP / 2, 6);
+    }
+  }
+  bump(112, 38, 6 * 23);        // the Brightharbor seam skirt closes the sheet
+  return m;
+})();
+const PROP_SWAPS = [];
+function parkBakedProp(x, z, r, yLo, yHi) {
+  const key = Math.floor(x / FCH) + 'f' + Math.floor(z / FCH);
+  let mesh = null;
+  for (const c of chunks) {
+    if (!c.forest || !c.mesh) continue;
+    if (Math.floor(c.cx / FCH) + 'f' + Math.floor(c.cz / FCH) === key) { mesh = c.mesh; break; }
+  }
+  if (!mesh) return null;
+  const pos = mesh.geometry.attributes.position;
+  const r2 = r * r;
+  const idx = [], orig = [];
+  /* start past the ground sheet: the props are everything after the prefix */
+  const start = Math.min(FGROUND_N.get(key) || 0, pos.count);
+  for (let t = start; t < pos.count; t += 3) {
+    let hit = false;
+    for (let k = 0; k < 3; k++) {
+      const vx = pos.getX(t + k), vy = pos.getY(t + k), vz = pos.getZ(t + k);
+      const dx = vx - x, dz = vz - z;
+      if (dx * dx + dz * dz < r2 && vy > yLo && vy < yHi) { hit = true; break; }
+    }
+    if (!hit) continue;
+    for (let k = 0; k < 3; k++) {
+      idx.push(t + k);
+      orig.push(pos.getX(t + k), pos.getY(t + k), pos.getZ(t + k));
+    }
+  }
+  if (!idx.length) return null;
+  const rec = { mesh, pos, idx: new Uint32Array(idx), orig: new Float32Array(orig), parked: false };
+  PROP_SWAPS.push(rec);
+  return rec;
+}
+function setPropParked(rec, parked) {
+  if (!rec || rec.parked === parked) return;
+  rec.parked = parked;
+  const p = rec.pos;
+  for (let i = 0; i < rec.idx.length; i += 3) {
+    if (parked) {
+      const ax = rec.orig[i * 3], ay = rec.orig[i * 3 + 1], az = rec.orig[i * 3 + 2];
+      for (let k = 0; k < 3; k++) p.setXYZ(rec.idx[i + k], ax, ay, az);   // zero-area
+    } else {
+      for (let k = 0; k < 3; k++) {
+        p.setXYZ(rec.idx[i + k], rec.orig[(i + k) * 3], rec.orig[(i + k) * 3 + 1], rec.orig[(i + k) * 3 + 2]);
+      }
+    }
+  }
+  p.needsUpdate = true;
+}
+</script>
+<script>
+/* ═══════════ p6h/4 — wheels that turn, a ferry that floats ═══════════ */
+const C_WHEELW = col(0x9b7a52), C_WHEELD = col(0x6d5236), C_IRONW = col(0x4c4a45);
+
+function buildTurningWheel(ax, az, R, ruined) {
+  /* the wheel has to stand IN the water it turns on: p6b put both of them on
+     the authored polyline, which the thalweg wanders up to 9 m off, so the
+     mill wheel measured a depth of exactly zero. Snap to the near bank of
+     the real channel, dipping the bottom third of the rim. */
+  const st = runNear(ax, az);
+  const side = st.off >= 0 ? 1 : -1;
+  const u = (side > 0 ? st.s.wr : st.s.wl) * side * 0.58;
+  const cx = st.s.x + st.s.nx * u, cz = st.s.z + st.s.nz * u;
+  const ry = Math.atan2(-st.s.fz, st.s.fx);
+  const wy = st.s.y;
+  const md = MD();
+  const N = 12, step = TAU / N, HW = 0.55;
+  const C_A = C_WHEELW, C_B = C_WHEELD;
+  const pt = (r, a, z) => [Math.cos(a) * r, Math.sin(a) * r, z];
+  for (let i = 0; i < N; i++) {
+    const a0 = i * step, a1 = (i + 1) * step;
+    const c = i % 2 ? C_A : C_B;
+    /* the rim: a banded annulus on each face, and the tread between them —
+       this reads as a WHEEL at forty metres, which a ring of loose planks
+       (p6b's, whose paddles all share one axis) never did */
+    for (const z of [-HW, HW]) {
+      const flip = z > 0;
+      const q = [pt(R * 0.84, a0, z), pt(R, a0, z), pt(R, a1, z), pt(R * 0.84, a1, z)];
+      pushQuad(md, q[flip ? 0 : 3], q[flip ? 1 : 2], q[flip ? 2 : 1], q[flip ? 3 : 0], c);
+    }
+    pushQuad(md, pt(R, a0, -HW), pt(R, a1, -HW), pt(R, a1, HW), pt(R, a0, HW), mix3(c, [0, 0, 0], 0.15));
+    /* the paddle: a blade standing off the tread, both faces */
+    const am = a0 + step * 0.5;
+    const b0 = pt(R * 0.7, am, -HW - 0.12), b1 = pt(R * 1.06, am, -HW - 0.12);
+    const b2 = pt(R * 1.06, am, HW + 0.12), b3 = pt(R * 0.7, am, HW + 0.12);
+    pushQuad(md, b0, b1, b2, b3, i % 2 ? C_B : C_A);
+    pushQuad(md, b3, b2, b1, b0, mix3(i % 2 ? C_B : C_A, [0, 0, 0], 0.2));
+    if (i % 2 === 0) {
+      /* a spoke, as a thin bar across the face */
+      const w2 = 0.09;
+      const sx = Math.cos(am), sy = Math.sin(am);
+      const px = -sy * w2, py = sx * w2;
+      pushQuad(md, [px, py, 0.2], [sx * R * 0.86 + px, sy * R * 0.86 + py, 0.2],
+        [sx * R * 0.86 - px, sy * R * 0.86 - py, 0.2], [-px, -py, 0.2], C_A);
+      pushQuad(md, [-px, -py, -0.2], [sx * R * 0.86 - px, sy * R * 0.86 - py, -0.2],
+        [sx * R * 0.86 + px, sy * R * 0.86 + py, -0.2], [px, py, -0.2], C_A);
+    }
+  }
+  latheW(md, [[0.34, -0.7], [0.38, 0], [0.34, 0.7]], { seg: 8, x: 0, y: 0, z: 0, rx: Math.PI / 2, col: C_IRONW });
+  const spin = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  spin.frustumCulled = false;
+  const g = new THREE.Group();
+  g.add(spin);
+  /* centre it so the bottom third of the rim is under the surface */
+  const hubY = wy + R * 0.7;
+  g.position.set(cx, hubY, cz);
+  g.rotation.y = ry;
+  g.visible = false;
+  scene.add(g);
+  /* the frame that carries the axle, rebuilt beside the new hub (p6b's own
+     posts are parked with its wheel) — a wheel with no bearings reads as a
+     wheel nobody built */
+  const fmd = MD();
+  for (const sgn of [-1, 1]) {
+    const px = cx + st.s.fx * 0 + (-st.s.fz) * 0 + Math.cos(ry) * 0 + (sgn * 0.9) * Math.sin(ry + Math.PI / 2) * 0;
+    const ox = cx + Math.sin(ry) * (HW + 0.55) * sgn, oz = cz + Math.cos(ry) * (HW + 0.55) * sgn;
+    const gy2 = groundH(ox, oz);
+    boxW(fmd, { x: ox, y: gy2 - 0.2, z: oz, w: 0.16, d: 0.16, h: Math.max(1.2, hubY - gy2 + 0.25), col: C_WHEELD });
+  }
+  boxW(fmd, { x: cx, y: hubY, z: cz, w: HW + 0.75, d: 0.1, h: 0.1, ry: ry + Math.PI / 2, col: C_IRONW });
+  for (let i = 0; i < fmd.p.length; i++) WETPROP_MD.p.push(fmd.p[i]);
+  for (let i = 0; i < fmd.c.length; i++) WETPROP_MD.c.push(fmd.c[i]);
+  return { g, spin, R, ruined, cx, cz, wy, ph: 0 };
+}
+const WHEELS = [
+  buildTurningWheel(FCLUSTERS[1].x + 6, FCLUSTERS[1].z - 8, 2.6, false),
+  buildTurningWheel(FCLUSTERS[2].x, FCLUSTERS[2].z - 4, 2.2, true),
+];
+const WHEEL_PARK = [
+  parkBakedProp(FCLUSTERS[1].x + 6, FCLUSTERS[1].z - 8, 3.0, groundH(FCLUSTERS[1].x + 6, FCLUSTERS[1].z - 8) - 3, 999),
+  parkBakedProp(FCLUSTERS[2].x, FCLUSTERS[2].z - 4, 3.0, groundH(FCLUSTERS[2].x, FCLUSTERS[2].z - 4) - 3, 999),
+];
+
+/* THE FERRY, AFLOAT. The barge p6b beached in the silt, lifted onto the
+   water it was built for — hull double-sided, deck opaque, waterline under
+   the gunwale (the bilge lesson: the inside of a boat is never blue). */
+const FERRY_HOME = { x: FCLUSTERS[3].x, z: FCLUSTERS[3].z };
+let ferryGrp = null, ferryY = 0, ferryAng = 0;
+(function buildFloatingFerry() {
+  const st = runNear(FERRY_HOME.x, FERRY_HOME.z);
+  ferryY = st.s.y;
+  ferryAng = Math.atan2(st.s.fx, st.s.fz);
+  const md = MD();
+  const C_H = col(0x7a5c3c), C_H2 = col(0x5a4229), C_DECK = col(0xa98d63);
+  // hull: a flat-bottomed box with a raked bow, half-extents (the boxW law)
+  boxW(md, { x: 0, y: -0.42, z: 0, w: 2.1, d: 4.3, h: 0.86, tw: 2.25, td: 4.45, col: C_H, colB: C_H2 });
+  boxW(md, { x: 0, y: 0.44, z: 0, w: 2.25, d: 4.45, h: 0.06, col: C_DECK });     // the deck: opaque, above the water
+  for (let i = 0; i < 7; i++) {
+    boxW(md, { x: 0, y: 0.5, z: -3.6 + i * 1.2, w: 2.15, d: 0.09, h: 0.04, col: i % 2 ? C_H : C_DECK });
+  }
+  for (const s of [-1, 1]) {
+    boxW(md, { x: 2.1 * s, y: 0.5, z: 0, w: 0.07, d: 4.3, h: 0.52, col: C_H2 });   // rails
+    for (let i = -1; i <= 1; i++) boxW(md, { x: 2.1 * s, y: 0.5, z: i * 2.6, w: 0.1, d: 0.1, h: 0.72, col: C_H2 });
+  }
+  boxW(md, { x: 1.5, y: 0.56, z: -1.2, w: 0.06, d: 0.06, h: 3.4, rx: 0.42, ry: 0.3, col: C_H });   // the pole
+  const hull = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  hull.frustumCulled = false;
+  ferryGrp = new THREE.Group();
+  ferryGrp.add(hull);
+  ferryGrp.position.set(FERRY_HOME.x, ferryY - 0.09, FERRY_HOME.z);
+  ferryGrp.rotation.y = ferryAng;
+  ferryGrp.visible = false;
+  scene.add(ferryGrp);
+})();
+const FERRY_PARK = parkBakedProp(FERRY_HOME.x, FERRY_HOME.z, 6.0,
+  groundH(FERRY_HOME.x, FERRY_HOME.z) - 3, groundH(FERRY_HOME.x, FERRY_HOME.z) + 6);
+
+/* the ferry chest rides up onto the deck rather than drowning in the hold */
+const FCHEST_DRY = { y: ferryChest.group ? ferryChest.group.position.y : 0 };
+function setFerryChestAfloat(on) {
+  if (!ferryChest.group) return;
+  const gy = groundH(ferryChest.x, ferryChest.z);
+  ferryChest.group.position.y = on ? Math.max(gy, ferryY + 0.5) : FCHEST_DRY.y;
+}
+
+/* ═══ THE FORDS ═══
+   The Silverrun was the road. Filling it turns 2.2 km of walkable bed into
+   1.5 m of water, and a region a seven-year-old learned on foot would be
+   cut in half by its own payoff. So the old fords come back with the water:
+   four lines of stepping stones, tops a hand above the surface, platform
+   colliders only (they support, they never wall). Nobody is ever more than
+   ~500 m from a dry way across. */
+const FORDS = [];
+(function buildFords() {
+  const C_FSTONE = col(0x8f8b7c), C_FSTONE2 = col(0x6e6a5d), C_FMOSS = col(0x53703c);
+  const md = WETPROP_MD;
+  for (const d of [150, 760, 1432, 1900]) {
+    const s = RUN[runIndexAtD(d)];
+    const coll = [];
+    const top = s.y + 0.16;
+    const from = -(s.wl + 1.4), to = s.wr + 1.4;
+    for (let u = from; u <= to; u += 1.55) {
+      const x = s.x + s.nx * u, z = s.z + s.nz * u;
+      const rr = 0.85 + Math.abs(hash2(u * 3, d)) * 0.4;
+      const gy = Math.min(top - 0.34, groundH(x, z) - 0.15);
+      latheW(md, [[rr, 0], [rr * 0.94, top - gy - 0.06], [rr * 0.72, top - gy]],
+        { seg: 6, ex: 0.82 + Math.abs(hash2(u, d + 3)) * 0.3, x, y: gy, z,
+          ry: hash2(u, d) * 3, flat: true, segJitter: 0.14,
+          col: Math.abs(hash2(u + 1, d)) > 0.55 ? C_FSTONE : C_FSTONE2,
+          cols: [C_FSTONE2, C_FSTONE, C_FMOSS] });
+      const c = addColl(x, z, rr + 0.35, top);
+      c.plat = true; c.off = true;
+      coll.push(c);
+    }
+    FORDS.push({ d, x: s.x, z: s.z, y: top, coll });
+  }
+})();
+function setFords(on) {
+  for (const F of FORDS) {
+    for (const c of F.coll) c.off = !on;
+    F.on = !!on;
+  }
+}
+
+/* ═══════════ the river's own frame ═══════════ */
+let rivT = 0, pinPh = 0, mistT = 0;
+function tickRiverAnim(dtv, ccx, ccz) {
+  const wet = riverWet() || GRN.front >= 0;
+  /* the sheet is one draw call, but one draw call is the whole margin in
+     this region — so it only draws where the river can actually be seen */
+  const rn = runNear(ccx, ccz);
+  /* from a vista — the tower deck, a knoll, the crown — the river IS the
+     view, so height buys reach; at ground level it draws only where it can
+     be seen, because one draw call is the whole margin in this region */
+  const high = camera.position.y - groundH(ccx, ccz) > 11;
+  const near = ccx > 60 && rn.dist < (high ? 1100 : 340);
+  riverMesh.visible = wet && near;
+  const dFalls = (FALLS_BASE.x - ccx) * (FALLS_BASE.x - ccx) + (FALLS_BASE.z - ccz) * (FALLS_BASE.z - ccz);
+  fallsWater.visible = (wet || fallsPourK > 0.02) && near && dFalls < (high ? 1200 * 1200 : 700 * 700);
+  const showProps = wet && near;
+  let anyWheel = false;
+  for (let i = 0; i < WHEELS.length; i++) {
+    const W = WHEELS[i];
+    const vis = showProps && (W.cx - ccx) * (W.cx - ccx) + (W.cz - ccz) * (W.cz - ccz) < 150 * 150;
+    W.g.visible = vis;
+    if (vis) anyWheel = true;
+    if (!vis) continue;
+    W.ph += dtv * (W.ruined ? 0.32 : 0.62) * (SIM_FREEZE ? 0 : 1);
+    W.spin.rotation.z = -W.ph;
+    if (!LOWFX && Math.random() < 0.25) {
+      const a = W.ph + 1.2;
+      mistT = 2.6; psMist.spawn(W.cx + Math.cos(a) * W.R * 0.4, W.wy + 0.3, W.cz + Math.sin(a) * W.R * 0.4,
+        (Math.random() - 0.5) * 0.5, 0.7 + Math.random() * 0.5, (Math.random() - 0.5) * 0.5, 0.7);
+    }
+  }
+  /* THE WIND SHRINE TURNS. Part one builds the pinwheels frozen and pins
+     them to rotation.z = 0 in its own derivation; the wind is the only
+     thing that was ever going to move them. */
+  const pins = window.__crownPinwheels;
+  if (pins && pins.length) {
+    if (riverWet()) {
+      pinPh += dtv;
+      for (let i = 0; i < pins.length; i++) {
+        if (!pins[i].visible) continue;
+        pins[i].rotation.z = -pinPh * (1.6 + (i % 3) * 0.35) + i;
+      }
+    } else if (pinPh !== 0) {
+      pinPh = 0;
+      for (let i = 0; i < pins.length; i++) pins[i].rotation.z = 0;
+    }
+  }
+  {
+    /* fords, wheel frames and living scrub in one call — and only where one
+       of them is close enough to matter */
+    let d2 = 1e18;
+    for (const F of FORDS) d2 = Math.min(d2, (F.x - ccx) * (F.x - ccx) + (F.z - ccz) * (F.z - ccz));
+    for (const W of WHEELS) d2 = Math.min(d2, (W.cx - ccx) * (W.cx - ccx) + (W.cz - ccz) * (W.cz - ccz));
+    for (const T of THICKETS) d2 = Math.min(d2, (T.x - ccx) * (T.x - ccx) + (T.z - ccz) * (T.z - ccz));
+    wetPropMesh.visible = showProps && d2 < 230 * 230;
+  }
+  ferryGrp.visible = showProps && (FERRY_HOME.x - ccx) * (FERRY_HOME.x - ccx) + (FERRY_HOME.z - ccz) * (FERRY_HOME.z - ccz) < 160 * 160;
+  if (ferryGrp.visible) {
+    ferryGrp.position.y = ferryY - 0.09 + Math.sin(rivT * 0.7) * 0.05;
+    ferryGrp.rotation.z = Math.sin(rivT * 0.5) * 0.018;
+    ferryGrp.rotation.x = Math.sin(rivT * 0.41 + 1) * 0.012;
+  }
+  if (!wet && !(GRN.front >= 0)) return;
+  rivT += dtv;
+  /* THE FLOW: a travelling brightness band written into the sheet's own
+     colour array, but ONLY over the stretch the camera can see — one
+     contiguous slice, one updateRange, ~500 vertices a frame. */
+  let lo = 1e9, hi = -1e9;
+  for (let i = 0; i < RIV_SEG.length; i++) {
+    const s = RIV_SEG[i];
+    const dx = s.x - ccx, dz = s.z - ccz;
+    if (dx * dx + dz * dz > 118 * 118) continue;
+    if (i < lo) lo = i;
+    if (i > hi) hi = i;
+  }
+  if (lo > hi) { riverColA.needsUpdate = false; return; }
+  const v0 = RIV_SEG[lo].v0, v1 = RIV_SEG[hi].v1;
+  const arr = riverColA.array;
+  for (let i = lo; i <= hi; i++) {
+    const s = RIV_SEG[i];
+    /* the band travels DOWN the run and skews across it, so the flow reads
+       as moving water rather than as rungs painted on a ladder (the first
+       cut modulated whole 6 m segments uniformly and striped the river) */
+    for (let v = s.v0; v < s.v1; v++) {
+      const lat = ((v - s.v0) / 6) | 0;
+      const f = 1 + 0.075 * Math.sin(i * 0.62 - rivT * 2.3 + lat * 0.5)
+                  + 0.035 * Math.sin(i * 1.9 + rivT * 1.1 - lat * 0.9);
+      arr[v * 3] = RIV_BASE[v * 3] * f;
+      arr[v * 3 + 1] = RIV_BASE[v * 3 + 1] * f;
+      arr[v * 3 + 2] = RIV_BASE[v * 3 + 2] * (2 - f);
+    }
+  }
+  riverColA.updateRange = { offset: v0 * 3, count: (v1 - v0) * 3 };
+  riverColA.needsUpdate = true;
+  /* the falls: bands run DOWN the sheet */
+  if (fallsWater.visible) {
+    const fa = fallsWaterColA.array;
+    const rows = window.__fallsRows * 3;      // main sheet + two veils
+    /* the pour comes ON by opacity, not by brightness: multiplying the
+       colours by the ramp faded the column up out of BLACK, and for the
+       first second of the payoff the Dried Falls poured ink */
+    const pk = clamp(fallsPourK, 0, 1);
+    fallsWater.material.opacity = 0.93 * pk;
+    for (let r = 0; r < rows; r++) {
+      const f = 0.9 + 0.14 * Math.sin(r * 1.15 + rivT * 7.5) + 0.06 * Math.sin(r * 0.4 - rivT * 3.1);
+      for (let v = r * 6; v < r * 6 + 6; v++) {
+        fa[v * 3] = FALLS_BASE_COL[v * 3] * f;
+        fa[v * 3 + 1] = FALLS_BASE_COL[v * 3 + 1] * f;
+        fa[v * 3 + 2] = FALLS_BASE_COL[v * 3 + 2] * f;
+      }
+    }
+    fallsWaterColA.updateRange = { offset: 0, count: rows * 6 * 3 };
+    fallsWaterColA.needsUpdate = true;
+    if (!LOWFX && Math.random() < 0.5) {
+      const rr = fallsRadiusAt(0);
+      const cx2 = CROWN.x + Math.cos(FALLS_A) * rr, cz2 = CROWN.z + Math.sin(FALLS_A) * rr;
+      mistT = 2.6; psMist.spawn(cx2 + (Math.random() - 0.5) * 13, FALLS_WALL_Y - 2 + Math.random() * 9,
+        cz2 + (Math.random() - 0.5) * 13, (Math.random() - 0.5) * 1.2, 0.9 + Math.random(), (Math.random() - 0.5) * 1.2, 2.6);
+    }
+  }
+}
+</script>
+<script>
+/* ═══════════ p6h/5 — THE SKIFF ═══════════
+   A flat-bottomed punt, constrained to the channel this file authored. She
+   cannot be beached because she cannot leave the water: the constraint IS
+   the mooring rule (p6c's 1.3 m depth, in a bed that never holds 1.3 m).
+   The current pushes downstream and upstream is always possible — a river
+   you can only ride one way is a trap, and Ben would find it in a minute. */
+const SKF = {
+  on: false, x: 0, z: 0, ang: 0, spd: 0, u: 0, i: 0,
+  bobPh: 0, stuckT: 0, edgeCd: 0, edgeHits: 0, rescues: 0, boardCount: 0,
+};
+let skiffGrp = null, skiffHull = null, skiffColl = null;
+(function buildSkiff() {
+  const md = MD();
+  const C_S = col(0x8a6a44), C_S2 = col(0x63492c), C_BILGE = col(0xa88a5f), C_TRIM = col(0x6f5a3a);
+  /* the hull: flat bottom, raked at both ends. DOUBLE-SIDED (the tumblehome
+     lesson: a small craft's near wall must never vanish at couch height). */
+  boxW(md, { x: 0, y: 0, z: 0, w: 0.62, d: 1.55, h: 0.52, tw: 0.72, td: 1.9, col: C_S, colB: C_S2 });
+  boxW(md, { x: 0, y: 0.18, z: 2.05, w: 0.36, d: 0.55, h: 0.34, tw: 0.16, td: 0.3, rx: -0.28, col: C_S });
+  boxW(md, { x: 0, y: 0.18, z: -2.05, w: 0.36, d: 0.55, h: 0.34, tw: 0.16, td: 0.3, rx: 0.28, col: C_S });
+  /* the bilge: a full liner, wide and long enough to reach the hull walls —
+     the water plane must never surface inside her */
+  boxW(md, { x: 0, y: 0.3, z: 0, w: 0.6, d: 1.85, h: 0.08, col: C_BILGE });
+  boxW(md, { x: 0, y: 0.36, z: 0, w: 0.52, d: 1.7, h: 0.03, col: mix3(C_BILGE, [0, 0, 0], 0.12) });
+  boxW(md, { x: 0, y: 0.5, z: -0.55, w: 0.6, d: 0.14, h: 0.06, col: C_TRIM });    // the thwart Wick sits on
+  boxW(md, { x: 0, y: 0.5, z: 0.85, w: 0.5, d: 0.12, h: 0.06, col: C_TRIM });     // bow thwart
+  for (const s of [-1, 1]) {
+    boxW(md, { x: 0.66 * s, y: 0.44, z: 0, w: 0.05, d: 1.8, h: 0.12, col: C_TRIM });  // gunwale caps
+  }
+  boxW(md, { x: 0.5, y: 0.56, z: -1.0, w: 0.035, d: 0.035, h: 2.6, rx: -0.5, ry: 0.25, col: C_S2 });  // the pole
+  skiffHull = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  skiffHull.frustumCulled = false;
+  skiffGrp = new THREE.Group();
+  skiffGrp.add(skiffHull);
+  skiffGrp.visible = false;
+  scene.add(skiffGrp);
+  skiffColl = addColl(0, 0, 1.1);
+  skiffColl.off = true;
+})();
+
+function skiffPlaceAt(x, z) {
+  const r = runNear(x, z);
+  SKF.i = r.i;
+  SKF.u = clamp(r.off, -Math.max(0.3, r.s.navL - 0.7), Math.max(0.3, r.s.navR - 0.7));
+  SKF.x = r.s.x + r.s.nx * SKF.u;
+  SKF.z = r.s.z + r.s.nz * SKF.u;
+  SKF.ang = Math.atan2(-r.s.fx, -r.s.fz);      // pointing downstream, the way home
+  SKF.spd = 0;
+  if (!SKF.on) { skiffColl.x = SKF.x; skiffColl.z = SKF.z; }
+}
+function skiffY() { return RUN[SKF.i].y; }
+/* SHE MUST ALWAYS BE BOARDABLE. Moored on the centre-line of a sixteen-metre
+   river she is four metres past anyone's reach from either bank, and there
+   is no way to call her back — p6c learned this the hard way with the
+   wake-boat. So every derived mooring is pulled to the near bank, where a
+   player standing at the water's edge is inside the prompt. */
+function skiffMoorToBank() {
+  const s = RUN[SKF.i];
+  const side = SKF.u >= 0 ? 1 : -1;
+  const w = side > 0 ? s.navR : s.navL;
+  SKF.u = side * Math.max(0.3, w - 0.7);
+  SKF.x = s.x + s.nx * SKF.u;
+  SKF.z = s.z + s.nz * SKF.u;
+  if (riverDepthAt(SKF.x, SKF.z) < SKIFF_DRAFT + 0.15) {   // a shoal bank: back to the middle
+    SKF.u = 0; SKF.x = s.x; SKF.z = s.z;
+  }
+  skiffColl.x = SKF.x; skiffColl.z = SKF.z;
+}
+/* she must always be findable and always float: if a save's stored spot is
+   off the water (an old save, a hand-edited one, a channel that moved), she
+   is walked back to the nearest station centreline — the rescue rule, kept
+   cheap because the channel is one polyline */
+function skiffRescueIfNeeded() {
+  const r = runNear(SKF.x, SKF.z);
+  const w = r.off < 0 ? r.s.navL : r.s.navR;
+  if (Math.abs(r.off) <= Math.max(0.3, w - 0.6) && riverDepthAt(SKF.x, SKF.z) > SKIFF_DRAFT + 0.2) return false;
+  SKF.rescues++;
+  skiffPlaceAt(r.s.x, r.s.z);
+  return true;
+}
+function skiffNearestLanding() {
+  let best = null, bd = 1e9;
+  for (const L of LANDINGS) {
+    const d = Math.hypot(SKF.x - L.x, SKF.z - L.z);
+    if (d < bd) { bd = d; best = L; }
+  }
+  return { L: best, d: bd };
+}
+/* dry footing within stepping reach, and a walkable line to it: a footing
+   you cannot walk to from the hull is not ashore, it is a cell */
+function skiffAshoreSpot() {
+  const wy = skiffY();
+  for (let r = 1.9; r <= 4.6; r += 0.9) {
+    for (let i = 0; i < 12; i++) {
+      const a = SKF.ang + i * (TAU / 12);
+      const px = SKF.x + Math.sin(a) * r, pz = SKF.z + Math.cos(a) * r;
+      if (worldSolidAt(px, pz) || (window.__forestSolid && window.__forestSolid(px, pz))) continue;
+      let blocked = false;
+      for (let s = 1; s <= 3; s++) {
+        const mx = SKF.x + (px - SKF.x) * s / 4, mz = SKF.z + (pz - SKF.z) * s / 4;
+        if (worldSolidAt(mx, mz) || (window.__forestSolid && window.__forestSolid(mx, mz))) { blocked = true; break; }
+      }
+      if (blocked) continue;
+      const gy = groundH(px, pz);
+      if (gy > wy - 0.25 && gy < wy + 1.8) return { x: px, z: pz, y: gy };
+    }
+  }
+  return null;
+}
+function boardSkiff() {
+  P.skiffing = true;
+  SKF.boardCount++;
+  P.x = SKF.x; P.z = SKF.z; P.fy = skiffY() + 0.5; P.air = false; P.jvy = 0;
+  P.vx = 0; P.vz = 0; P.st = 'idle'; P.sprint = false;
+  SKF.spd = 0;
+  skiffColl.off = true;
+  SFX.creakBoat ? SFX.creakBoat() : SFX.creak();
+  SFX.splashSm ? SFX.splashSm() : SFX.splash();
+  rumble({ duration: 90, strong: 0.15, weak: 0.3 });
+}
+/* she can be moored anywhere in a sixteen-metre channel, and a footing four
+   metres from the hull is not guaranteed there. Rather than refuse the
+   prompt (aboard with no way off is the soft-lock this whole file is
+   written against), she POLES IN: the boat crosses the water, never the
+   player, and the footing still has to be walk-connected to the hull. */
+function skiffPullIn() {
+  const st = RUN[SKF.i];
+  for (const side of [SKF.u >= 0 ? 1 : -1, SKF.u >= 0 ? -1 : 1]) {
+    const nav = side > 0 ? st.navR : st.navL;
+    const u = side * Math.max(0.3, nav - 0.5);
+    const px = st.x + st.nx * u, pz = st.z + st.nz * u;
+    if (riverDepthAt(px, pz) < SKIFF_DRAFT + 0.15) continue;
+    const bx = SKF.x, bz = SKF.z;
+    SKF.x = px; SKF.z = pz; SKF.u = u;
+    if (skiffAshoreSpot()) return true;
+    SKF.x = bx; SKF.z = bz;
+  }
+  return false;
+}
+/* THE PROMPT RESOLVER RUNS EVERY FRAME. Both of these searches walk the
+   solid authority a few hundred times — and __forestSolid tests nine hash
+   grid cells of pines per call. Asking them at 60 Hz (480 Hz under a turbo
+   harness) turned a frame into a hundred milliseconds and hung a probe for
+   half an hour. Six times a second is plenty for a prompt on a boat. */
+let ashoreCacheT = -999, ashoreCache = null, pullCacheT = -999, pullCache = false;
+function skiffAshoreCached() {
+  if (simTick - ashoreCacheT < 10) return ashoreCache;
+  ashoreCacheT = simTick;
+  ashoreCache = skiffAshoreSpot();
+  return ashoreCache;
+}
+function canPullInCached() {
+  if (simTick - pullCacheT < 10) return pullCache;
+  pullCacheT = simTick;
+  pullCache = canPullIn();
+  return pullCache;
+}
+function canPullIn() {
+  const bx = SKF.x, bz = SKF.z, bu = SKF.u;
+  const ok = skiffPullIn();
+  SKF.x = bx; SKF.z = bz; SKF.u = bu;
+  return ok;
+}
+function leaveSkiff() {
+  let s = skiffAshoreSpot();
+  if (!s && skiffPullIn()) {
+    s = skiffAshoreSpot();
+    if (s) { SFX.creakBoat ? SFX.creakBoat() : SFX.creak(); showCaption('You pole her in to the bank.', 2200); }
+  }
+  if (!s) return false;
+  P.skiffing = false;
+  P.x = s.x; P.z = s.z; P.fy = s.y; P.air = false; P.jvy = 0;
+  P.vx = 0; P.vz = 0; P.st = 'idle';
+  skiffColl.off = false;
+  skiffColl.x = SKF.x; skiffColl.z = SKF.z;
+  if (SAVE) { SAVE.skiffX = SKF.x; SAVE.skiffZ = SKF.z; storeSave(); }
+  SFX.splashSm ? SFX.splashSm() : SFX.splash();
+  return true;
+}
+function tickSkiff() {
+  const st = RUN[SKF.i];
+  /* ✕ at the pole: context first, exactly like on foot */
+  if (IN.atk) {
+    const ctx = currentInteract();
+    if (ctx) { doInteract(ctx); return; }
+  }
+  let tgt = 0;
+  const mag = moveVec();
+  if (mag > 0.1) {
+    SKF.ang = angLerp(SKF.ang, Math.atan2(_mv[0], _mv[1]), 0.05);
+    tgt = IN.sprintHeld ? 5.4 : 3.1;
+  }
+  SKF.spd += (tgt - SKF.spd) * (tgt > SKF.spd ? 0.03 : 0.05);
+  /* THE CURRENT: downstream is -(fx,fz); steeper water pushes harder. It
+     adds to a downstream run and subtracts from a beat upstream, but never
+     enough to stop one — 3.1 of paddle against 1.6 of river still climbs. */
+  const grade = SKF.i > 2 ? (RUN[SKF.i].y - RUN[SKF.i - 2].y) / (RUN_STEP * 2) : 0;
+  const cur = 1.05 + clamp(grade * 26, 0, 1.1);
+  let nx = SKF.x + (Math.sin(SKF.ang) * SKF.spd - st.fx * cur) * DT;
+  let nz = SKF.z + (Math.cos(SKF.ang) * SKF.spd - st.fz * cur) * DT;
+  const r = runNear(nx, nz);
+  const wLim = Math.max(0.3, (r.off < 0 ? r.s.navL : r.s.navR) - 0.9);
+  if (Math.abs(r.off) > wLim) {
+    /* the bank turns her back, she never touches it — and ONLY the sideways
+       part of the move is taken away. Rebuilding her position from the
+       station's own frame threw away the along-track component too, and she
+       sat in the falls pool with the pole going and the river not moving. */
+    const over = (Math.abs(r.off) - wLim) * Math.sign(r.off);
+    nx -= r.s.nx * over;
+    nz -= r.s.nz * over;
+    SKF.spd *= 0.985;      // a shove, not a brake: 0.9 a tick made upstream impossible
+    if ((simTick % 20) === 0 && SKF.spd > 1.4) SFX.splashSm ? SFX.splashSm() : SFX.splash();
+  }
+  /* the two ends of the run: a soft boundary, never a wall, always turnable */
+  const rr = runNear(nx, nz);
+  if (rr.i >= RUN.length - 2 || rr.i <= 1) {
+    const end = rr.i <= 1 ? RUN[2] : RUN[RUN.length - 3];
+    nx = lerp(nx, end.x, 0.25); nz = lerp(nz, end.z, 0.25);
+    SKF.spd *= 0.86;
+    if (SKF.edgeCd <= 0) {
+      SKF.edgeCd = 420; SKF.edgeHits++;
+      showCaption(rr.i <= 1 ? 'The Silverrun goes under the pass here. The bay is a walk.'
+                            : 'The run comes up out of the stones. No further.', 3400);
+      SFX.splash();
+    }
+  }
+  if (SKF.edgeCd > 0) SKF.edgeCd--;
+  /* the band is authored per station, but at a bend two stations' frames
+     overlap and a clamp against one can still land shallow against the
+     other. The hull's OWN depth is the last word: pull her to the thalweg
+     until she floats. */
+  for (let g = 0; g < 6 && riverDepthAt(nx, nz) < 0.5; g++) {
+    const rg = runNear(nx, nz);
+    nx -= rg.s.nx * rg.off * 0.4;
+    nz -= rg.s.nz * rg.off * 0.4;
+  }
+  SKF.x = nx; SKF.z = nz;
+  const rf = runNear(SKF.x, SKF.z);
+  SKF.i = rf.i; SKF.u = rf.off;
+  /* NEVER AGROUND: the constraint above should make this impossible, so if
+     it ever fires something upstream is wrong and the river fixes it. */
+  if (riverDepthAt(SKF.x, SKF.z) < SKIFF_DRAFT + 0.1) {
+    SKF.stuckT++;
+    if (SKF.stuckT > 90) { SKF.stuckT = 0; skiffRescueIfNeeded(); }
+  } else SKF.stuckT = 0;
+  const wy = skiffY();
+  P.x = SKF.x; P.z = SKF.z; P.fy = wy + 0.5; P.air = false;
+  P.heading = SKF.ang;
+  P.st = 'idle'; P.sprint = false;
+  if (SAVE) { SAVE.skiffX = SKF.x; SAVE.skiffZ = SKF.z; }
+  /* the bow spray borrows the sailboat's OWN emitter: psMist's 0.9 m puffs
+     are sized for a sixty-metre waterfall and at arm's length behind the
+     hull they read as a pale wedge dragging after her */
+  if (SKF.spd > 2.2 && (simTick % 4) === 0 && !LOWFX && typeof psSpray !== 'undefined') {
+    const bx = SKF.x + Math.sin(SKF.ang) * 1.9, bz = SKF.z + Math.cos(SKF.ang) * 1.9;
+    psSpray.spawn(bx + (Math.random() - 0.5) * 0.6, wy + 0.2, bz + (Math.random() - 0.5) * 0.6,
+      (Math.random() - 0.5) * 0.8, 0.8, (Math.random() - 0.5) * 0.8, 0.45);
+    psSpray.spawn(SKF.x - Math.sin(SKF.ang) * 1.6, wy + 0.1, SKF.z - Math.cos(SKF.ang) * 1.6,
+      -Math.sin(SKF.ang) * 1.4, 0.35, -Math.cos(SKF.ang) * 1.4, 0.6);
+  }
+}
+/* the camera pulls behind her, like the sailboat, and the right stick still
+   owns the orbit */
+const _skv = new THREE.Vector3();
+function skiffCamera(dtv) {
+  let manual = false;
+  if (state === 'play') {
+    const sx = clamp(IN.cx, -1, 1), sy = clamp(IN.cy, -1, 1);
+    if (sx || sy) { CAM.yaw -= sx * 3.1 * dtv; CAM.pitch += sy * 2.0 * dtv; manual = true; }
+    if (CAMIN.mdx || CAMIN.mdy) { CAM.yaw -= CAMIN.mdx * 0.0034; CAM.pitch += CAMIN.mdy * 0.0026; manual = true; }
+    if (CAMIN.tdx || CAMIN.tdy) { CAM.yaw -= CAMIN.tdx * 0.0085; CAM.pitch += CAMIN.tdy * 0.0065; manual = true; }
+  }
+  CAMIN.mdx = CAMIN.mdy = CAMIN.tdx = CAMIN.tdy = 0;
+  if (manual || CAMIN.touching) CAM.stickAge = 0; else CAM.stickAge += dtv;
+  CAM.pitch = clamp(CAM.pitch, PITCH_MIN, PITCH_MAX);
+  if (CAM.stickAge > 2.5 && SKF.spd > 0.8) {
+    CAM.yaw = angLerp(CAM.yaw, SKF.ang + Math.PI, Math.min(1, dtv * 0.8));
+  }
+  const wy = skiffY();
+  const ty = wy + 1.15;
+  const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
+  const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp;
+  let dd = 6.0;
+  for (let s = 0.25; s <= 1.0; s += 0.15) {
+    const sx2 = SKF.x + dx * dd * s, sz2 = SKF.z + dz * dd * s;
+    if (worldSolidAt(sx2, sz2) || (window.__forestSolid && window.__forestSolid(sx2, sz2))) { dd = Math.max(2.4, dd * (s - 0.15)); break; }
+  }
+  const cx = SKF.x + dx * dd, cz = SKF.z + dz * dd;
+  let cy = ty + spv * dd;
+  cy = Math.max(cy, wy + 0.85);
+  const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 5)) : 1;
+  CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
+  CAM.ready = true;
+  camera.position.set(CAM.x, CAM.y, CAM.z);
+  CAM.shake = Math.max(0, CAM.shake - dtv * 1.6);
+  _skv.set(SKF.x + Math.sin(SKF.ang) * 1.2, ty, SKF.z + Math.cos(SKF.ang) * 1.2);
+  camera.lookAt(_skv);
+}
+function animateSkiff(dtv, now, ccx, ccz) {
+  const vis = riverWet() &&
+    (SKF.x - ccx) * (SKF.x - ccx) + (SKF.z - ccz) * (SKF.z - ccz) < 150 * 150;
+  skiffGrp.visible = vis;
+  if (!vis) return;
+  const wy = skiffY();
+  SKF.bobPh += dtv * (1.6 + SKF.spd * 0.3);
+  skiffGrp.position.set(SKF.x, wy - 0.16 + Math.sin(SKF.bobPh) * 0.045, SKF.z);
+  skiffGrp.rotation.set(P.skiffing ? SKF.spd * 0.008 : 0, SKF.ang, Math.sin(SKF.bobPh * 0.7) * 0.028);
+}
+</script>
+<script>
+/* ═══════════ p6h/6 — the burnt thickets, the sky's fourth eighth ═══════════ */
+
+/* THREE BLOCKED SHORTCUTS. Burnt bramble chokes three gaps between
+   neighbouring clusters; the long way round always exists. When the wind
+   comes home they soften into low green scrub and the colliders come off —
+   the region you learned the hard way gets three new lines through it. */
+const THICKETS = [
+  { id: 'th1', x: 585, z: 296, a: 0.95, from: 'glade1', to: 'the mill' },
+  { id: 'th2', x: 1140, z: 727, a: 2.02, from: 'the tower', to: 'the salt seam' },
+  { id: 'th3', x: 1550, z: 974, a: 1.19, from: 'the hamlet', to: 'glade3' },
+];
+let thicketDead = null;
+(function buildThickets() {
+  const C_BRAMBLE = col(0x6b4a30), C_BRAMBLE2 = col(0x4d3421), C_THORN = col(0x8a7350);
+  const C_SCRUB = col(0x4e7434), C_SCRUB2 = col(0x39561f), C_BLOOM = col(0xcfd36a);
+  const mdD = MD(), mdG = WETPROP_MD;
+  for (const T of THICKETS) {
+    const dx = Math.cos(T.a), dz = Math.sin(T.a);          // along the wall
+    T.coll = [];
+    for (let i = -2; i <= 2; i++) {
+      const bx = T.x + dx * i * 3.6, bz = T.z + dz * i * 3.6;
+      const gy = groundH(bx, bz);
+      const s = 1.0 - Math.abs(i) * 0.12;
+      /* dead: a high tangle of thorn — tall and spiky enough to read as NO
+         from across the clearing (the first cut was a row of dark mounds
+         you would happily have tried to walk over) */
+      latheW(mdD, [[1.9 * s, 0], [2.0 * s, 1.4 * s], [1.35 * s, 2.6 * s], [0.2 * s, 3.4 * s]],
+        { seg: 6, ex: 0.78, x: bx, y: gy - 0.2, z: bz, ry: i, warm: true, segJitter: 0.26,
+          col: i % 2 ? C_BRAMBLE : C_BRAMBLE2, cols: [C_BRAMBLE2, C_BRAMBLE, C_THORN] });
+      for (let k = 0; k < 9; k++) {
+        const a2 = hash2(i * 5 + k, 3) * 6, r2 = 0.5 + Math.abs(hash2(k, i)) * 1.5;
+        boxW(mdD, { x: bx + Math.cos(a2) * r2, y: gy + Math.abs(hash2(k, i + 4)) * 1.2, z: bz + Math.sin(a2) * r2,
+          w: 0.075, d: 0.075, h: 1.7 + Math.abs(hash2(k + 2, i)) * 2.0,
+          rx: 0.25 + hash2(k, i + 1) * 0.55, ry: a2, warm: true,
+          col: k % 3 ? C_THORN : mix3(C_THORN, [1, 1, 1], 0.25) });
+      }
+      // alive: low green scrub you step over, and something flowering in it
+      latheW(mdG, [[2.3 * s, 0], [1.7 * s, 0.5 * s], [0, 0.78 * s]],
+        { seg: 6, ex: 0.85, x: bx, y: gy - 0.15, z: bz, ry: i, warm: true, segJitter: 0.24,
+          col: i % 2 ? C_SCRUB : C_SCRUB2, cols: [C_SCRUB2, C_SCRUB] });
+      for (let k = 0; k < 4; k++) {
+        const a2 = hash2(i * 7 + k, 9) * 6, r2 = 0.9 + Math.abs(hash2(k + 5, i)) * 1.2;
+        boxW(mdG, { x: bx + Math.cos(a2) * r2, y: gy + 0.4, z: bz + Math.sin(a2) * r2,
+          w: 0.09, d: 0.09, h: 0.16, warm: true, col: C_BLOOM });
+      }
+      const c = addColl(bx, bz, 2.2);
+      T.coll.push(c);
+    }
+  }
+  thicketDead = mdMesh(mdD, WORLD_MAT, false);
+  thicketDead.matrixAutoUpdate = false; thicketDead.updateMatrix();
+  thicketDead.visible = false;
+  scene.add(thicketDead);
+})();
+/* everything the wind leaves standing, in one mesh, built last so the fords
+   and the wheels' frames are already in it */
+(function finishWetProps() {
+  wetPropMesh = mdMesh(WETPROP_MD, WORLD_MAT, false);
+  wetPropMesh.matrixAutoUpdate = false; wetPropMesh.updateMatrix();
+  wetPropMesh.visible = false;
+  scene.add(wetPropMesh);
+})();
+function setThickets(open) {
+  for (const T of THICKETS) {
+    for (const c of T.coll) c.off = !!open;
+    T.openNow = !!open;
+  }
+}
+
+/* ═══ THE SKY'S FOURTH EIGHTH ═══
+   p6e owns the dome from step 2 up through the sun's gold arc and rewrites
+   it whenever the light moves. Step four therefore runs as a PASS over that
+   result — one extra blend of the same 252 vertices, only on the frames the
+   step-three write actually happened. */
+const SKY4 = { zen: col(0x3b5590), hor: col(0xcf8f70), fog: col(0xc0a091),
+               world: [0.79, 0.735, 0.775], hemi: 0.23, sunI: 0.5 };
+let hSkyK = 0;            // 0..1 blend from the step-3 palette into step 4
+let hDomeSeen = -999, hDomeMine = -1;
+const _h4z = [0, 0, 0], _h4h = [0, 0, 0], _h4w = [0, 0, 0];
+function applySky4(force) {
+  if (hSkyK <= 0.001 && !force) return;
+  /* the dome, recomputed from p6e's OWN zenith/horizon pair — never from
+     the dome's current colours, or repeated passes would walk the sky into
+     step four's palette one frame at a time */
+  const baseZ = (typeof _fz !== 'undefined') ? _fz : SKY3.zen;
+  const baseH = (typeof _fh !== 'undefined') ? _fh : SKY3.hor;
+  mix3(baseZ, SKY4.zen, hSkyK, _h4z);
+  mix3(baseH, SKY4.hor, hSkyK, _h4h);
+  const pos = skyDome.geometry.attributes.position, colA = skyDome.geometry.attributes.color;
+  for (let i = 0; i < pos.count; i++) {
+    const vy = pos.getY(i) / 430;
+    const kk = Math.pow(clamp(1 - Math.max(0, vy), 0, 1), 2.1);
+    colA.setXYZ(i, _h4z[0] + (_h4h[0] - _h4z[0]) * kk,
+      _h4z[1] + (_h4h[1] - _h4z[1]) * kk, _h4z[2] + (_h4h[2] - _h4z[2]) * kk);
+  }
+  colA.needsUpdate = true;
+  applySky4Tint();
+}
+/* the world tint and the two light intensities are rewritten by p6e every
+   frame the sun moves, so step four re-lays them every frame — from the
+   same sources p6e used, which keeps it idempotent */
+function applySky4Tint() {
+  if (hSkyK <= 0.001) return;
+  const baseW = (typeof _fw2 !== 'undefined') ? _fw2 : SKY3.world;
+  mix3(baseW, SKY4.world, hSkyK, _h4w);
+  WORLD_MAT.color.setRGB(_h4w[0], _h4w[1], _h4w[2]);
+  const sk = (typeof fSkyK !== 'undefined') ? fSkyK : 1;
+  const su = (typeof fSunK !== 'undefined') ? fSunK : 0;
+  const hemi3 = lerp(lerp(SKY2.hemi, SKY3.hemi, sk), SKYGOLD.hemi, su);
+  const sun3 = lerp(lerp(SKY2.sunI, SKY3.sunI, sk), SKYGOLD.sunI, su);
+  hemiLight.intensity = lerp(hemi3, SKY4.hemi, hSkyK);
+  sunLight.intensity = lerp(sun3, SKY4.sunI, hSkyK);
+  SKY.t = 3 + hSkyK;
+}
+/* THE FOURTH STAR — east, over the Crown, where the wind came from.
+   Stars one through three each cost two draw calls (a core plane and a
+   flare plane, two materials); this one carries its flare in the SAME
+   geometry, dimmed by vertex colour, because on a riverbank at dusk the
+   budget is decided in single calls. */
+let starMesh4 = null, star4Mat = null, star4Op = 0;
+(function buildStar4() {
+  const g = new THREE.BufferGeometry();
+  const quad = (w, h, c, out) => {
+    const v = [[-w, -h], [w, -h], [w, h], [-w, -h], [w, h], [-w, h]];
+    for (const [x, y] of v) { out.p.push(x, y, 0); out.c.push(c, c, c); out.u.push((x / w + 1) / 2, (y / h + 1) / 2); }
+  };
+  const out = { p: [], c: [], u: [] };
+  quad(3.1, 3.1, 1.0, out);        // the core
+  quad(6.5, 0.95, 0.26, out);      // the flare, dimmer, same draw
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(out.p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(out.c), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(out.u), 2));
+  star4Mat = new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  starMesh4 = new THREE.Mesh(g, star4Mat);
+  starMesh4.frustumCulled = false;
+  starMesh4.position.set(196, 116, 96);
+  starMesh4.lookAt(0, 0, 0);
+  starMesh4.visible = false;
+  skyGrp.add(starMesh4);
+  window.starMesh4 = starMesh4;
+})();
+function setStarOp4(v) {
+  star4Op = v;
+  star4Mat.opacity = v;
+  starMesh4.visible = v > 0.01;
+}
+
+/* ═══ THE WAXING SLIVER on the wheel ═══ */
+const sliverIsMine = !(typeof sliverItem !== 'undefined' && sliverItem) && !window.__sliverItem;
+const sliverProp = (typeof sliverItem !== 'undefined' && sliverItem) ? sliverItem :
+  (window.__sliverItem || (function buildSliverFallback() {
+    const g = new THREE.Group();
+    const md = MD();
+    const C_MOON = [0.93, 0.95, 0.9], C_MOON2 = [0.72, 0.78, 0.8];
+    for (let i = 0; i < 9; i++) {
+      const a0 = -0.55 + i / 9 * 1.1, a1 = -0.55 + (i + 1) / 9 * 1.1;
+      const R = 1.05, r = 0.86;
+      pushQuad(md,
+        [Math.sin(a0) * R, Math.cos(a0) * R, 0], [Math.sin(a1) * R, Math.cos(a1) * R, 0],
+        [Math.sin(a1) * r, Math.cos(a1) * r, 0], [Math.sin(a0) * r, Math.cos(a0) * r, 0],
+        i % 2 ? C_MOON : C_MOON2);
+      pushQuad(md,
+        [Math.sin(a0) * r, Math.cos(a0) * r, 0.06], [Math.sin(a1) * r, Math.cos(a1) * r, 0.06],
+        [Math.sin(a1) * R, Math.cos(a1) * R, 0.06], [Math.sin(a0) * R, Math.cos(a0) * R, 0.06],
+        i % 2 ? C_MOON2 : C_MOON);
+    }
+    const m = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+    m.frustumCulled = false;
+    g.add(m);
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4), new THREE.MeshBasicMaterial({
+      map: DOT_TEX, transparent: true, opacity: 0.22, fog: false,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    halo.frustumCulled = false;
+    g.add(halo);
+    g.userData.halo = halo;
+    g.visible = false;
+    scene.add(g);
+    return g;
+  })());
+function hWheelSeat(ang) {
+  const wy = groundH(WHEEL_POS.x, WHEEL_POS.z) + 4.2;
+  return [WHEEL_POS.x + Math.cos(ang) * 3.1 * Math.cos(wheelRing.rotation.y),
+          wy + Math.sin(ang) * 3.1,
+          WHEEL_POS.z - Math.cos(ang) * 3.1 * Math.sin(wheelRing.rotation.y)];
+}
+/* k = 0 at the start of the fourth notch, 1 when it has turned */
+function hSeatRelics(k) {
+  wheelRing.rotation.z = -(3 * Math.PI / 4) - k * (Math.PI / 4);
+  const put = (item, ang, sc) => {
+    if (!item) return;
+    const b = hWheelSeat(ang);
+    item.visible = true;
+    item.scale.setScalar(sc);
+    item.position.set(b[0], b[1], b[2]);
+    item.rotation.set(0, wheelRing.rotation.y, 0);
+  };
+  put(sliverProp, Math.PI / 2 - k * Math.PI / 4, 0.9);
+  put(typeof gibbousItem !== 'undefined' ? gibbousItem : null, Math.PI / 4 - k * Math.PI / 4, 0.9);
+  if (typeof shieldItem !== 'undefined' && shieldItem) {
+    const s = hWheelSeat(-k * Math.PI / 4);
+    shieldItem.visible = true;
+    shieldItem.scale.setScalar(0.9);
+    shieldItem.position.set(s[0], s[1], s[2]);
+    shieldItem.rotation.set(0, wheelRing.rotation.y + Math.PI / 2, 0);
+  }
+  const cr = hWheelSeat(-Math.PI / 4 - k * Math.PI / 4);
+  crescentItem.visible = true;
+  crescentItem.scale.setScalar(0.8);
+  crescentItem.position.set(cr[0], cr[1], cr[2]);
+}
+</script>
+<script>
+/* ═══════════ p6h/7 — THE PAYOFF: COOL WINDS COME HOME ═══════════
+   ONE authored beat, twelve seconds, skippable after the first viewing.
+   The wind and the water are the same arrival, so they are the same shot:
+   the wheel takes its fourth notch, the sky takes its fourth eighth, and
+   then the camera rides the gust east and flies backwards down the
+   Silverrun while the green catches it up and the river fills behind. */
+const WIND_T0 = 5.05;              // when the camera reaches the forest
+const WIND_T1 = 11.45;             // when the front has crossed everything
+const RIV_SUFFIX = new Float32Array(RIV_SEG.length);
+(function bakeRiverFront() {
+  let mx = -1e9;
+  for (let i = RIV_SEG.length - 1; i >= 0; i--) {
+    const s = RIV_SEG[i];
+    const d = Math.hypot(s.x - WIND_SRC.x, s.z - WIND_SRC.z);
+    mx = Math.max(mx, d);
+    RIV_SUFFIX[i] = mx;
+  }
+})();
+let rivFrontK = -1;                // -1 = not filling; otherwise the front, in metres
+function riverDrawFront(front) {
+  const total = riverMesh.geometry.attributes.position.count;
+  if (front < 0) { riverMesh.geometry.setDrawRange(0, total); return; }
+  let k = 0;
+  while (k < RIV_SEG.length && RIV_SUFFIX[k] > front) k++;
+  if (k >= RIV_SEG.length) { riverMesh.geometry.setDrawRange(0, 0); return; }
+  const v0 = RIV_SEG[k].v0;
+  riverMesh.geometry.setDrawRange(v0, total - v0);
+}
+function hPayoffFlags() {
+  QUEST.phases = 4;
+  if (SAVE) {
+    SAVE.ph = 4; SAVE.sky = 4; SAVE.riverWet = true;
+    storeSave();
+  }
+  hSkyK = 1;
+  P.carrySliver = false;
+  setQuest(17);
+  markCineSeen('sliverWheel');
+}
+function tickSliverWheel(t) {
+  const wx = WHEEL_POS.x, wz = WHEEL_POS.z;
+  const wy = groundH(wx, wz) + 4.2;
+  /* seen it once? ✕ takes you straight to the world it makes */
+  if (cineSeen('sliverWheel') && t > 0.9 && IN.confirm) {
+    hPayoffFlags();
+    hSeatRelics(1);
+    setStarOp4(0.95);
+    applySky4(true);
+    fallsPourK = 1;
+    rivFrontK = -1;
+    riverDrawFront(-1);
+    grnSet(1);
+    hDeriveWorld(SAVE);
+    endCine();
+    showTBC4();
+    return;
+  }
+  if (t < 1.5) {
+    /* the Sliver leaves Wick's hands for the fourth socket */
+    if (CINE.step === 0) {
+      CINE.step = 1;
+      P.carrySliver = false;
+      sliverProp.visible = true;
+      SFX.chime(0.8);
+    }
+    const k = smoothstep(clamp(t / 1.4, 0, 1));
+    const s2 = hWheelSeat(Math.PI / 2);
+    const sy = groundH(P.x, P.z) + 1.6;
+    sliverProp.scale.setScalar(lerp(0.6, 0.9, k));
+    sliverProp.position.set(lerp(P.x, s2[0], k), lerp(sy, s2[1], k) + Math.sin(k * Math.PI) * 1.5, lerp(P.z, s2[2], k));
+    sliverProp.rotation.set(0, lerp(0, wheelRing.rotation.y, k), (1 - k) * 2.2);
+    cineCam(wx + 5.0, wy + 1.0, wz + 6.2, wx, wy + 2.6, wz);
+    if (t > 1.4 && CINE.step === 1) {
+      CINE.step = 2;
+      SFX.chime(1.5);
+      burst(psSparkle, s2[0], s2[1], s2[2], 20, 1.6, 1.0, 1.2);
+    }
+  } else if (t < 3.1) {
+    /* the fourth notch */
+    if (CINE.step === 2) { CINE.step = 3; SFX.grind(); rumble({ duration: 600, strong: 0.5, weak: 0.8 }); }
+    const k = smoothstep(clamp((t - 1.55) / 1.35, 0, 1));
+    hSeatRelics(k);
+    CAM.shake = 0.05;
+    cineCam(lerp(wx + 5.0, wx + 7.0, k), lerp(wy + 1.0, wy + 1.6, k), lerp(wz + 6.2, wz + 8.4, k),
+      wx, lerp(wy + 2.6, wy + 2.0, k), wz);
+    if (t > 2.9 && CINE.step === 3) {
+      CINE.step = 4;
+      SFX.bell();
+      rumble({ duration: 900, strong: 0.9, weak: 0.9 });
+      CAM.shake = 0.3;
+    }
+  } else if (t < WIND_T0) {
+    /* the sky takes its fourth eighth; the FOURTH star arrives */
+    const k = smoothstep(clamp((t - 3.1) / 1.5, 0, 1));
+    hSkyK = k;
+    applySky4(true);
+    setStarOp4(clamp((t - 3.5) / 1.1, 0, 1) * 0.95);
+    if (CINE.step === 4 && t > 3.8) { CINE.step = 5; SFX.night(); }
+    /* AND THEN THE WIND. It arrives here, at the wheel, first: the camera
+       lifts off the hill into it and the world tips east. */
+    const ck = smoothstep(clamp((t - 3.1) / 1.9, 0, 1));
+    cineCam(lerp(wx + 7.0, wx + 2.0, ck), lerp(wy + 1.6, wy + 16, ck), lerp(wz + 8.4, wz + 12, ck),
+      lerp(wx, wx + 60, ck), lerp(wy + 2.0, wy + 4, ck), lerp(wz, wz + 40, ck));
+    if (CINE.step === 5 && t > 4.5) {
+      CINE.step = 6;
+      SFX.swellRise ? SFX.swellRise() : SFX.night();
+      rumble({ duration: 1200, strong: 0.18, weak: 0.5 });
+      glareEl.style.transition = 'opacity 0.35s ease';
+      glareEl.style.opacity = '0.85';           // the gust takes the frame
+    }
+  } else {
+    /* ═══ THE PARCHED FOREST, RE-GREENING IN FRAME ═══
+       The camera flies backwards down the Silverrun, looking at the falls;
+       the wave-front overtakes it, the water fills the bed behind it, and
+       the Dried Falls stop being dried. */
+    if (CINE.step === 6) {
+      CINE.step = 7;
+      glareEl.style.opacity = '0';
+      glareEl.style.transition = '';
+      if (SAVE) { SAVE.riverWet = true; SAVE.sky = 4; SAVE.ph = 4; storeSave(); }
+      hSkyK = 1;
+      applySky4(true);
+      swelterRetire(true, true);
+      setThickets(true);
+      riverGoLive();
+      fallsPourK = 0.001;
+      SFX.waterFill();
+    }
+    const k = clamp((t - WIND_T0) / (WIND_T1 - WIND_T0), 0, 1);
+    fallsPourK = Math.min(1, fallsPourK + DT * 1.4);
+    const front = 60 + WIND_REACH * Math.pow(k, 0.92);
+    grnWave(front);
+    rivFrontK = front;
+    riverDrawFront(front);
+    if (CINE.step === 7 && k > 0.06) {
+      CINE.step = 8;
+      SFX.splash();
+      rumble({ duration: 700, strong: 0.35, weak: 0.7 });
+    }
+    if (CINE.step === 8 && k > 0.55) {
+      CINE.step = 9;
+      floatEl.textContent = '“The wind. Wick — feel the WIND.” — the Fire Warden, from her tower';
+      floatEl.classList.add('on');
+      SFX.relief();
+    }
+    /* the shot: high over the bed, falling back down the valley */
+    const cx = lerp(1902, 1216, smoothstep(k)), cz = lerp(1118, 574, smoothstep(k));
+    const cy = lerp(78, 128, smoothstep(k));
+    cineCam(cx, cy, cz, lerp(1938, 1780, k), lerp(46, 28, k), lerp(1192, 1010, k));
+    if (t > WIND_T1 + 0.35) {
+      floatEl.classList.remove('on');
+      hPayoffFlags();
+      grnSet(1);
+      rivFrontK = -1;
+      riverDrawFront(-1);
+      hDeriveWorld(SAVE);
+      endCine();
+      showTBC4();
+    }
+  }
+}
+
+/* ═══ THE END CARD — phase four's: THE FULL MIRROR ═══ */
+const TBC4_SUB = 'Half the moon is home, and the world has started keeping hours. ' +
+  'They say the far side lives at NIGHT — and that a night market is where salt finally spends.';
+function drawTBCArt4() {
+  const cv = el('tbcArt'), g = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  /* a true evening at last: the sky has four eighths of its dark back */
+  const sky = g.createLinearGradient(0, 0, 0, H * 0.66);
+  sky.addColorStop(0, '#0b1230'); sky.addColorStop(0.62, '#2b3560'); sky.addColorStop(1, '#8d5f5a');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H * 0.66);
+  g.fillStyle = '#e8ecf2';
+  for (let i = 0; i < 42; i++) {
+    const x = (hash2(i, 5) * 0.5 + 0.5) * W, y = (hash2(i, 11) * 0.5 + 0.5) * H * 0.5;
+    g.globalAlpha = 0.25 + (hash2(i, 3) * 0.5 + 0.5) * 0.75;
+    g.fillRect(x, y, 2, 2);
+  }
+  g.globalAlpha = 1;
+  if (typeof tbcMoon === 'function') tbcMoon(g, W * 0.76, H * 0.2, 34, 4);
+  /* the water, and a road of light on it */
+  const sea = g.createLinearGradient(0, H * 0.66, 0, H);
+  sea.addColorStop(0, '#4b6472'); sea.addColorStop(1, '#141f2f');
+  g.fillStyle = sea; g.fillRect(0, H * 0.66, W, H * 0.34);
+  g.fillStyle = 'rgba(226,236,232,0.22)';
+  for (let i = 0; i < 14; i++) {
+    const y = H * 0.68 + i * (H * 0.3 / 14);
+    const w = 5 + i * 4.2;
+    g.fillRect(W * 0.76 - w / 2 + hash2(i, 8) * 8, y, w, 2.2);
+  }
+  /* THE NIGHT MARKET: a quay of lit stalls, awnings, lanterns on strings,
+     and somebody finally spending salt */
+  const qy = H * 0.66;
+  g.fillStyle = '#0d1220';
+  g.fillRect(0, qy - 5, W, 10);
+  const lampGlow = (x, y, r, warm) => {
+    const gl = g.createRadialGradient(x, y, 1, x, y, r);
+    gl.addColorStop(0, warm ? 'rgba(255,214,140,0.55)' : 'rgba(190,225,255,0.5)');
+    gl.addColorStop(1, warm ? 'rgba(255,214,140,0)' : 'rgba(190,225,255,0)');
+    g.fillStyle = gl;
+    g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+  };
+  const stall = (x, w2, h2, hue) => {
+    lampGlow(x, qy - h2 + 10, w2 * 1.5, true);
+    g.fillStyle = '#151d2e';
+    g.fillRect(x - w2 / 2, qy - h2, w2, h2);
+    g.fillStyle = hue;                                  // the awning
+    g.beginPath();
+    g.moveTo(x - w2 * 0.68, qy - h2);
+    g.lineTo(x + w2 * 0.68, qy - h2);
+    g.lineTo(x + w2 * 0.54, qy - h2 - 11);
+    g.lineTo(x - w2 * 0.54, qy - h2 - 11);
+    g.closePath(); g.fill();
+    g.fillStyle = 'rgba(0,0,0,0.25)';
+    for (let i = -2; i <= 2; i++) g.fillRect(x + i * w2 * 0.22, qy - h2 - 11, 3, 11);
+    /* the counter, and what is laid out on it, lit from under the awning */
+    g.fillStyle = 'rgba(255,206,140,0.9)';
+    g.fillRect(x - 2.5, qy - h2 + 7, 5, 5);
+    g.fillStyle = 'rgba(236,206,150,0.55)';
+    g.fillRect(x - w2 * 0.5, qy - h2 * 0.42, w2, 3);
+    g.fillStyle = 'rgba(236,206,150,0.25)';
+    for (let i = 0; i < 5; i++) g.fillRect(x - w2 * 0.42 + i * w2 * 0.2, qy - h2 * 0.42 - 4, 5, 4);
+  };
+  stall(W * 0.13, 76, 52, '#9a4f3c');
+  stall(W * 0.31, 66, 44, '#3f6280');
+  stall(W * 0.49, 72, 56, '#6d4c7c');
+  stall(W * 0.64, 56, 38, '#7d6533');
+  /* the lantern string, sagging the length of the quay */
+  g.strokeStyle = 'rgba(240,220,180,0.4)'; g.lineWidth = 1.3;
+  g.beginPath();
+  g.moveTo(0, qy - 78);
+  for (let i = 1; i <= 9; i++) g.quadraticCurveTo(W * 0.08 * i - W * 0.04, qy - 64, W * 0.08 * i, qy - 78);
+  g.stroke();
+  for (let i = 1; i <= 9; i++) {
+    const x = W * 0.08 * i - W * 0.04;
+    lampGlow(x, qy - 66, 16, i % 2 === 1);
+    g.fillStyle = i % 2 ? 'rgba(255,200,120,0.95)' : 'rgba(196,228,255,0.9)';
+    g.beginPath(); g.arc(x, qy - 66, 3.4, 0, TAU); g.fill();
+  }
+  /* the market's people: silhouettes against the light they are standing in */
+  const figure = (x, h2, s2) => {
+    g.fillStyle = '#080d18';
+    g.fillRect(x, qy - h2, 5 * s2, h2);
+    g.beginPath(); g.arc(x + 2.5 * s2, qy - h2 - 4 * s2, 4 * s2, 0, TAU); g.fill();
+    g.fillRect(x - 2 * s2, qy - h2 * 0.78, 9 * s2, 3 * s2);      // arms out over a counter
+  };
+  figure(W * 0.19, 30, 1.05);
+  figure(W * 0.225, 26, 0.9);
+  figure(W * 0.385, 31, 1.1);
+  figure(W * 0.56, 28, 1.0);
+  figure(W * 0.585, 24, 0.85);
+  /* moored boats with riding lamps, and the lamps again in the water */
+  for (const [bx, by, s2] of [[0.80, 0.78, 1.15], [0.91, 0.72, 0.85]]) {
+    const x = W * bx, y = H * by;
+    g.fillStyle = '#0d1220';
+    g.beginPath();
+    g.moveTo(x - 22 * s2, y); g.quadraticCurveTo(x, y + 10 * s2, x + 22 * s2, y);
+    g.lineTo(x + 15 * s2, y - 5 * s2); g.lineTo(x - 15 * s2, y - 5 * s2);
+    g.closePath(); g.fill();
+    g.fillRect(x - 1.5 * s2, y - 22 * s2, 3 * s2, 16 * s2);
+    lampGlow(x, y - 23 * s2, 22 * s2, true);
+    g.fillStyle = 'rgba(255,206,130,0.95)';
+    g.fillRect(x - 2.2 * s2, y - 25 * s2, 4.4 * s2, 3.6 * s2);
+    g.fillStyle = 'rgba(255,206,130,0.20)';
+    for (let i = 0; i < 7; i++) g.fillRect(x - 2 - hash2(i, 3) * 3, y + 6 + i * 5, 5 + hash2(i, 7) * 5, 2);
+  }
+  /* the quay's own light, spilled out over the water */
+  g.fillStyle = 'rgba(255,206,140,0.10)';
+  for (let i = 0; i < 26; i++) {
+    const x = W * (0.05 + i * 0.026), w2 = 10 + hash2(i, 4) * 14;
+    g.fillRect(x, qy + 6 + i % 5 * 7, w2, 2.4);
+  }
+}
+function showTBC4() {
+  if (SAVE && !SAVE.tbc4Seen) { SAVE.tbc4Seen = true; storeSave(); }
+  const keep = drawTBCArt;
+  drawTBCArt = drawTBCArt4;
+  drawTBCArt();
+  drawTBCArt = keep;
+  setState('tbc');
+  tbcT = 0;
+  el('tbcGo').textContent = '';
+  setTimeout(() => el('tbc').classList.add('on'), 30);
+  CAM.mode = 'cine';
+  el('tbcSub').textContent = TBC4_SUB;
+}
+</script>
+<script>
+/* ═══════════ p6h/8 — wiring: the retirement, the world, the wraps ═══════════ */
+
+/* ═══ THE SWELTER RETIRES ═══
+   p6b's tickForest still runs — the boars, the hornets, the chests and the
+   springs are all in there — but its heat clock can never complete another
+   revolution: this file zeroes the exposure counter after every tick, and
+   takes over the render side outright. The hazard is not disabled by a
+   branch inside p6b (that file is not mine to edit); it is starved. */
+let swelterRetired = false, swRetireLeaf = 0, swRetireChimed = false;
+const _n1UpdateSwelterFX = updateSwelterFX;
+updateSwelterFX = function (dtv, now) {
+  if (!swelterRetired) { _n1UpdateSwelterFX(dtv, now); return; }
+  swelterT = 0;
+  swVignA = 0;
+  window.__swAudioLevel = 0;
+  if (_svLast !== 0) { _svLast = 0; sunveilEl.style.opacity = '0'; sunveilEl.classList.remove('on'); }
+  if (_rvLast !== 0) { _rvLast = 0; reliefveilEl.style.opacity = '0'; }
+  /* THE LAST LEAF: the sun icon's final act is to be a leaf, once, and then
+     the corner of the HUD is empty for the rest of the game. */
+  if (swRetireLeaf > 0) {
+    swRetireLeaf = Math.max(0, swRetireLeaf - dtv);
+    const a = clamp(swRetireLeaf / 3.4, 0, 1);
+    window.__swIconMode = 'leaf'; window.__swIconFill = 0;
+    sunstatCv.style.left = (26 + 8 + P.maxHearts * 34) + 'px';
+    drawSunStat('leaf', 0, a);
+    if (swRetireLeaf === 0) { _iconSig = 'retired'; drawSunStat('off', 0, 0); }
+  } else {
+    window.__swIconMode = 'off'; window.__swIconFill = 0;
+  }
+};
+/* the heat haze is spawned inside p6b's own cull wrap, before this file gets
+   a frame — so the emitter itself is what has to stop */
+if (psShimmer && psShimmer.spawn) {
+  const _shimSpawn = psShimmer.spawn.bind(psShimmer);
+  psShimmer.spawn = function (x, y, z, vx, vy, vz, life) {
+    if (swelterRetired) return;
+    return _shimSpawn(x, y, z, vx, vy, vz, life);
+  };
+}
+function swelterRetire(on, celebrate) {
+  if (on === swelterRetired && !celebrate) return;
+  swelterRetired = !!on;
+  if (on) {
+    swelterT = 0;
+    if (celebrate && !swRetireChimed) {
+      swRetireChimed = true;
+      swRetireLeaf = 3.4;
+      SFX.relief();
+      rumble({ duration: 90, strong: 0.1, weak: 0.4 }, 'relief');
+    }
+  } else {
+    swRetireLeaf = 0; swRetireChimed = false;
+    _svLast = -1; _rvLast = -1; _iconSig = '';       // p6b's caches must not go stale
+  }
+}
+
+/* ═══ the river, live and dry ═══ */
+let riverLive = false;
+function riverGoLive() {
+  riverLive = true;
+  setFords(true);
+  for (const r of WHEEL_PARK) setPropParked(r, true);
+  setPropParked(FERRY_PARK, true);
+  setFerryChestAfloat(true);
+  fallsPourK = Math.max(fallsPourK, 0.001);
+}
+function riverGoDry() {
+  riverLive = false;
+  setFords(false);
+  for (const r of WHEEL_PARK) setPropParked(r, false);
+  setPropParked(FERRY_PARK, false);
+  setFerryChestAfloat(false);
+  fallsPourK = 0;
+  riverMesh.visible = false; fallsWater.visible = false;
+  for (const W of WHEELS) W.g.visible = false;
+  if (wetPropMesh) wetPropMesh.visible = false;
+  ferryGrp.visible = false;
+  skiffGrp.visible = false;
+}
+
+/* ═══ THE ONE DERIVATION — everything phase four changes, from the save,
+   both ways. A completed save taken to NEW GAME must burn the forest back
+   down, dry the bed, beach the ferry, stop the wheels and put the sun icon
+   back on the hearts. ═══ */
+let greenHookErr = null, greenHookRuns = 0;
+window.__worldStateHooks.push(function (S) {
+  greenHookRuns++;
+  try { hDeriveWorld(S); greenHookErr = null; }
+  catch (e) { greenHookErr = String(e && e.message || e); throw e; }
+});
+function hDeriveWorld(S) {
+  const wet = !!(S.riverWet || S.sky >= 4);
+  /* the world's season */
+  grnSet(wet ? 1 : 0);
+  swelterRetire(wet, false);
+  setThickets(wet);
+  /* the sky's fourth eighth and the fourth star */
+  hSkyK = S.sky >= 4 ? 1 : 0;
+  setStarOp4(S.sky >= 4 ? 0.95 : 0);
+  hDomeSeen = -999;
+  if (S.sky >= 4) applySky4(true);
+  /* the relics on the wheel */
+  if (S.sky >= 4) {
+    relicsShown = true;
+    hSeatRelics(1);
+  } else if (sliverIsMine) {
+    /* before the wheel takes it, the Sliver belongs to part one (its plinth,
+       its pickup, its carry) — this file only owns it once it is slotted */
+    sliverProp.visible = false;
+    sliverProp.scale.setScalar(0.62);
+  }
+  /* the Sliver in hand: derived exactly like the Gibbous Bell before it,
+     unless part one claims the flag for itself */
+  if (!window.__crownDerivesCarry) P.carrySliver = S.q === 16 && !!S.stagDone && S.sky < 4;
+  /* the water */
+  if (wet) riverGoLive(); else riverGoDry();
+  fallsPourK = wet ? 1 : 0;
+  rivFrontK = -1;
+  riverDrawFront(-1);
+  GRN.waveT = 0;
+  /* the skiff, where you tied her up — and never anywhere she cannot float.
+     A derive that happens while Wick is AT THE POLE (pause → NEW GAME, a
+     harness re-derive) has to put him back on his feet somewhere he can
+     stand, or he wakes up standing in the river. */
+  const wasAboard = !!P.skiffing;
+  P.skiffing = false;
+  skiffColl.off = !wet;
+  if (wet) {
+    if (typeof S.skiffX === 'number' && typeof S.skiffZ === 'number') skiffPlaceAt(S.skiffX, S.skiffZ);
+    else skiffPlaceAt(LANDINGS[0].x, LANDINGS[0].z);
+    skiffRescueIfNeeded();
+    skiffMoorToBank();
+    skiffColl.x = SKF.x; skiffColl.z = SKF.z;
+    S.skiffX = SKF.x; S.skiffZ = SKF.z;
+  } else {
+    skiffPlaceAt(LANDINGS[0].x, LANDINGS[0].z);
+  }
+  SKF.spd = 0; SKF.edgeCd = 0; SKF.stuckT = 0;
+  if (wasAboard && wet) {
+    const spot = skiffAshoreSpot();
+    if (spot) {
+      P.x = spot.x; P.z = spot.z; P.fy = spot.y; P.air = false; P.jvy = 0; P.vx = 0; P.vz = 0;
+      CAM.ready = false;
+    }
+  }
+  /* nobody wakes underwater: a spring in the bed is a lovely thing to look
+     at and a terrible thing to respawn inside */
+  if (wet && S) {
+    const dry = (p) => {
+      if (!Array.isArray(p)) return p;
+      if (riverDepthAt(p[0], p[1]) < 0.35) return p;
+      const r = runNear(p[0], p[1]);
+      for (let u = r.s.wr + 3; u <= r.s.wr + 16; u += 1.5) {
+        const px = r.s.x + r.s.nx * u, pz = r.s.z + r.s.nz * u;
+        if (riverDepthAt(px, pz) < 0.2 && !window.__forestSolid(px, pz)) return [px, pz];
+      }
+      return [LANDINGS[0].x + 6, LANDINGS[0].z + 6];
+    };
+    S.lastShade = dry(S.lastShade);
+    if (S.lastPos) S.lastPos = dry(S.lastPos);
+  }
+  /* the end card belongs to its moment. A save already past it is marked
+     seen rather than ambushed with it three seconds into a resume. */
+  if (S.q >= 17 && !S.tbc4Seen) { S.tbc4Seen = true; storeSave(); }
+  hSaidHead = false; hSaidRiver = false;
+}
+
+/* ═══ interactions ═══ */
+const _crownInteract = currentInteract;
+currentInteract = function () {
+  const near = (x, z, r) => Math.hypot(P.x - x, P.z - z) < r;
+  if (P.skiffing) {
+    if (SKF.spd < 2.4) {
+      const L = skiffNearestLanding();
+      const spot = skiffAshoreCached();
+      if (L.d < 14 && spot) return { id: 'skiffOff', label: '✕ HOP OUT — ' + L.L.label };
+      if (spot) return { id: 'skiffOff', label: '✕ HOP OUT' };
+      if (canPullInCached()) return { id: 'skiffOff', label: '✕ PULL IN AND HOP OUT' };
+    }
+    return null;
+  }
+  if (P.carrySliver && QUEST.q >= 16 && near(WHEEL_POS.x, WHEEL_POS.z, 5.2)) {
+    return { id: 'wheel4', label: '✕ PLACE THE WAXING SLIVER' };
+  }
+  const base = _crownInteract();
+  if (base) return base;
+  if (riverWet() && near(SKF.x, SKF.z, 5.6) && P.x > 120) {
+    return { id: 'skiffOn', label: '✕ TAKE THE SKIFF' };
+  }
+  return null;
+};
+const _crownDoInteract = doInteract;
+doInteract = function (ctx) {
+  if (ctx.id === 'wheel4') startCine('sliverWheel');
+  else if (ctx.id === 'skiffOn') boardSkiff();
+  else if (ctx.id === 'skiffOff') leaveSkiff();
+  else _crownDoInteract(ctx);
+};
+
+/* ═══ cinematics ═══ */
+const _crownStartCine = startCine;
+startCine = function (id) {
+  _crownStartCine(id);
+  if (id === 'sliverWheel') {
+    CAM.mode = 'cine';
+    dlgBox.classList.remove('on');
+    P.skiffing = false;
+  }
+};
+const _crownTickCine = tickCine;
+tickCine = function () {
+  if (CINE.id === 'sliverWheel') { CINE.t += DT; tickSliverWheel(CINE.t); return; }
+  _crownTickCine();
+};
+
+/* ═══ the sim ═══ */
+let hSaidHead = false, hSaidRiver = false;
+const _crownTickPlayer = tickPlayer;
+tickPlayer = function () {
+  if (P.skiffing) tickSkiff();
+  else _crownTickPlayer();
+  tickGreenWorld();
+};
+function tickGreenWorld() {
+  if (swelterRetired) swelterT = 0;         // the heat clock never completes again
+  if (state !== 'play') return;
+  if (!riverWet()) return;
+  if (!hSaidRiver && !P.skiffing && riverDepthAt(P.x, P.z) > 0.05 &&
+      Math.hypot(P.x - SKF.x, P.z - SKF.z) < 30) {
+    hSaidRiver = true;
+    showCaption('The Silverrun runs. The skiff is yours.', 3200);
+  }
+  if (!hSaidHead && Math.hypot(P.x - RUN[RUN.length - 1].x, P.z - RUN[RUN.length - 1].z) < 18) {
+    hSaidHead = true;
+    SFX.hum();
+    showCaption('The run comes up out of the stones, cold as a bell.', 3600);
+  }
+}
+/* on foot, the river turns you back at the bank — you wade, you do not swim */
+/* a stepping stone is dry footing: the wading rule has to see it, or the
+   fords would be four lines of stones you are not allowed to walk on */
+function overFord(x, z) {
+  for (let i = 0; i < FORDS.length; i++) {
+    const F = FORDS[i];
+    if (!F.on) continue;
+    if ((F.x - x) * (F.x - x) + (F.z - z) * (F.z - z) > 900) continue;
+    for (let k = 0; k < F.coll.length; k++) {
+      const c = F.coll[k];
+      const dx = x - c.x, dz = z - c.z;
+      if (dx * dx + dz * dz < (c.r + 0.3) * (c.r + 0.3)) return true;
+    }
+  }
+  return false;
+}
+const _crownMoveWC = moveWithCollision;
+moveWithCollision = function (nx, nz) {
+  if (!P.skiffing && riverWet() && !overFord(P.x, P.z) && riverDepthAt(P.x, P.z) <= 0.62) {
+    const deep = (x, z) => riverDepthAt(x, z) > 0.62 && !overFord(x, z);
+    if (deep(nx, nz)) {
+      if (!deep(nx, P.z)) nz = P.z;
+      else if (!deep(P.x, nz)) nx = P.x;
+      else { nx = P.x; nz = P.z; }
+    }
+  }
+  _crownMoveWC(nx, nz);
+};
+/* nothing that walks belongs in the river: the boars and the hornets were
+   placed against a dry bed, and a cinder boar grazing under a metre of
+   water is the kind of thing Ben finds in the first minute */
+const _crownTickBoar = tickBoarF;
+tickBoarF = function (b) {
+  const ox = b.x, oz = b.z;
+  _crownTickBoar(b);
+  if (riverWet() && !b.dead && riverDepthAt(b.x, b.z) > 0.35 && !overFord(b.x, b.z)) { b.x = ox; b.z = oz; }
+};
+const _crownTickHornet = tickHornet;
+tickHornet = function (h) {
+  const ox = h.x, oz = h.z;
+  _crownTickHornet(h);
+  if (riverWet() && !h.dead && riverDepthAt(h.x, h.z) > 0.35 && h.y - riverSurfaceAt(h.x, h.z) < 0.6) { h.x = ox; h.z = oz; }
+};
+const _crownUpdateCamera = updateCamera;
+updateCamera = function (dtv) {
+  if (P.skiffing && CAM.mode === 'follow') { skiffCamera(dtv); return; }
+  _crownUpdateCamera(dtv);
+};
+/* Wick rides SEATED AND VISIBLE — on the thwart, not in the bilge */
+const _crownAnimateWick = animateWick;
+animateWick = function (dtv, now) {
+  _crownAnimateWick(dtv, now);
+  if (!P.skiffing) return;
+  wickShadow.visible = false;
+  const c = wick;
+  c.root.position.set(
+    SKF.x - Math.sin(SKF.ang) * 0.5,
+    skiffGrp.position.y + 0.68,
+    SKF.z - Math.cos(SKF.ang) * 0.5);
+  c.root.rotation.y = SKF.ang;
+  poseHumanoid(c, 'idle', 0, 0, { armsOverride: true });
+  poseSit(c, 1);
+  const lean = SKF.spd > 3.6 ? 0.2 : 0.07;
+  c.torso.rotation.x = lean;
+  c.shR.rotation.x = -0.5; c.shR.rotation.z = -0.42; c.elR.rotation.x = -0.7;
+  c.shL.rotation.x = -0.3; c.shL.rotation.z = 0.3; c.elL.rotation.x = -0.5;
+  swordToHand(false);
+};
+/* the compass */
+const _crownObjPoint = objectivePoint;
+objectivePoint = function () {
+  if (SAVE && QUEST.q === 16) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+  if (SAVE && QUEST.q >= 17) return null;
+  return _crownObjPoint();
+};
+
+/* ═══ the render frame ═══ */
+let greenDbgDone = false, lastPosWrapped = false, relicsShown = true;
+const _crownCullChunks = cullChunks;
+cullChunks = function (ccx, ccz) {
+  _crownCullChunks(ccx, ccz);
+  /* step four is a PASS over p6e's step-three write, so it re-runs whenever
+     that write did (the sun arc rewrites the dome as the light moves) */
+  if (hSkyK > 0.001) {
+    const dk = (typeof fDomeK !== 'undefined') ? fDomeK : 0;
+    const sk = (typeof fSunK !== 'undefined') ? fSunK : 0;
+    if (dk !== hDomeSeen || Math.abs(sk - hDomeMine) > 0.004) {
+      hDomeSeen = dk; hDomeMine = sk;
+      applySky4(true);
+    } else {
+      applySky4Tint();
+    }
+  }
+  /* THE FOUR RELICS ON THE WHEEL are four draw calls that were being paid
+     from everywhere in the world: nothing culls them once they are slotted,
+     and from two kilometres away in the Parched Forest they are four
+     invisible sprites inside the frustum. They belong to the hill. */
+  if (SAVE && SAVE.sky >= 4) {
+    const dw = (WHEEL_POS.x - ccx) * (WHEEL_POS.x - ccx) + (WHEEL_POS.z - ccz) * (WHEEL_POS.z - ccz);
+    const nearWheel = dw < 150 * 150;
+    if (nearWheel !== relicsShown) {
+      relicsShown = nearWheel;
+      if (nearWheel) hSeatRelics(1);
+      else {
+        sliverProp.visible = false;
+        if (typeof gibbousItem !== 'undefined' && gibbousItem) gibbousItem.visible = false;
+        if (typeof shieldItem !== 'undefined' && shieldItem) shieldItem.visible = false;
+        crescentItem.visible = false;
+      }
+    }
+  }
+  const now = performance.now();
+  const dtv = Math.min(0.1, (now - hClock) / 1000);
+  hClock = now;
+  tickRiverAnim(dtv, ccx, ccz);
+  animateSkiff(dtv, now, ccx, ccz);
+  {
+    let near = false;
+    for (const T of THICKETS) if ((T.x - ccx) * (T.x - ccx) + (T.z - ccz) * (T.z - ccz) < 230 * 230) near = true;
+    thicketDead.visible = near && ccx > 60 && !THICKETS[0].openNow;
+  }
+  if (!SIM_FREEZE) psMist.update(dtv);
+  /* an empty particle system still costs a draw call, and on the riverbank
+     the budget is decided in single calls */
+  psMist.pts.visible = mistT > 0;
+  if (mistT > 0) mistT = Math.max(0, mistT - dtv);
+  if (!lastPosWrapped && typeof recordLastPos === 'function') {
+    lastPosWrapped = true;
+    const _prevRecord = recordLastPos;
+    /* quit at the pole, resume beside her: the river position itself would
+       stand Wick in the water, so the landing is what gets written */
+    recordLastPos = function () {
+      if (!P.skiffing) { _prevRecord(); return; }
+      if (!SAVE || state !== 'play') return;
+      const s = skiffAshoreSpot() || { x: skiffNearestLanding().L.x, z: skiffNearestLanding().L.z };
+      SAVE.lastPos = [s.x, s.z];
+    };
+  }
+  extendGreenDebugOnce();
+};
+let hClock = performance.now();
+
+/* ═══ telemetry ═══ */
+window.__telemetryHooks.push(function (T) {
+  T.riverWet = riverWet();
+  T.riverLive = riverLive;
+  T.greenK = GRN.k;
+  T.greenFront = GRN.front;
+  T.greenParts = GRN.parts.length;
+  T.greenDone = GRN.doneParts;
+  T.greenWork = GRN.lastWork;
+  T.greenVerts = GRN.totalVerts || 0;
+  T.riverFront = rivFrontK;
+  T.riverDepthHere = riverWet() ? riverDepthAt(P.x, P.z) : 0;
+  T.riverSurfaceHere = riverWet() ? riverSurfaceAt(P.x, P.z) : null;
+  T.skiffing = !!P.skiffing;
+  T.skiffX = SKF.x; T.skiffZ = SKF.z; T.skiffAng = SKF.ang;
+  T.skiffSpd = SKF.spd; T.skiffU = SKF.u; T.skiffI = SKF.i;
+  T.skiffDepth = riverDepthAt(SKF.x, SKF.z);
+  T.skiffVis = skiffGrp.visible;
+  T.skiffRescues = SKF.rescues; T.skiffEdges = SKF.edgeHits; T.skiffBoards = SKF.boardCount;
+  T.wickVis = wick.root.visible;
+  T.swelterRetired = swelterRetired;
+  T.swRetireLeaf = swRetireLeaf;
+  T.thicketsOpen = !!THICKETS[0].openNow;
+  T.fordsOpen = !!FORDS[0].on;
+  T.onFord = overFord(P.x, P.z);
+  T.fallsPour = fallsPourK;
+  T.wheelPh = WHEELS[0].ph;
+  T.ferryY = ferryGrp.position.y;
+  T.skyStep4 = hSkyK;
+  T.star4On = star4Op > 0.05;
+  T.tbc4Seen = !!(SAVE && SAVE.tbc4Seen);
+  T.carrySliver = !!P.carrySliver;
+  T.greenHookErr = greenHookErr; T.greenHookRuns = greenHookRuns;
+});
+
+/* ═══ debug ═══ */
+function extendGreenDebugOnce() {
+  if (greenDbgDone || !window.__fmDebug) return;
+  greenDbgDone = true;
+  const _greenSkyProbe = window.__fmDebug.skyProbe;
+  Object.assign(window.__fmDebug, {
+    warpRiver(where) {
+      const L = LANDINGS.find(l => l.id === where) || LANDINGS[0];
+      const r = runNear(L.x, L.z);
+      /* set down on the bank, not in the water */
+      let sx = L.x + r.s.nx * (r.s.wr + 3), sz = L.z + r.s.nz * (r.s.wr + 3);
+      for (let u = r.s.wr + 2; u <= r.s.wr + 14; u += 1) {
+        const px = L.x + r.s.nx * u, pz = L.z + r.s.nz * u;
+        if (riverDepthAt(px, pz) < 0.2 && !window.__forestSolid(px, pz)) { sx = px; sz = pz; break; }
+      }
+      window.__fmDebug.warp(sx, sz);
+      return { at: L.id, x: +sx.toFixed(1), z: +sz.toFixed(1), skiff: [+SKF.x.toFixed(1), +SKF.z.toFixed(1)] };
+    },
+    riverInfo() {
+      let minD = 1e9, minAt = 0, maxW = 0;
+      for (const s of RUN) {
+        const d = s.y - s.thal;
+        if (d < minD) { minD = d; minAt = s.d; }
+        maxW = Math.max(maxW, s.wl + s.wr);
+      }
+      return {
+        wet: riverWet(), live: riverLive, stations: RUN.length,
+        from: [+RUN[0].x.toFixed(0), +RUN[0].z.toFixed(0)], to: [+RUN_HI.x.toFixed(0), +RUN_HI.z.toFixed(0)],
+        lengthM: Math.round(RUN_D1 - RUN_D0), minDepth: +minD.toFixed(2), minDepthAtD: minAt,
+        maxWidth: +maxW.toFixed(1), surfaceLo: +RUN[0].y.toFixed(2), surfaceHi: +RUN_HI.y.toFixed(2),
+        front: rivFrontK, pour: +fallsPourK.toFixed(2),
+        skiff: { x: +SKF.x.toFixed(1), z: +SKF.z.toFixed(1), i: SKF.i, spd: +SKF.spd.toFixed(2),
+                 depth: +riverDepthAt(SKF.x, SKF.z).toFixed(2), aboard: !!P.skiffing },
+      };
+    },
+    greenInfo() {
+      return {
+        k: GRN.k, front: GRN.front, parts: GRN.parts.length, done: GRN.doneParts,
+        verts: GRN.totalVerts, snapshotMs: GRN.snapMs, lastWork: GRN.lastWork,
+        swelterRetired, thickets: !!THICKETS[0].openNow, sky4: hSkyK, star4: +star4Op.toFixed(2),
+      };
+    },
+    /* setup only — reaches the state, never fakes the mechanic that makes it */
+    greenNow(k) {
+      grnSet(clamp(k === undefined ? 1 : k, 0, 1));
+      return window.__fmDebug.greenInfo();
+    },
+    skiffTo(d) {
+      const s = RUN[runIndexAtD(clamp(d, RUN_D0, RUN_D1))];
+      skiffPlaceAt(s.x, s.z);
+      if (SAVE) { SAVE.skiffX = SKF.x; SAVE.skiffZ = SKF.z; storeSave(); }
+      return { x: +SKF.x.toFixed(1), z: +SKF.z.toFixed(1), i: SKF.i };
+    },
+    skyProbe(on) {
+      _greenSkyProbe(on);
+      if (starMesh4) starMesh4.visible = !on && star4Op > 0.01;
+    },
+  });
+}
+</script>
