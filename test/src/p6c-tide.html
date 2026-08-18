@@ -2417,7 +2417,13 @@ function tickBoatFollows() {
      that you cannot reach is the bug. */
   const o = objectivePoint();
   const sheIsTheObjective = o && Math.hypot(o.x - BOAT.x, o.z - BOAT.z) < 2;
-  if (!sheIsTheObjective && boatMooringOK(BOAT.x, BOAT.z)) return;
+  /* ...and she is ALSO needed when the objective is across open water from
+     where you stand — John resumed at the village with the compass pointing
+     at the Foundry 1.5km west and the boat moored 1.3km away at the spire:
+     'valid mooring', no rescue, no way forward. If you and your objective
+     are on opposite sides of the sea, the boat IS the objective. */
+  const seaBetween = o && ((P.x < -96) !== (o.x < -96));
+  if (!sheIsTheObjective && !seaBetween && boatMooringOK(BOAT.x, BOAT.z)) return;
   for (let r = 6; r <= 160; r += 2) {
     for (let i = 0; i < 48; i++) {
       const a = i * (TAU / 48);

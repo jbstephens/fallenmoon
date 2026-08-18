@@ -226,7 +226,23 @@ function titleCam(now) {
 let posSaveT = 0;
 function recordLastPos() {
   if (!SAVE || state !== 'play') return;
-  if (P.sailing) return;                                   // never resume adrift
+  if (P.sailing) {
+    /* John, tonight, back at the village without his boat for the second
+       time: "Can you just save state? like always." He is right — 'never
+       resume adrift' quietly meant 'resume a kilometre from your boat'.
+       Quit at the helm, resume at the helm. */
+    posSaveT += DT;
+    if (posSaveT < 2.5) return;
+    posSaveT = 0;
+    if (!SAVE.resumeAboard || Math.hypot((SAVE.boatX || 0) - BOAT.x, (SAVE.boatZ || 0) - BOAT.z) > 1.5) {
+      SAVE.resumeAboard = true;
+      SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; SAVE.boatAng = BOAT.ang;
+      SAVE.lastPos = [BOAT.x, BOAT.z];
+      storeSave();
+    }
+    return;
+  }
+  if (SAVE.resumeAboard) { SAVE.resumeAboard = false; storeSave(); }
   if (typeof roomAt === 'function' && roomAt(P.x, P.z)) return;   // resume outdoors
   posSaveT += DT;
   if (posSaveT < 2.5) return;
@@ -251,6 +267,12 @@ function applySave() {
     rp = [SPAWN_POS.x, SPAWN_POS.z];
   }
   P.x = rp[0]; P.z = rp[1];
+  /* quit at the helm = resume at the helm */
+  if (SAVE.resumeAboard && typeof BOAT !== 'undefined' && typeof boardBoat === 'function'
+      && SAVE.ph >= 2) {
+    P.x = BOAT.x; P.z = BOAT.z;
+    boardBoat();
+  }
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI;
   P.st = 'idle'; P.vx = 0; P.vz = 0; P.iframes = 0;

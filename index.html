@@ -439,7 +439,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P3-SEAWORTHY-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-P3-HELMRESUME-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ───────────────────────── math utils ───────────────────────── */
@@ -945,6 +945,7 @@ function defaultSave() {
     bossHint3: false,         // one-time "hit the MOUTH" caption (Hour Tortoise)
     bigSetSeen: false,        // one-time teaching caption for the first big set
     garSeen: false,           // one-time teaching caption for the first reef gar
+    resumeAboard: false,      // quit at the helm = resume at the helm
     lampLit: false,           // Finn's lamp room — lit once the sun moves
     tbc2Seen: false, tbc3Seen: false,   // end cards shown once each
     lastPos: null,            // where you ACTUALLY were — what CONTINUE resumes to
@@ -12087,7 +12088,13 @@ function tickBoatFollows() {
      that you cannot reach is the bug. */
   const o = objectivePoint();
   const sheIsTheObjective = o && Math.hypot(o.x - BOAT.x, o.z - BOAT.z) < 2;
-  if (!sheIsTheObjective && boatMooringOK(BOAT.x, BOAT.z)) return;
+  /* ...and she is ALSO needed when the objective is across open water from
+     where you stand — John resumed at the village with the compass pointing
+     at the Foundry 1.5km west and the boat moored 1.3km away at the spire:
+     'valid mooring', no rescue, no way forward. If you and your objective
+     are on opposite sides of the sea, the boat IS the objective. */
+  const seaBetween = o && ((P.x < -96) !== (o.x < -96));
+  if (!sheIsTheObjective && !seaBetween && boatMooringOK(BOAT.x, BOAT.z)) return;
   for (let r = 6; r <= 160; r += 2) {
     for (let i = 0; i < 48; i++) {
       const a = i * (TAU / 48);
@@ -19321,7 +19328,23 @@ function titleCam(now) {
 let posSaveT = 0;
 function recordLastPos() {
   if (!SAVE || state !== 'play') return;
-  if (P.sailing) return;                                   // never resume adrift
+  if (P.sailing) {
+    /* John, tonight, back at the village without his boat for the second
+       time: "Can you just save state? like always." He is right — 'never
+       resume adrift' quietly meant 'resume a kilometre from your boat'.
+       Quit at the helm, resume at the helm. */
+    posSaveT += DT;
+    if (posSaveT < 2.5) return;
+    posSaveT = 0;
+    if (!SAVE.resumeAboard || Math.hypot((SAVE.boatX || 0) - BOAT.x, (SAVE.boatZ || 0) - BOAT.z) > 1.5) {
+      SAVE.resumeAboard = true;
+      SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; SAVE.boatAng = BOAT.ang;
+      SAVE.lastPos = [BOAT.x, BOAT.z];
+      storeSave();
+    }
+    return;
+  }
+  if (SAVE.resumeAboard) { SAVE.resumeAboard = false; storeSave(); }
   if (typeof roomAt === 'function' && roomAt(P.x, P.z)) return;   // resume outdoors
   posSaveT += DT;
   if (posSaveT < 2.5) return;
@@ -19346,6 +19369,12 @@ function applySave() {
     rp = [SPAWN_POS.x, SPAWN_POS.z];
   }
   P.x = rp[0]; P.z = rp[1];
+  /* quit at the helm = resume at the helm */
+  if (SAVE.resumeAboard && typeof BOAT !== 'undefined' && typeof boardBoat === 'function'
+      && SAVE.ph >= 2) {
+    P.x = BOAT.x; P.z = BOAT.z;
+    boardBoat();
+  }
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI;
   P.st = 'idle'; P.vx = 0; P.vz = 0; P.iframes = 0;
