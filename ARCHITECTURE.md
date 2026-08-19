@@ -48,6 +48,9 @@ matters; each part registers in an appended script block at its END):
   tail + every ~300 sim ticks; report in `__invariantReport`.
 - Cull anchor rule: `viewX/Y/Z` in p7 = camera when CAM.mode !== follow —
   cinematics film a rendered world. Play path byte-identical.
+- Sweep refinement wanted: player-not-in-solid ejects to NEAREST open
+  ground, which can cross a thin wall; it should prefer the side of the
+  player's last valid position.
 - Rule 6 pattern: door plugs read the RENDERED slab position (stair
   organ doors, hollow glyph doors) — passable when it looks passable.
 

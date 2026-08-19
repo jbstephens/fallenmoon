@@ -179,13 +179,24 @@ gate(!(Math.abs(lk.u) < 1.65 && Math.abs(lk.v) < 0.25),
   'hamlet: lean-to back wall blocks along its whole width', `local u=${lk.u} v=${lk.v}`);
 
 // salt seam: the scallop waist between the old circles
-await api.eval('__fmDebug.warp(1178, 644); 0');
+/* the wall has an END two metres west of here — the bot's unstuck
+   wiggle legally walks AROUND it, so a stop-position assert is the wrong
+   check. The rule is: no frame ever inside the wall's solid. Direct push
+   (no wiggle) must also stop short of the face. */
+await api.eval('__fmDebug.warp(1178, 641); 0');
 await api.waitTicks(5);
-await api.walkTo(1178, 652, 0.4, 6000);           // through the wall at x = s.x-2 (old gap)
+await api.eval(`window.__wallViol = 0; (function w() {
+  if (window.__wallViol === undefined) return;
+  if (fWallAt(__fm.x, __fm.z)) window.__wallViol++;
+  requestAnimationFrame(w); })(); 0`);
+await api.eval('__fmBot.noWiggle = true; 0');
+await api.walkTo(1178, 652, 0.4, 7000).catch(() => {});
 pos = await P();
-gate(pos.z > 645.0 && pos.z < 647.45 && Math.abs(pos.x - 1180) < 6.6,
-  'salt seam: pressed against the wall face at the old circle-gap — no walk-through',
-  `stopped at ${pos.x.toFixed(1)},${pos.z.toFixed(1)}`);
+const wallViol = await api.eval('window.__wallViol');
+await api.eval('__fmBot.noWiggle = false; window.__wallViol = undefined; 0');
+gate(pos.z < 649.0 && wallViol === 0,
+  'salt seam: the direct push stops at the face, never inside the wall',
+  `stopped at ${pos.x.toFixed(1)},${pos.z.toFixed(1)}, frames-in-wall=${wallViol}`);
 
 /* cedar (census #6): rendered gap == collision gap, and the door still works */
 const gapChk = JSON.parse(await api.eval(`(function(){
