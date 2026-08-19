@@ -155,26 +155,33 @@ for (const pad of ['ledge', 'saddle', 't1', 't2', 't3', 'beacon', 'east', 'shrin
 gate(holes.every(h => h[1] === 0), 'the rim closes the garden: no downward view into the void',
   JSON.stringify(holes.filter(h => h[1] > 0)));
 
-/* ── 4. the ways in and out, both directions ── */
+/* ── 4. the ways in and out, both directions ──
+   RULE 6 evolved this check (8/18): the plug now follows the RENDERED
+   slab, not the organOpen flag — a door is solid exactly while the slab
+   the player can see still stands, and passable when it looks passable.
+   So the check moves the slab itself (what the derive and the grind
+   animation do) and asks the collider at shut, half-sunk and sunk. */
 const doors = await jget(`(function(){
   const m = S_NODE.mouth;
-  const was = stairInOpen, wasOrgan = organOpen.slice();
+  const was = stairInOpen;
   stairInOpen = false;
   const shut = worldSolidAt(m.x, m.z);
   stairInOpen = true;
   const open = worldSolidAt(m.x, m.z);
   stairInOpen = was;
-  /* the landing doors, shut */
-  organOpen[0] = organOpen[1] = organOpen[2] = false;
   stairMode = true;
-  const dShut = S_DOORS.map(d => worldSolidAt(d.x, d.z));
-  organOpen[0] = organOpen[1] = organOpen[2] = true;
-  const dOpen = S_DOORS.map(d => worldSolidAt(d.x, d.z));
-  organOpen[0] = wasOrgan[0]; organOpen[1] = wasOrgan[1]; organOpen[2] = wasOrgan[2];
-  return { shut, open, dShut, dOpen };
+  const keep = S_DOORS.map(d => d.group.position.y);
+  const at = (frac) => S_DOORS.map(d => {
+    d.group.position.y = d.baseY - S_DOOR_SINK * frac;
+    return worldSolidAt(d.x, d.z);
+  });
+  const dShut = at(0), dHalf = at(0.4), dOpen = at(1);
+  S_DOORS.forEach((d, i) => { d.group.position.y = keep[i]; });
+  return { shut, open, dShut, dHalf, dOpen };
 })()`);
 gate(doors.shut === true && doors.open === false, 'THE CRACK: solid stone until the gold light is followed');
-gate(doors.dShut.every(v => v) && doors.dOpen.every(v => !v), 'the three landing doors are solid when shut');
+gate(doors.dShut.every(v => v) && doors.dHalf.every(v => v) && doors.dOpen.every(v => !v),
+  'RULE 6: a landing door is solid exactly while its rendered slab stands — half-sunk still bars, fully sunk is open');
 
 /* the stair is the ONLY way up: flood-fill from the forest below */
 const fill = await jget(`(function(){

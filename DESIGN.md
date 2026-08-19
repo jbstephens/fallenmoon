@@ -1153,3 +1153,54 @@ derivation: stagDone→15(pickup preserved, tortoise lesson), sky>=4→17.
   distance shrinking under held ✕, doors opened by REAL tuning); the
   one-session glint→stair→crown journey gate; kid-bot CHASES; lastPos
   resume gate; crown perf on 8 sample points; full regression.
+
+## THE WORLD RULES (decided 8/18 after the Island Forge study — LAW for every part, present and future)
+
+John's diagnosis, verbatim law: "Games should have rules. Not gates. Rules."
+A gate protects a place; a rule owns space. Island Forge cannot have
+render-vs-physics bugs because its mesh and its collider are both compiled
+outputs of one dataset — a wall exists once and is projected twice. Fallen
+Moon is fourteen wrapped authorities; every seam between two of them is a
+place the truth can fork. These rules make the truth enumerable and every
+rule machine-checkable. No part ships that violates them.
+
+RULE 1 — ONE TRUTH, DECLARED. Every part that owns ground/solid anywhere
+registers it: `__WORLD_REG.push({name, owns(x,z), note})`. The registry does
+not dispatch (the wrap chain still answers); it DESCRIBES ownership so the
+harness can prove there are no unowned gaps and no undeclared overlaps, and
+sweep rendered-vs-authority conformance per owner with ZERO carve-outs.
+
+RULE 2 — EVERY THRESHOLD IS A PORTAL OBJECT. A player never crosses between
+two authorities except through a registered portal:
+`__PORTALS.push({name, x, z, yaw, sides, openNow()})`. Every portal renders
+a frame, a light gradient, and a floor cue — passable openings must READ as
+openings from BOTH sides; walls must read as walls. The harness enumerates
+__PORTALS and screenshots every one, both sides, open and shut, every run.
+Nobody screenshots doors by hand again.
+
+RULE 3 — LIGHT IS OCCLUDED BY THE WORLD. All beams get their length from
+`beamHitDist(origin, dir, maxLen)` marching the live groundH. No
+fixed-length beam geometry, ever.
+
+RULE 4 — WATER NEVER ENTERS A HULL. Every floating vessel registers in
+`__HULLS` (sailing, moored, drifting — all of them); every dynamic water
+surface consults the registry with full clamp inside r + one grid cell (so
+LOWFX's coarse lattice is covered). Static sheets enforce the rule from the
+vessel side: hulls ride the interpolated local surface, never a quantized
+station.
+
+RULE 5 — A CINEMATIC FILMS THE RENDERED WORLD. Visibility culling derives
+from the CAMERA's position whenever the camera is not the follow cam. A
+cine departs from the player's own shot and lerps back to it before endCine
+— never a one-frame snap, never a teleport, always skippable.
+
+RULE 6 — THE REPAIR PASS. applyWorldState ends with invariantSweep(): the
+player stands on non-solid ground; every moored vessel floats in ≥1.3m;
+every portal's collider agrees with openNow(); every door's plug follows
+its VISIBLE position (a sinking slab is passable when it looks passable).
+When world state changes, downstream truth is re-derived, not trusted.
+
+Backlog acknowledged, deliberately deferred (do NOT hand-fix these; they
+await their rule): unifying the three boat stacks; collapsing the Cinder
+Pass staggered handoff band (x=98/100/110) and the harbour-gap band
+(−110/−104/−96); re-carving the river bed under the authored surface.

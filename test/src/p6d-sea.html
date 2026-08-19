@@ -533,11 +533,39 @@ function rebuildWaveIndex(x0, z0) {
   waveMesh.geometry.index.needsUpdate = true;
   waveMesh.geometry.setDrawRange(0, o);
 }
+/* RULE 4 — WATER NEVER ENTERS A HULL. The grid consults the hull registry:
+   FULL clamp (k = 1) within hull.r + one grid cell (WG_CELL is 11.5 under
+   LOWFX — the console's mode — so the coarse lattice is covered), smooth
+   blend beyond. Pooled scratch: zero allocation in the vertex loop. */
+const _HUL_MAX = 4;
+const _hulX = new Float32Array(_HUL_MAX), _hulZ = new Float32Array(_HUL_MAX),
+      _hulY = new Float32Array(_HUL_MAX), _hulRIn = new Float32Array(_HUL_MAX),
+      _hulROut = new Float32Array(_HUL_MAX);
+let _hulN = 0;
+function refreshHullClamp(cx, cz) {
+  _hulN = 0;
+  const HS = window.__HULLS;
+  if (!HS) return;
+  for (let i = 0; i < HS.length && _hulN < _HUL_MAX; i++) {
+    const H = HS[i];
+    try {
+      if (!H.afloat()) continue;
+      const hx = H.x(), hz = H.z();
+      if (Math.abs(hx - cx) > WG_SPAN / 2 + 24 || Math.abs(hz - cz) > WG_SPAN / 2 + 24) continue;
+      _hulX[_hulN] = hx; _hulZ[_hulN] = hz;
+      _hulY[_hulN] = H.waterlineY() - WL;         // relative to WL, like h
+      _hulRIn[_hulN] = H.r + WG_CELL;
+      _hulROut[_hulN] = H.r + WG_CELL + 6;
+      _hulN++;
+    } catch (e) {}
+  }
+}
 function updateWaveGrid() {
   const ci = Math.round(camera.position.x / WG_CELL), cj = Math.round(camera.position.z / WG_CELL);
   const cx = ci * WG_CELL, cz = cj * WG_CELL;
   const x0 = cx - WG_SPAN / 2, z0 = cz - WG_SPAN / 2;
   if (ci !== waveKeyI || cj !== waveKeyJ) { waveKeyI = ci; waveKeyJ = cj; rebuildWaveIndex(x0, z0); }
+  refreshHullClamp(cx, cz);
   let o = 0;
   let prevH = 0;
   for (let j = 0; j < WG_N; j++) {
@@ -554,12 +582,23 @@ function updateWaveGrid() {
          sliced through the boat and Wick's legs flickered blue ("the boat
          fills with water... a little dramatic"). Vertices near the hull now
          blend down to the exact height she is riding, minus a hand's width
-         of freeboard, so the sea meets her waterline and never her deck. */
-      if (P.sailing) {
-        const bd = Math.hypot(x - BOAT.x, z - BOAT.z);
-        if (bd < 9) {
-          const k = smoothstep(clamp((9 - bd) / 6, 0, 1));
-          h = lerp(h, SEAFX.heave - 0.14, k);
+         of freeboard, so the sea meets her waterline and never her deck.
+         Rule 4 generalised this from `if (P.sailing)` to EVERY registered
+         hull — sailing, moored, drifting — with a hard ceiling in the blend
+         band so a partial blend (the big-set term included) can never
+         resurrect a crest above the gunwale between a clamped vertex and a
+         free one. */
+      for (let hi = 0; hi < _hulN; hi++) {
+        const bd = Math.hypot(x - _hulX[hi], z - _hulZ[hi]);
+        const rOut = _hulROut[hi];
+        if (bd >= rOut) continue;
+        const rIn = _hulRIn[hi], ty = _hulY[hi];
+        if (bd <= rIn) { h = ty; }
+        else {
+          const k = smoothstep((rOut - bd) / (rOut - rIn));
+          h = lerp(h, ty, k);
+          const ceil = ty + (bd - rIn) * 0.30;
+          if (h > ceil) h = ceil;
         }
       }
       /* the rim rings flatten to the far sheet's level as well as its
@@ -3053,4 +3092,29 @@ function extendSeaDebugOnce() {
     seaGround(x, z) { return { g: groundH(x, z), depth: waterDepthAt(x, z), solid: worldSolidAt(x, z) }; },
   });
 }
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6d (pure addition) ═══════════ */
+const __regSeaGround = groundH;    // p6d's final chain, captured pre-p6e
+window.__WORLD_REG.push({
+  name: 'sea', kind: 'ground', over: ['brightharbor'],
+  owns: (x, z) => x < -86 && (inSeaQ(x, z) || inChanQ(x, z)),
+  ground: (x, z) => __regSeaGround(x, z),
+  note: 'the open ocean, the channel and every isle (seaHMesh + chanHMesh); solid = isleSolidAt west of −104. The Foundry (p6e) declares itself over this.',
+});
+/* Rule 4: the sailboat is a hull WHENEVER she is afloat — sailing, moored,
+   or waiting where the flood left her. waterlineY reads her LIVE group y
+   (moored bob and sailing heave both included) plus 0.04 of freeboard —
+   the same water-meets-waterline the old sailing-only clamp used. The
+   SUNKEN WRECK is deliberately NOT a hull: water belongs inside it. */
+window.__HULLS.push({
+  name: 'sailboat', r: 4.5,
+  afloat: () => !!(flooded() && FLOODLIVE.boatDone),
+  underway: () => !!(P.sailing || VOYAGE.active),
+  x: () => BOAT.x, z: () => BOAT.z,
+  waterlineY: () => sailboat.group.position.y + 0.04,
+  /* mooring law (Rule 6): she floats in ≥1.3 m or she is re-moored */
+  depthOk: () => waterDepthAt(BOAT.x, BOAT.z) >= 1.3,
+  rescue: () => rescueStrandedBoat(),
+});
 </script>

@@ -64,15 +64,44 @@ function hollowOpenCore(x, z) {
   return false;
 }
 function basinWalkAt(x, z) {
-  if (Math.hypot(x - BASIN.x, z - BASIN.z) < BASIN.r - 1.4) return true;
+  const d = Math.hypot(x - BASIN.x, z - BASIN.z);
+  if (d < BASIN.r - 1.4) return true;
+  /* census #9: the mouth is the ARC the rockfall march cleared, the whole
+     way to the old disc rim — rubble that visually remains re-asserts
+     itself through rockfallStoneAt BEFORE this carve is consulted */
+  if (d < BASIN.r) {
+    const RA = window.__rockfallArc;
+    if (RA) {
+      let da = ((Math.atan2(z - BASIN.z, x - BASIN.x) - RA.a) % TAU + TAU) % TAU;
+      if (da > Math.PI) da -= TAU;
+      if (Math.abs(da) < RA.half) return true;
+    }
+  }
   const [t, lat] = segT(x, z, HGAP);
   return t > -0.05 && t < 1.05 && lat < HGAP.hw;
 }
 let basinOpenNow = false;               // derived from the save in __tideApplySave
 window.__basinOpenNow = false;
+/* the two glyph-door slabs (built later in this part; null while building —
+   which reads as "a door stands", exactly the sealed default) */
+let glyphDoorsLive = null;
+const GDOOR_H = 5.4;                    // the slab lathe's own profile top
+function glyphPlugSolidNow(idx) {
+  if (SAVE && SAVE[idx ? 'glyph2' : 'glyph1']) return false;   // open and latched
+  const D = glyphDoorsLive && glyphDoorsLive[idx];
+  if (!D) return true;
+  if (D.sinkT >= 0) {
+    /* Rule 6 (census #11): the plug follows the VISIBLE slab — passable the
+       moment the rendered top has sunk to knee height, not at sink-end when
+       the save flag lands 0.3s later */
+    const top = D.group.position.y + GDOOR_H - (D.baseY + 0.2);   // above the floor
+    return top > 0.55;
+  }
+  return true;
+}
 function hollowDoorPlugAt(x, z) {
-  if (!(SAVE && SAVE.glyph1) && Math.hypot(x - HDOOR1.x, z - HDOOR1.z) < HDOOR1.r) return true;
-  if (!(SAVE && SAVE.glyph2) && Math.hypot(x - HDOOR2.x, z - HDOOR2.z) < HDOOR2.r) return true;
+  if (glyphPlugSolidNow(0) && Math.hypot(x - HDOOR1.x, z - HDOOR1.z) < HDOOR1.r) return true;
+  if (glyphPlugSolidNow(1) && Math.hypot(x - HDOOR2.x, z - HDOOR2.z) < HDOOR2.r) return true;
   return false;
 }
 /* ── SOLID authority: plugs first, then carve, then night-one's answer ── */
@@ -82,6 +111,9 @@ window.__forestSolid = function (x, z) {
   // while sealed, the rockfall overrides EVERY carve — the throat must not
   // cut a slot through the ring (night-one's fuzzer holds the line here)
   if (!basinOpenNow && Math.hypot(x - BASIN.x, z - BASIN.z) < BASIN.r) return true;
+  // the boulders themselves (sealed OR parted) — before any carve, so the
+  // widened mouth can never cut through a stone that visually remains
+  if (rockfallStoneAt(x, z)) return true;
   if (hollowOpenCore(x, z)) return false;
   if (basinOpenNow && basinWalkAt(x, z)) return false;
   return _n1ForestSolid(x, z);
@@ -545,8 +577,9 @@ function buildGlyphDoor(door, s) {
   const g = new THREE.Group();
   const md = MD();
   const ry = Math.atan2(s.bz - s.az, s.bx - s.ax) + Math.PI / 2;
-  // the slab: a rounded stone door filling the corridor
-  latheW(md, [[2.5, 0], [2.35, 2.6], [1.6, 4.6], [0, 5.4]],
+  // the slab: a rounded stone door filling the corridor (top = GDOOR_H —
+  // the plug reads the same number to track the sink)
+  latheW(md, [[2.5, 0], [2.35, 2.6], [1.6, 4.6], [0, GDOOR_H]],
     { seg: 8, ex: 0.32, x: 0, y: 0, z: 0, ry, flat: true, segJitter: 0.08,
       col: C_FLOW2, cols: [C_HCAVE_LO, C_FLOW2, C_FLOW] });
   // the carved WATER-GLYPH: a spiral wave, dark until lit
@@ -574,6 +607,7 @@ function buildGlyphDoor(door, s) {
 }
 const glyphDoor1 = buildGlyphDoor(HDOOR1, COR12);
 const glyphDoor2 = buildGlyphDoor(HDOOR2, COR23);
+glyphDoorsLive = [glyphDoor1, glyphDoor2];   // the plug now tracks the rendered slabs
 
 /* ── the mirror-shells (the grotto's language, grown up) ── */
 function buildHollowMirror(pos, floorY, fixedAngle) {
@@ -2944,5 +2978,53 @@ function extendTideDebugOnce() {
       };
     },
   });
+}
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6c (pure addition) ═══════════ */
+const __regHollowGround = groundH;    // p6c's final chain, captured pre-p6d
+window.__WORLD_REG.push({
+  name: 'hollow', kind: 'ground', over: ['forest'],
+  owns: (x, z) => x > 1930 && x < 2078 && z > 1186 && z < 1338 && inHollowFieldQ(x, z),
+  ground: (x, z) => __regHollowGround(x, z),
+  note: 'the Falls Hollow floor field (hollowHMesh); solid = plugs → basin seal → carve → night-one. NOTE: the stair/crown (p6g) sits OVER two chambers and answers for its own y-band.',
+});
+/* Rule 2: the hollow's three thresholds. openNow reads the SAVE (intent);
+   the live chain answers solid from the derived plugs — the invariant
+   sweep checks the two never disagree. */
+window.__PORTALS.push(
+  { name: 'basin-gap',
+    x: (HGAP.ax + HGAP.bx) / 2, z: (HGAP.az + HGAP.bz) / 2,
+    openNow: () => !!window.__basinOpenNow },
+  { name: 'glyph-door-1', x: HDOOR1.x, z: HDOOR1.z,
+    openNow: () => !!(SAVE && SAVE.glyph1) },
+  { name: 'glyph-door-2', x: HDOOR2.x, z: HDOOR2.z,
+    openNow: () => !!(SAVE && SAVE.glyph2) },
+);
+/* Rule 3 for the hollow mirrors: each reflected beam stops where the carved
+   air ends, so a half-turned shell paints the gallery wall, not the rock
+   beyond it. Doors plug SEPARATELY from the carve, so an aimed beam still
+   reaches (and reads as re-lighting) its glyph door. */
+const _hBeamMeta = [
+  { m: hBeam1, px: HM1.x, pz: HM1.z, L: Math.hypot(HDOOR1.x - HM1.x, HDOOR1.z - HM1.z) + 1, ang: () => hm1.angle, t: 1 },
+  { m: hBeam2, px: HM2.x, pz: HM2.z, L: Math.hypot(HRELAY.x - HM2.x, HRELAY.z - HM2.z) + 0.6, ang: () => hm2.angle, t: 1 },
+  { m: hBeamR, px: HRELAY.x, pz: HRELAY.z, L: Math.hypot(HDOOR2.x - HRELAY.x, HDOOR2.z - HRELAY.z) + 1, ang: () => hmRelay.angle, t: 1 },
+];
+function hollowClampBeams() {
+  for (let i = 0; i < _hBeamMeta.length; i++) {
+    const B = _hBeamMeta[i];
+    if (!B.m.visible || B.m.material.opacity <= 0) continue;
+    const a = B.ang();
+    const hit = beamHitDistIn(hollowOpenCore, B.px, B.pz, Math.cos(a), Math.sin(a), B.L);
+    const t = Math.max(0.1, Math.min(1, hit / B.L));
+    if (Math.abs(t - B.t) < 0.01) continue;
+    B.t = t;
+    /* same wedge layout as the grotto beam: far verts at soup slots
+       2,4,5 and 8,10,11; only local x (the length axis) moves */
+    const p = B.m.geometry.getAttribute('position');
+    const fx = B.L * t;
+    for (const vi of [2, 4, 5, 8, 10, 11]) p.array[vi * 3] = fx;
+    p.needsUpdate = true;
+  }
 }
 </script>

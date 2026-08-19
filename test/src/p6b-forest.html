@@ -79,6 +79,22 @@ const FSPRINGS = [
 ];
 /* the Great Cedar — hollow; ring solid + door gap share these numbers */
 const CEDAR = { x: 1300, z: 210, r0: 2.7, r1: 4.4, doorA: -2.25, doorHalf: 0.6 };
+/* the cedar's door gap, snapped to the trunk lathe's segment grid: the SAME
+   spans buildCedar skips are the spans collision opens (census #6 — the old
+   t0+0.14 probe left the rendered gap up to half a segment off the collision
+   gap: a see-through-but-solid sliver at one jamb). gapLo/gapHi are radians
+   relative to doorA; skip + solid both read them. */
+const CEDAR_SEG = 12;                          // seg count of BOTH trunk lathes
+(function alignCedarGap() {
+  const span = TAU / CEDAR_SEG;
+  let lo = 1e9, hi = -1e9;
+  for (let s = 0; s < CEDAR_SEG; s++) {
+    let da = (((s + 0.5) * span - CEDAR.doorA) % TAU + TAU) % TAU;
+    if (da > Math.PI) da -= TAU;
+    if (Math.abs(da) < CEDAR.doorHalf) { lo = Math.min(lo, da - span / 2); hi = Math.max(hi, da + span / 2); }
+  }
+  CEDAR.gapLo = lo; CEDAR.gapHi = hi;
+})();
 const TOWER = { x: 1100, z: 810, deckY: 15.2 };
 const WARDEN_POS = { x: 1095.5, z: 803.5 };
 /* extra authored shade (rock shadows, tower roof, grotto alcoves, seal) */
@@ -258,6 +274,42 @@ function canopyAt(x, z) {
   return eachTreeNear(x, z, t => !t.bare && Math.hypot(x - t.x, z - t.z) < t.cr);
 }
 
+/* ───── wall solids: straight rendered walls own their space as rotated
+   boxes, not circle chains (census #8: circle-guarded corners let a player
+   walk through visible stone). Each entry's center/half-extents/rotation
+   are the SAME numbers the builder hands boxW (Rule 1: one truth). The
+   test is boxW's own local frame (_rot ry inverse). ───── */
+const FWALLS = [];
+function addWall(x, z, hw, hd, ry) {
+  FWALLS.push({ x, z, hw, hd, c: Math.cos(ry || 0), s: Math.sin(ry || 0) });
+}
+function fWallAt(x, z) {
+  for (let i = 0; i < FWALLS.length; i++) {
+    const w = FWALLS[i], dx = x - w.x, dz = z - w.z;
+    if (Math.abs(dx * w.c - dz * w.s) < w.hw && Math.abs(dx * w.s + dz * w.c) < w.hd) return true;
+  }
+  return false;
+}
+
+/* ───── the rockfall's stones own their space (census #9): the same march
+   that renders each boulder records its footprint ellipse (radius sampled
+   at waist height, ex-squashed, ry-rotated). Sealed and parted lists are
+   filled by buildRockfall; which one stands follows __basinOpenNow, the
+   same flag that picks the mesh. ───── */
+function rockfallStoneAt(x, z) {
+  const RS = window.__rockfallStones;
+  if (!RS) return false;
+  if (Math.abs(x - BASIN.x) > 28 || Math.abs(z - BASIN.z) > 28) return false;
+  const list = window.__basinOpenNow ? RS.parted : RS.sealed;
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i], dx = x - s.x, dz = z - s.z;
+    if (dx * dx + dz * dz > s.a * s.a) continue;
+    const u = dx * s.c - dz * s.sn, v = dx * s.sn + dz * s.c;
+    if ((u * u) / (s.a * s.a) + (v * v) / (s.b * s.b) < 1) return true;
+  }
+  return false;
+}
+
 /* ───────────────────────── SOLID authority for the region ───────────────────────── */
 window.__forestSolid = function (x, z) {
   if (x <= 98) return false;
@@ -273,7 +325,8 @@ window.__forestSolid = function (x, z) {
   }
   if (x > FW.x1 || z < FW.z0 || z > FW.z1) return true;      // region walls
   if (Math.hypot(x - CROWN.x, z - CROWN.z) < 150) return true;   // plateau: unclimbable
-  if (Math.hypot(x - BASIN.x, z - BASIN.z) < BASIN.r) return true;   // THE SEAL (night two opens it)
+  if (!window.__basinOpenNow && Math.hypot(x - BASIN.x, z - BASIN.z) < BASIN.r) return true;   // THE SEAL (night two opens it)
+  if (rockfallStoneAt(x, z)) return true;                    // the boulders themselves, both states
   // the Great Cedar's hollow ring (door gap shared with the mesh)
   {
     const dx = x - CEDAR.x, dz = z - CEDAR.z;
@@ -281,10 +334,12 @@ window.__forestSolid = function (x, z) {
     if (d > CEDAR.r0 && d < CEDAR.r1) {
       let da = Math.atan2(dz, dx) - CEDAR.doorA;
       da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-      if (Math.abs(da) > CEDAR.doorHalf) return true;
+      // the gap the lathe actually leaves open (segment-grid aligned)
+      if (da < CEDAR.gapLo || da > CEDAR.gapHi) return true;
     }
   }
   if (Math.hypot(x - TOWER.x, z - TOWER.z) < 3.0) return true;   // under-deck braces
+  if (fWallAt(x, z)) return true;                            // mill/ferry/hamlet/seam walls
   if (treeTrunkAt(x, z, 0.3)) return true;                   // every pine trunk is real
   return false;
 };
@@ -763,8 +818,17 @@ let rockfallMesh = null, rockfallOpenMesh = null;
 (function buildRockfall() {
   const C_CLIFF3 = [0.72, 0.65, 0.53], C_CHUTE = [0.93, 0.9, 0.81];
   const toFore = Math.atan2(1165 - BASIN.z, 1900 - BASIN.x);
+  /* census #9: the boulders had NO colliders of their own — parted stones
+     were pushable-into, and the cleared mouth still blocked at the old disc
+     rim. The march below now records every stone's footprint (waist-height
+     radius, ex-squash, ry) into the lists rockfallStoneAt reads, and the
+     mouth arc it cleared for p6c's basinWalkAt. One march, three truths. */
+  const stones = { sealed: [], parted: [] };
+  window.__rockfallStones = stones;
+  window.__rockfallArc = { a: toFore, half: 5 * 0.21 + 0.25 };   // the march's reach + one stone's shoulder
   const build = (parted) => {
     const md = MD();
+    const rec = parted ? stones.parted : stones.sealed;
     for (let i = -5; i <= 5; i++) {
       let a = toFore + i * 0.21;
       let r = BASIN.r - 1 + Math.abs(hash2(i, 11)) * 2.5;
@@ -781,8 +845,12 @@ let rockfallMesh = null, rockfallOpenMesh = null;
       latheW(md, [[s, 0], [s * 0.85, s * 1.1], [s * 0.4, s * 1.9], [0, s * 2.3]],
         { seg: 6, ex: 0.85, x: bx, y: gy, z: bz, ry: i * 1.7, flat: true, segJitter: 0.13,
           col: i % 2 ? C_FROCK : C_FROCK2, cols: [C_FROCK2, C_FROCK, C_CLIFF3] });
+      // footprint at waist height (ground sits 1.2+sink above the lathe base);
+      // 0.93 splits the 6-gon's vertex-vs-edge error both ways
+      const rEff = lerp(s, s * 0.85, clamp((1.2 + sink + 1.0) / (s * 1.1), 0, 1)) * 0.93;
+      rec.push({ x: bx, z: bz, a: rEff, b: rEff * 0.85, c: Math.cos(i * 1.7), sn: Math.sin(i * 1.7) });
       if (i % 2 === 0) {
-        boxW(md, { x: bx, y: gy + s * 0.8, z: bz, w: s * 0.5, d: s * 0.4, h: s * 0.7, ry: i, rx: 0.4, col: C_CHUTE });
+        boxW(md, { x: bx, y: gy + s * 0.8, z: bz, w: s * 0.5, d: s * 0.4, h: s * 0.7, ry: i, rx: 0.4, col: C_CHUTE, warm: true });   // the cool bake blue-shifts this pale cap into sky-blue wedges
       }
     }
     for (let i = -6; i <= 6; i += 2) {
@@ -791,6 +859,7 @@ let rockfallMesh = null, rockfallOpenMesh = null;
       const bx = BASIN.x + Math.cos(a) * (BASIN.r + 2.5), bz = BASIN.z + Math.sin(a) * (BASIN.r + 2.5);
       const gy = groundH(bx, bz) - 0.6;
       latheW(md, [[1.3, 0], [0.9, 1.1], [0, 1.7]], { seg: 5, x: bx, y: gy, z: bz, ry: i * 2.3, flat: true, segJitter: 0.1, col: C_FROCK2 });
+      rec.push({ x: bx, z: bz, a: 1.0, b: 1.0, c: 1, sn: 0 });   // hip-high rubble, round
     }
     const m = mdMesh(md, WORLD_MAT, false);
     m.matrixAutoUpdate = false; m.updateMatrix();
@@ -898,7 +967,9 @@ let cedarMesh = null, cedarGlow = null;
   const BARK = [0.52, 0.42, 0.31], BARK2 = [0.41, 0.32, 0.24], BONE = [0.79, 0.72, 0.59];
   const doorSkip = (t0, t1, band) => {
     if (band > 1) return false;
-    let da = ((t0 + 0.14 - CEDAR.doorA) % TAU + TAU) % TAU;
+    // census #6: probe the segment's CENTER, not t0+0.14 — the skipped spans
+    // are exactly the [gapLo, gapHi] alignCedarGap derived for collision
+    let da = (((t0 + t1) / 2 - CEDAR.doorA) % TAU + TAU) % TAU;
     if (da > Math.PI) da -= TAU;
     return Math.abs(da) < CEDAR.doorHalf;
   };
@@ -1099,8 +1170,13 @@ function buildWaterwheel(cx, cz, ry, R, ruined) {
   fboxW({ x: c.x + W, y: gy - 0.2, z: c.z, w: 0.3, d: D, h: 1.8, col: C_STONE2 });
   fboxW({ x: c.x, y: gy - 0.2, z: c.z - D, w: W, d: 0.3, h: 2.2, col: C_STONE });
   fboxW({ x: c.x - 1.2, y: gy - 0.2, z: c.z + D, w: W - 1.6, d: 0.3, h: 1.5, col: C_STONE2 });   // front wall w/ door gap east
-  addColl(c.x - W, c.z, 0.9); addColl(c.x + W, c.z, 0.9);
-  addColl(c.x - 1, c.z - D, 1.6); addColl(c.x - 1.2, c.z + D, 1.4);
+  // census #8: the shell's four walls collide as the boxes they render
+  // (the old 2-4 circles let a player corner through visible stone);
+  // half-extents are the boxW numbers above + 0.15 thickness margin
+  addWall(c.x - W, c.z, 0.45, D, 0);                 // west wall
+  addWall(c.x + W, c.z, 0.45, D, 0);                 // east wall
+  addWall(c.x, c.z - D, W, 0.45, 0);                 // back wall
+  addWall(c.x - 1.2, c.z + D, W - 1.6, 0.45, 0);     // front wall — door gap east stays true
   // fallen roof beams + the millstone
   fboxW({ x: c.x + 0.4, y: gy + 0.1, z: c.z - 0.6, w: 0.14, d: 0.14, h: 3.4, rx: 1.35, ry: 0.4, col: C_WOOD2 });
   fboxW({ x: c.x - 1.1, y: gy + 0.1, z: c.z + 0.4, w: 0.12, d: 0.12, h: 2.8, rx: 1.5, ry: -0.8, col: C_WOOD });
@@ -1131,8 +1207,10 @@ function buildWaterwheel(cx, cz, ry, R, ruined) {
   fboxW({ x: c.x + 3.2, y: gy + 0.2, z: c.z - 2.6, w: 0.07, d: 0.07, h: 3.6, rx: 0.5, ry: 0.3, col: C_WOOD });
   // the ferry rope, dead on the silt, and its far post
   fboxW({ x: c.x - 6, y: groundH(c.x - 6, c.z + 5), z: c.z + 5, w: 0.16, d: 0.16, h: 1.9, col: C_WOOD2 });
-  addColl(c.x, c.z, 3.2); addColl(c.x + Math.cos(ry) * 3.6, c.z - Math.sin(ry) * 3.6, 1.6);
-  addColl(c.x - Math.cos(ry) * 3.6, c.z + Math.sin(ry) * 3.6, 1.6);
+  // census #8: the hull collides as the rotated box it renders (the old
+  // three circles left both bow corners walk-through) — same 4.4 x 2.1
+  // half-extents and ry the hull boxW uses
+  addWall(c.x, c.z, 4.4, 2.1, ry);
 })();
 
 /* ── the drying-rack hamlet ── */
@@ -1146,7 +1224,7 @@ function buildWaterwheel(cx, cz, ry, R, ruined) {
     }
     fboxW({ x: x + dxr * 1.2, y: gy, z: z + dzr * 1.2, w: 1.7, d: 0.12, h: 0.9, ry, col: C_WOOD2 });   // low back
     fboxW({ x: x + dxr * 0.5, y: gy + 1.85, z: z + dzr * 0.5, w: 1.75, d: 1.5, h: 0.12, ry, rx: 0.42, col: C_ROOF2, colB: C_ROOF });
-    addColl(x + dxr * 1.2, z + dzr * 1.2, 1.0);
+    addWall(x + dxr * 1.2, z + dzr * 1.2, 1.7, 0.3, ry);   // the low back, full width (census #8)
   };
   leanTo(c.x - 8, c.z - 4, 0.4);
   leanTo(c.x + 6, c.z - 7, -0.7);
@@ -1164,7 +1242,7 @@ function buildWaterwheel(cx, cz, ry, R, ruined) {
   const gy = groundH(c.x + 2, c.z + 9);
   fboxW({ x: c.x + 2, y: gy, z: c.z + 9, w: 1.8, d: 1.4, h: 0.8, ry: 0.3, rz: 0.12, col: C_STONE2 });
   fboxW({ x: c.x + 2.3, y: gy + 0.6, z: c.z + 9.2, w: 2.0, d: 1.6, h: 0.2, ry: 0.35, rz: 0.3, col: C_ROOF2 });
-  addColl(c.x + 2, c.z + 9, 2.0);
+  addWall(c.x + 2, c.z + 9, 1.9, 1.5, 0.3);   // the fallen shell + its slid roof (census #8)
   // the well they dug when the river died — dry too
   flatheW([[0.85, 0], [0.8, 0.7], [0.65, 0.75]], { seg: 8, x: c.x - 9, y: groundH(c.x - 9, c.z + 4) - 0.1, z: c.z + 4, col: C_STONE, cols: [C_STONE, C_STONE2] });
   addColl(c.x - 9, c.z + 4, 1.05);
@@ -1218,7 +1296,9 @@ function buildWaterwheel(cx, cz, ry, R, ruined) {
   const s = FCLUSTERS.find(q => q.id === 'seam');
   const gy = groundH(s.x, s.z) - 0.5;
   fboxW({ x: s.x, y: gy, z: s.z + 4, w: 6.5, d: 1.6, h: 5.5, tw: 5.5, td: 2.6, shz: -1.2, col: C_FROCK, colB: C_FROCK2 });
-  addColl(s.x, s.z + 4, 2.2); addColl(s.x - 4, s.z + 4, 2.2); addColl(s.x + 4, s.z + 4, 2.2);
+  // census #8: one box for the whole 13m face — the old three-circle chain
+  // had walk-through scallops between circles and open tips past them
+  addWall(s.x, s.z + 4, 6.5, 1.7, 0);
   for (let i = 0; i < 6; i++) {
     const x = s.x - 5 + i * 2, z = s.z + 2.4 + hash2(i, 2) * 0.5;
     flatheW([[0, 0], [0.3, 0.2], [0.16, 0.7], [0, 0.95]], { seg: 5, x, y: groundH(x, z), z, ry: i, col: i % 2 ? C_SALT : mix3(C_SALT, C_CLAY, 0.3) });
@@ -2001,6 +2081,7 @@ function tickForest() {
      resonance beat is about to open it — night two takes over from there) */
   const dh = Math.hypot(P.x - HUM_SPOT.x, P.z - HUM_SPOT.z);
   if (window.__n2WillOpen && window.__n2WillOpen()) { /* resonance owns the spot */ }
+  else if (window.__basinOpenNow) { /* the stones are parted: nothing hums under an open door */ }
   else if (dh < 13 && !humLatch) {
     humLatch = true;
     SFX.hum();
@@ -2531,4 +2612,22 @@ for (const c of chunks) {
   scene.add(c.mesh);
   c.md = null;
 }
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6b (pure addition) ═══════════ */
+const __regForestGround = groundH;    // p6b's final field, captured pre-p6c
+window.__WORLD_REG.push({
+  name: 'forest', kind: 'ground', over: ['brightharbor'],
+  owns: (x, z) => inForestQ(x, z),
+  ground: (x, z) => __regForestGround(x, z),
+  note: 'the Parched Forest heightfield (forestHMesh); solid = __forestSolid; later owners (hollow, crown/stair, river) declare themselves over this',
+});
+/* Rule 2: the Great Cedar's door — always-open threshold through the
+   trunk annulus (the gap the lathe skips is the gap collision opens) */
+window.__PORTALS.push({
+  name: 'cedar-door',
+  x: CEDAR.x + Math.cos(CEDAR.doorA) * ((CEDAR.r0 + CEDAR.r1) / 2),
+  z: CEDAR.z + Math.sin(CEDAR.doorA) * ((CEDAR.r0 + CEDAR.r1) / 2),
+  openNow: () => true,
+});
 </script>

@@ -1,4 +1,54 @@
 <script>
+/* ═══════════ THE WORLD RULES — shared registries + the beam march ═══════════
+   Rule 1: every part that owns ground/solid DESCRIBES that ownership in
+   __WORLD_REG (the wrap chain still dispatches; the registry lets the
+   harness prove there are no unowned gaps and no undeclared overlaps).
+   Rule 2: every threshold is a portal object in __PORTALS.
+   Rule 4: every floating vessel is a hull in __HULLS.
+   Rule 3: beams take their LENGTH from the world — beamHitDist marches the
+   live groundH (the full wrap chain, so every region comes free), and
+   beamHitDistIn marches an interior's own open-air predicate.
+   Guard-init everywhere: part order must never matter for the registries. */
+window.__WORLD_REG = window.__WORLD_REG || [];
+window.__PORTALS = window.__PORTALS || [];
+window.__HULLS = window.__HULLS || [];
+/* distance along (dx,dy,dz) from (ox,oy,oz) at which the centreline dips
+   below groundH+0.3 — ~8 m march, hit refined by bisection to ~0.5 m.
+   Cheap enough to call for every beam every few frames. groundH is read at
+   CALL time, so this always sees the final wrapped chain. */
+function beamHitDist(ox, oy, oz, dx, dy, dz, maxLen) {
+  let t0 = 0;
+  for (let t = 8; t <= maxLen; t += 8) {
+    if (oy + dy * t < groundH(ox + dx * t, oz + dz * t) + 0.3) {
+      let lo = t0, hi = t;
+      for (let i = 0; i < 4; i++) {
+        const m = (lo + hi) / 2;
+        if (oy + dy * m < groundH(ox + dx * m, oz + dz * m) + 0.3) hi = m; else lo = m;
+      }
+      return hi;
+    }
+    t0 = t;
+  }
+  return maxLen;
+}
+/* interior variant: stop where the open air ends (2 m march, ~0.5 m refine) */
+function beamHitDistIn(openFn, ox, oz, dx, dz, maxLen) {
+  let t0 = 0;
+  for (let t = 2; t <= maxLen; t += 2) {
+    if (!openFn(ox + dx * t, oz + dz * t)) {
+      let lo = t0, hi = t;
+      for (let i = 0; i < 2; i++) {
+        const m = (lo + hi) / 2;
+        if (openFn(ox + dx * m, oz + dz * m)) lo = m; else hi = m;
+      }
+      return hi;
+    }
+    t0 = t;
+  }
+  return maxLen;
+}
+</script>
+<script>
 /* ═══════════════════ p4 — the world: Brightharbor & the Dry Bay ═══════════════════
    Merged BufferGeometry chunks, MeshBasicMaterial + baked vertex colors.
    Hard noon light with colored teal shade, painterly toon-stepped bake.       */
@@ -379,20 +429,34 @@ function grottoOpenAt(x, z, ignorePlug) {
   }
   return false;
 }
-/* the rock footprint: the three mound caps + the entrance throat flanks */
+/* the rock footprint: the two mound caps + the entrance throat flanks.
+   v9 SOLID == RENDERED (the census defects): the solid footprint is now the
+   SAME ellipse the cap lathes draw (x semi-axis CAP_R, z semi-axis
+   CAP_R*CAP_EX — latheW's `ex`), sized to the skirt at walkable ground.
+   The old circles (22.65/20.55) stood up to 3.3 m outside the rendered
+   rock on the z axis — the "walk through walls on faith" collars.
+   The THIRD disc at (46,158) r16.35 — its cap was deleted in v3, its solid
+   stayed — was PURE INVISIBLE ROCK. It is gone: caps A+B alone cover every
+   flank of the corridor with metres to spare (verified by the boundary
+   probe + fuzz), and the little south cove it walled off is now honest
+   open seabed between the two rendered mounds. */
+const CAP_EX = 0.9;                          // caps' latheW ex — z is squashed
+const CAP_RA = 21 * 1.02, CAP_RB = 19 * 1.02;   // skirt radius at walkable ground
 const MASSIF = [
-  [GROTTO_A.x, GROTTO_A.z, 22.65],
-  [GROTTO_B.x, GROTTO_B.z, 20.55],
-  [46, 158, 16.35],
+  [GROTTO_A.x, GROTTO_A.z, CAP_RA],
+  [GROTTO_B.x, GROTTO_B.z, CAP_RB],
 ];
 function massifAt(x, z) {
   for (let i = 0; i < MASSIF.length; i++) {
     const c = MASSIF[i];
-    const dx = x - c[0], dz = z - c[1];
-    if (dx * dx + dz * dz < c[2] * c[2]) return true;
+    const dx = (x - c[0]) / c[2], dz = (z - c[1]) / (c[2] * CAP_EX);
+    if (dx * dx + dz * dz < 1) return true;
   }
-  // entrance throat: solid rock flanks the portal stretch of the walkway
-  if (distSeg(x, z, GROTTO_ENT.x, 132, GROTTO_ENT.x, ENT_WALK.bz) < ENT_WALK.hw + 3.4) return true;
+  // entrance throat: solid rock flanks the portal stretch of the walkway.
+  // v9: clamped to z ≥ 131.2 — the old round south end of this capsule stuck
+  // out past the flare as a free-standing invisible fin in the open bay
+  if (z > 131.2 &&
+      distSeg(x, z, GROTTO_ENT.x, 132, GROTTO_ENT.x, ENT_WALK.bz) < ENT_WALK.hw + 3.4) return true;
   return false;
 }
 function grottoSolidAt(x, z) {
@@ -949,13 +1013,31 @@ function buildGrotto() {
      face sits ON the collision boundary; any candidate that would poke
      into open air, or whose center falls outside the solid footprint, is
      skipped. Collision and geometry share one source of truth. ── */
+  // v9: every placed wall rock is RECORDED so the boundary probe can prove
+  // the solid boundary is faced with real rock (render derives from authority)
+  const REC = window.__grottoRocks = [];
   const wallRock = (x, z, R0, seedv) => {
     const md = chunkFor(x, z);
     const y = groundH(x, z) - 1.5;
+    REC.push({ x, z, R0 });
     // flat-authored cave strata, not the noon bake — these live in the dark
     latheW(md, [[R0, 0], [R0 * 1.1, 3.5], [R0 * 0.55, 8.5], [0, 11]],
       { seg: 7, ex: 0.88, x, y, z, ry: seedv * 2.13, flat: true, segJitter: 0.12,
         col: C_CAVE_MID, cols: [C_CAVE_LO, C_CAVE_MID, C_CAVE_HI] });
+  };
+  // warm daylight twin for the mouth — the funnel flare and the cap-gap
+  // flanks face the bay at noon; cave strata would read as soot there.
+  // FLAT-AUTHORED like every big rock since v3: fed to the noon bake, these
+  // large facets came back as huge flat BLUE slabs on their shade sides
+  // (John's original ring-rock photo bug, re-confirmed by tonight's shots).
+  const C_MROCK_LO = mix3(C_ROCK2, C_ROCK, 0.3), C_MROCK_HI = mix3(C_ROCK, [1, 1, 1], 0.08);
+  const mouthRock = (x, z, R0, seedv) => {
+    const md = chunkFor(x, z);
+    const y = groundH(x, z) - 1.5;
+    REC.push({ x, z, R0 });
+    latheW(md, [[R0, 0], [R0 * 1.1, 3.4], [R0 * 0.55, 7.8], [0, 10.2]],
+      { seg: 7, ex: 0.88, x, y, z, ry: seedv * 2.13, flat: true, segJitter: 0.12,
+        col: C_ROCK, cols: [C_MROCK_LO, C_ROCK, C_MROCK_HI] });
   };
   const intrudes = (x, z, R0) => {
     if (grottoOpenAt(x, z, true)) return true;
@@ -965,10 +1047,10 @@ function buildGrotto() {
     }
     return false;
   };
-  const tryRock = (x, z, R0, seedv) => {
+  const tryRock = (x, z, R0, seedv, sunlit) => {
     if (!massifAt(x, z)) return;          // never a rock the region won't back
     if (intrudes(x, z, R0)) return;       // never a rock in walkable air
-    wallRock(x, z, R0, seedv);
+    (sunlit ? mouthRock : wallRock)(x, z, R0, seedv);
   };
   const marchCircle = (cx, cz, rOpen) => {
     const n = Math.ceil((TAU * (rOpen + 2.0)) / 2.0);
@@ -996,29 +1078,88 @@ function buildGrotto() {
   marchCircle(GROTTO_A.x, GROTTO_A.z, GROTTO_A.r + 0.8);
   marchCircle(GROTTO_B.x, GROTTO_B.z, GROTTO_B.r + 0.8);
   marchSeg(COR_WALK.ax, COR_WALK.az, COR_WALK.bx, COR_WALK.bz, COR_WALK.hw);
-  marchSeg(GROTTO_ENT.x, 132.2, GROTTO_ENT.x, ENT_WALK.bz, ENT_WALK.hw);
+  /* ── v9 THE FUNNEL, marched at its TRUE half-width (census defect 1).
+     The old straight march used the fixed hw from z 132.2 in, so the flaring
+     stretch (z 123 → 131.5, hw = 2.8 + (131.5−z)·0.55) kept its collision
+     but rendered nothing: invisible walls a body-radius before any rock.
+     Same predicate in, rocks out — tryRock skips any candidate the solid
+     region won't back, so the march can safely run the whole funnel. ── */
+  for (let z = 123.6; z <= ENT_WALK.bz; z += 1.35) {
+    const fhw = ENT_WALK.hw + Math.max(0, 131.5 - z) * 0.55;
+    for (const s of [-1, 1]) {
+      const R0 = 1.35 + (hash2((z * 5 + s * 3) | 0, 91) * 0.5 + 0.5) * 0.6;
+      // inside the drip line the throat stays cave rock; the flare is sunlit
+      tryRock(GROTTO_ENT.x + s * (fhw + R0 * 1.02), z, R0, z * 2 + s, z < 133.2);
+    }
+  }
+  /* ── v9 THE CAP-GAP FLANKS: the mouth is a bite out of cap A's lathe
+     (mouthSkip), but the cap's SOLID ellipse still stands across the bite —
+     it read as bare air you bounced off. March the same ellipse across the
+     skipped arc so the reveal's walls are real, sunlit rock. ── */
+  for (let a = Math.PI * 1.30; a <= Math.PI * 1.705; a += 0.055) {
+    const rx = CAP_RA, rz = CAP_RA * CAP_EX;
+    const bx = GROTTO_A.x + Math.cos(a) * rx, bz = GROTTO_A.z + Math.sin(a) * rz;
+    // outward ellipse normal → tuck the rock's face onto the solid boundary
+    let nx = Math.cos(a) / rx, nz = Math.sin(a) / rz;
+    const nl = Math.hypot(nx, nz) || 1; nx /= nl; nz /= nl;
+    const R0 = 1.5 + (hash2(Math.round(a * 100), 17) * 0.5 + 0.5) * 0.7;
+    tryRock(bx - nx * R0 * 1.02, bz - nz * R0 * 1.02, R0, a * 3, true);
+  }
   // exterior mound caps (seen from the bay) — grounded, dune-scale.
   // chamber A's cap leaves a gap over the entrance (south) for the mouth.
   // v3: the caps live in their OWN DoubleSide mesh — every shell face a
   // sightline can reach from inside renders as rock, never as raw sky
   // (the flat-blue bug was backface-culled cap interiors showing the dome).
-  const mouthSkip = (t0, t1, band) => band < 2 && t0 > Math.PI * 1.32 && t0 < Math.PI * 1.68;
+  /* v9: mouth/door bites are judged by segment MIDPOINT so each gap sits
+     symmetric about its axis (t0-only testing skewed the mouth a full
+     segment east — 18 m of unrendered cap edge on the east flank) */
   const mdCaps = MD();
   // NOTE: v2 had a THIRD cap over the corridor at (46,158) — its shaded west
   // flank protruded INTO chamber A and read as a giant flat blue slab beside
   // the mirror (John's photo). Caps A+B already roof the corridor, so it's
-  // gone; only its SOLID footprint remains.
-  for (const cap of [[GROTTO_A.x, GROTTO_A.z, 21, true], [GROTTO_B.x, GROTTO_B.z, 19]]) {
-    latheW(mdCaps, [[cap[2] * 1.05, -2.5], [cap[2], 4.5], [cap[2] * 0.62, 10.5], [0, 13.5]],
-      { seg: 12, ex: 0.9, x: cap[0], y: 0, z: cap[1], col: C_ROCK, cols: [C_ROCK2, C_ROCK, C_ROCK2],
-        skip: cap[3] ? mouthSkip : null });
+  // gone — and since v9 its solid footprint is gone with it (census: it was
+  // pure invisible rock; A+B's solid ellipses seal the corridor alone).
+  /* v9: the skirt is VERTICAL through every walkable ground height (−2.5 →
+     2.4) at exactly the MASSIF ellipse radius, and seg is up from 12 to 24
+     (a 12-gon chord sat up to 0.72 m inside the solid ellipse — an
+     invisible skin thicker than the player's body). Rendered == solid.
+     Two more census truths land here:
+     — each cap gets a DOOR ARC where the corridor crosses its shell (the
+       old skirt stood straight across the corridor's walkable air — the
+       gray wall between the chambers you could walk through);
+     — the skirt band is FLAT-AUTHORED warm stone: fed to the noon bake,
+       its vertical southwest faces came out slate BLUE (the flat-blue-slab
+       failure mode, again). */
+  const arcHit = (mid, at, half) => {
+    let d = Math.abs(((mid - at) % TAU + TAU) % TAU);
+    if (d > Math.PI) d = TAU - d;
+    return d < half;
+  };
+  const C_SKIRT = mix3(C_ROCK, C_ROCK2, 0.55);
+  // corridor crossing angles on each cap's ellipse (lathe parameter space)
+  for (const cap of [[GROTTO_A.x, GROTTO_A.z, 21, true, 0.507], [GROTTO_B.x, GROTTO_B.z, 19, false, 0.4636 + Math.PI + 0.04]]) {
+    const R = cap[2];
+    const mouthArc = (mid) => cap[3] && mid > Math.PI * 1.32 && mid < Math.PI * 1.68;
+    const doorArc = (mid) => arcHit(mid, cap[4], 0.17);
+    // the skirt — flat warm stone up to the mound's true shoulder (4.5):
+    // both lower bands are near-vertical, and near-vertical + noon bake =
+    // slate-blue slabs. Holed at the mouth + the corridor door.
+    latheW(mdCaps, [[R * 1.02, -2.5], [R * 1.02, 2.4], [R, 4.5]],
+      { seg: 24, ex: CAP_EX, x: cap[0], y: 0, z: cap[1], flat: true, segJitter: 0.07,
+        col: C_SKIRT, cols: [C_SKIRT, mix3(C_SKIRT, C_ROCK, 0.45)],
+        skip: (t0, t1) => mouthArc((t0 + t1) / 2) || doorArc((t0 + t1) / 2) });
+    // the mound above (noon-baked as always)
+    latheW(mdCaps, [[R, 4.5], [R * 0.62, 10.5], [0, 13.5]],
+      { seg: 24, ex: CAP_EX, x: cap[0], y: 0, z: cap[1], col: C_ROCK, cols: [C_ROCK, C_ROCK2],
+        skip: (t0, t1, band) => band < 1 && mouthArc((t0 + t1) / 2) });
     // interior LINER: flat dark cave strata facing inward, so any sightline
     // that reaches the shell from inside reads rock — never the noon bake's
     // blue-slate shadow side, never raw sky
-    latheW(mdCaps, [[cap[2] * 1.02, -2.6], [cap[2] * 0.97, 4.4], [cap[2] * 0.6, 10.3], [0, 13.1]],
-      { seg: 12, ex: 0.9, x: cap[0], y: 0, z: cap[1], inward: true, flat: true, segJitter: 0.12,
-        col: [0.34, 0.31, 0.29], cols: [[0.43, 0.37, 0.31], [0.34, 0.31, 0.29], [0.26, 0.24, 0.23]],
-        skip: cap[3] ? mouthSkip : null });
+    latheW(mdCaps, [[R * 1.0, -2.6], [R * 0.995, 2.3], [R * 0.97, 4.4], [R * 0.6, 10.3], [0, 13.1]],
+      { seg: 24, ex: CAP_EX, x: cap[0], y: 0, z: cap[1], inward: true, flat: true, segJitter: 0.12,
+        col: [0.34, 0.31, 0.29], cols: [[0.43, 0.37, 0.31], [0.43, 0.37, 0.31], [0.34, 0.31, 0.29], [0.26, 0.24, 0.23]],
+        skip: (t0, t1, band) => (band < 3 && mouthArc((t0 + t1) / 2)) ||
+                                (band < 2 && doorArc((t0 + t1) / 2)) });
     // (footprints live in the static MASSIF table — the single authority)
   }
   grottoCapMesh = mdMesh(mdCaps, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
@@ -1035,16 +1176,28 @@ function buildGrotto() {
     const gx = GROTTO_ENT.x;
     const jamb = [0.86, 0.78, 0.6], jambD = [0.62, 0.56, 0.45];
     for (const s of [-1, 1]) {
-      boxW(md, { x: gx + s * 3.55, y: 0.15, z: 133.9, w: 0.5, d: 1.7, h: 9.8, tw: 0.4, td: 1.2, ry: s * 0.12, col: jamb, colB: jambD });
-      boxW(md, { x: gx + s * 4.1, y: 0.15, z: 136.6, w: 0.6, d: 1.4, h: 7.8, tw: 0.45, td: 1.0, ry: s * 0.2, col: jambD });
+      // v9: warm bake — the standard bake's blue shade branch striped the
+      // jambs' inner faces slate blue against the warm throat
+      boxW(md, { x: gx + s * 3.55, y: 0.15, z: 133.9, w: 0.5, d: 1.7, h: 9.8, tw: 0.4, td: 1.2, ry: s * 0.12, col: jamb, colB: jambD, warm: true });
+      boxW(md, { x: gx + s * 4.1, y: 0.15, z: 136.6, w: 0.6, d: 1.4, h: 7.8, tw: 0.45, td: 1.0, ry: s * 0.2, col: jambD, warm: true });
     }
-    // portal stones + lintel
+    // portal stones + lintel — flat-authored warm stone (baked, their shade
+    // sides read as pale blue slabs from inside the throat)
     for (const s of [-1, 1]) {
-      latheW(md, [[2.0, -3.2], [1.7, 2.8], [0.8, 6.8]], { seg: 6, ex: 0.8, x: gx + s * 4.4, y: 3.75, z: 134, ry: s, col: C_ROCK, cols: [C_ROCK2, C_ROCK] });
+      latheW(md, [[2.0, -3.2], [1.7, 2.8], [0.8, 6.8]], { seg: 6, ex: 0.8, x: gx + s * 4.4, y: 3.75, z: 134, ry: s, flat: true, segJitter: 0.09, col: C_ROCK, cols: [mix3(C_ROCK2, C_ROCK, 0.3), C_ROCK] });
     }
-    boxW(md, { x: gx, y: 5.6 + 3.75, z: 134, w: 5.4, d: 1.6, h: 1.7, tw: 4.2, td: 1.1, col: C_ROCK2 });
+    boxW(md, { x: gx, y: 5.6 + 3.75, z: 134, w: 5.4, d: 1.6, h: 1.7, tw: 4.2, td: 1.1, col: C_ROCK2, warm: true });
     // a carved moon sigil over the lintel — this place matters
     latheW(md, [[0.55, 0], [0.42, 0.14]], { seg: 10, x: gx, y: 6.4 + 3.75, z: 133.2, col: C_MOON });
+    // v9 floor cue (Rule 2 — a threshold reads underfoot from BOTH sides):
+    // worn paving slabs across the walkway through the portal stones
+    for (let i = 0; i < 5; i++) {
+      const sz = 131.6 + i * 1.45;
+      const sw = 2.35 - Math.abs(i - 2) * 0.22, jig = hash2(i * 3, 7) * 0.22;
+      boxW(md, { x: gx + jig, y: groundH(gx, sz) - 0.04, z: sz, w: sw, d: 0.58, h: 0.09,
+        tw: sw * 0.92, td: 0.5, ry: hash2(i, 11) * 0.06,
+        col: i % 2 ? C_STONE : C_STONE2, noBottom: true, warm: true });
+    }
     // v3: the portal stones are solid too
     addColl(gx - 4.4, 134, 2.0); addColl(gx + 4.4, 134, 2.0);
   })();
@@ -1247,6 +1400,14 @@ const wallKelp = makeKelpPatch([
   [45.7, 156.9, 2.6], [47.2, 158.7, 2.7], [48.0, 159.5, 2.5],
 ], 'wall');
 const wallColl = [addColl(45.8, 157.1, 1.6), addColl(47.4, 158.9, 1.6), addColl(48.6, 160.2, 1.4)];
+/* ── RULE 2: every threshold is a portal object. The grotto's two doorways
+   register here so the harness can enumerate and walk them instead of
+   trusting them. Guard-init — part order must not matter. ── */
+window.__PORTALS = window.__PORTALS || [];
+window.__PORTALS.push(
+  { name: 'grotto-mouth', x: GROTTO_ENT.x, z: 134, openNow: () => true },
+  { name: 'grotto-kelp-plug', x: KELPWALL.x, z: KELPWALL.z, openNow: () => !!wallKelp.stalks[0].cut },
+);
 
 /* ── shade pool overlay (grows at dusk) ── */
 const POOL_MAT = new THREE.MeshBasicMaterial({
@@ -2838,4 +2999,51 @@ function rebuildSalt() {   // name kept for the pickup path in p6
 const crescentItem = buildCrescentItem();
 crescentItem.visible = false;
 scene.add(crescentItem);
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p4 (pure addition) ═══════════
+   Rule 1: p4's three ground/solid owners describe themselves. `over` names
+   the earlier owners a region deliberately sits on top of — the harness
+   treats any OTHER overlap as an undeclared fork of the truth. The ground
+   ref is p4's own final field (captured BEFORE later parts wrap groundH),
+   so the harness can check the live chain still answers with p4's truth
+   on p4's points. */
+const __regBayGround = groundH;
+window.__WORLD_REG.push(
+  { name: 'brightharbor', kind: 'ground', over: [],
+    owns: (x, z) => x >= -110 && x <= 110 && z >= -110 && z <= 186,
+    ground: (x, z) => __regBayGround(x, z),
+    note: 'the village, the dry bay and the east pass shoulder — the BAY_FINE lattice rect; base of the wrap chain' },
+  { name: 'grotto', kind: 'ground', over: ['brightharbor'],
+    owns: (x, z) => massifAt(x, z) || grottoOpenAt(x, z, true),
+    ground: (x, z) => __regBayGround(x, z),
+    note: 'the massif + carved air; solid = massifAt minus grottoOpenAt, walls marched from the same boundary' },
+  { name: 'rooms-strip', kind: 'ground', over: [],
+    owns: (x, z) => x > 300 && z < -30,
+    ground: (x, z) => __regBayGround(x, z),
+    note: 'off-world interiors + portrait stage at x≈330; solid is per-room clamps (interiorResolve), never worldSolidAt' },
+);
+/* Rule 3 for the grotto mirror: the reflected beam stops where the carved
+   air ends, so an off-target aim paints the wall it actually hits instead
+   of lancing through rock. The kelp plug is IGNORED on purpose: the aimed
+   beam must still reach (and read as burning) the kelp wall pre-burn. */
+const GROTTO_BEAM_L = Math.hypot(KELPWALL.x - MIRROR_POS.x, KELPWALL.z - MIRROR_POS.z) + 1.5;
+const _grottoBeamOpen = (x, z) => grottoOpenAt(x, z, true) || !massifAt(x, z);
+let _grottoBeamT = 1;
+function grottoClampBeam() {
+  if (!beamOut || !beamOut.visible || beamOut.material.opacity <= 0) return;
+  const a = mirror.angle;
+  const hit = beamHitDistIn(_grottoBeamOpen, MIRROR_POS.x, MIRROR_POS.z,
+    Math.cos(a), Math.sin(a), GROTTO_BEAM_L);
+  const t = Math.max(0.08, Math.min(1, hit / GROTTO_BEAM_L));
+  if (Math.abs(t - _grottoBeamT) < 0.01) return;
+  _grottoBeamT = t;
+  /* the beam is two quads = 4 tris; the far verts of each quad sit at
+     soup slots 2,4 (c twice) and 5 (d) — only their local x (the length
+     axis) moves */
+  const p = beamOut.geometry.getAttribute('position');
+  const fx = GROTTO_BEAM_L * t;
+  for (const vi of [2, 4, 5, 8, 10, 11]) p.array[vi * 3] = fx;
+  p.needsUpdate = true;
+}
 </script>

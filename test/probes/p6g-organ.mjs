@@ -91,10 +91,17 @@ async function tune(idx, label, maxHold = 26) {
 }
 await api.waitTicks(30);
 {
-  const st = await jget(`(function(){ const d = S_DOORS[0];
+  /* RULE 6 (evolved 8/18): the plug follows the RENDERED slab, so the
+     stone is gone when the slab has visibly ground down — wait for the
+     grind (a real-time animation, ~1.2 s), then ask the collider */
+  const mid = await jget(`(function(){ const d = S_DOORS[0];
     return { solid: worldSolidAt(d.x, d.z), open: organOpen[0], save: !!SAVE.organ1 }; })()`);
-  console.log('after tuning L1:', JSON.stringify(st));
-  gate(st.save && st.open && !st.solid, 'THE LANDING SINGS: the door grinds open, and the stone is gone');
+  gate(mid.save && mid.open, 'THE LANDING SINGS: the door is answered the moment the chord is true');
+  await api.waitFor('S_DOORS[0].group.position.y < S_DOORS[0].baseY - 4.4', 20000, 'the slab grinds down');
+  const st = await jget(`(function(){ const d = S_DOORS[0];
+    return { solid: worldSolidAt(d.x, d.z), y: +d.group.position.y.toFixed(2) }; })()`);
+  console.log('after the grind:', JSON.stringify(st));
+  gate(!st.solid, 'and once the slab has visibly sunk, the stone is really gone (Rule 6)');
 }
 /* the vent is done and stays done */
 gate((await jget('__fm.ventLocked'))[0] === true, 'a true note stays true — it does not have to be held');

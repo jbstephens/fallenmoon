@@ -187,7 +187,14 @@ function riverSurfaceAt(x, z) {
   const r = runNear(x, z);
   const w = r.off < 0 ? r.s.wl : r.s.wr;
   if (Math.abs(r.off) > w + 0.6) return null;
-  return r.s.y;
+  /* RULE 4: the INTERPOLATED sheet height between stations — lerp by
+     run-distance toward the neighbour the query leans at. The rendered
+     sheet spans stations linearly, so a hull riding the QUANTIZED station
+     height stepped several cm against the drawn water at every graded
+     riffle; the true local surface is the line between the stations. */
+  const t = clamp(r.along / RUN_STEP, -1, 1);
+  const j = clamp(r.i + (t >= 0 ? 1 : -1), 0, RUN.length - 1);
+  return lerp(r.s.y, RUN[j].y, Math.abs(t));
 }
 function riverDepthAt(x, z) {
   /* the 8 m river mask is one array lookup and answers "nowhere near the
@@ -1050,7 +1057,12 @@ function skiffPlaceAt(x, z) {
   SKF.spd = 0;
   if (!SKF.on) { skiffColl.x = SKF.x; skiffColl.z = SKF.z; }
 }
-function skiffY() { return RUN[SKF.i].y; }
+function skiffY() {
+  /* Rule 4: she rides the TRUE local surface (interpolated between
+     stations), never a quantized station height; freeboard stays fixed */
+  const y = riverSurfaceAt(SKF.x, SKF.z);
+  return y === null ? RUN[SKF.i].y : y;
+}
 /* SHE MUST ALWAYS BE BOARDABLE. Moored on the centre-line of a sixteen-metre
    river she is four metres past anyone's reach from either bank, and there
    is no way to call her back — p6c learned this the hard way with the
@@ -2288,4 +2300,116 @@ function extendGreenDebugOnce() {
     },
   });
 }
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6h + RULE 6 (pure addition) ═══════════ */
+window.__WORLD_REG.push({
+  name: 'river-surface', kind: 'water', over: ['forest'],
+  owns: (x, z) => riverWet() && riverSurfaceAt(x, z) !== null,
+  surface: (x, z) => riverSurfaceAt(x, z),
+  note: 'the Silverrun’s authored water sheet — an OVERLAY on forest ground (kind:water, so the ground conformance check skips it); the bed below stays groundH',
+});
+/* Rule 4: the skiff is a hull whenever the river runs. Her group rides
+   skiffY() − 0.16, so waterline = group y + 0.16. Her depth law is her own
+   draft (a punt in a river that never holds 1.3 m), which is why the hull
+   record carries depthOk instead of the sweep hard-coding the sailboat's. */
+window.__HULLS.push({
+  name: 'skiff', r: 2.6,
+  afloat: () => riverWet(),
+  underway: () => !!P.skiffing,
+  x: () => SKF.x, z: () => SKF.z,
+  waterlineY: () => skiffGrp.position.y + 0.16,
+  depthOk: () => riverDepthAt(SKF.x, SKF.z) >= SKIFF_DRAFT + 0.1,
+  rescue: () => skiffRescueIfNeeded(),
+});
+
+/* ═══════════ RULE 6 — invariantSweep(): the repair pass ═══════════
+   When world state changes, downstream truth is RE-DERIVED, not trusted:
+   the player stands in open air, every hull floats deep enough where it
+   is moored, and every portal's live solid answer agrees with its
+   openNow(). Runs at the tail of applyWorldState (p7 calls it after the
+   world-state hooks) and every ~5 s of play. Repairs are actions the game
+   already owns (nudge + re-seat, the boat/skiff rescue machinery);
+   disagreements it cannot repair are recorded for the harness. */
+window.__invariantReport = { fixes: [], portalBad: [], runs: 0 };
+function invariantSweep() {
+  const R = window.__invariantReport;
+  R.runs++;
+  const rec = (arr, s) => { if (arr.length < 30 && arr[arr.length - 1] !== s) arr.push(s); };
+  try {
+    /* 1. the player is never inside solid. Skipped afloat and indoors —
+       hulls carry the player, and interiors answer solid with their own
+       room clamps, not worldSolidAt. */
+    if (state === 'play' && !P.sailing && !P.skiffing &&
+        !(typeof roomAt === 'function' && roomAt(P.x, P.z)) &&
+        worldSolidAt(P.x, P.z)) {
+      let done = false;
+      for (let r = 0.6; r <= 8 && !done; r += 0.6) {
+        for (let i = 0; i < 16 && !done; i++) {
+          const a = i * (TAU / 16);
+          const px = P.x + Math.sin(a) * r, pz = P.z + Math.cos(a) * r;
+          if (worldSolidAt(px, pz)) continue;
+          P.x = px; P.z = pz;
+          P.fy = Math.max(groundH(px, pz), supportYAt(px, pz, P.fy));
+          done = true;
+          rec(R.fixes, 'player unstuck to ' + px.toFixed(1) + ',' + pz.toFixed(1));
+        }
+      }
+      if (!done) rec(R.fixes, 'player inside solid at ' + P.x.toFixed(1) + ',' + P.z.toFixed(1) + ' — no open air within 8m');
+    }
+    /* 2. every registered hull floats where it is moored */
+    const HS = window.__HULLS || [];
+    for (let i = 0; i < HS.length; i++) {
+      const H = HS[i];
+      try {
+        if (!H.afloat() || H.underway() || H.depthOk()) continue;
+        const ox = H.x(), oz = H.z();
+        H.rescue();
+        if (H.x() !== ox || H.z() !== oz) {
+          rec(R.fixes, H.name + ' re-moored ' + ox.toFixed(0) + ',' + oz.toFixed(0) +
+            ' → ' + H.x().toFixed(0) + ',' + H.z().toFixed(0));
+        }
+      } catch (e) {}
+    }
+    /* 3. every portal's live solid answer agrees with openNow() */
+    const PS = window.__PORTALS || [];
+    for (let i = 0; i < PS.length; i++) {
+      const PT = PS[i];
+      try {
+        const open = !!PT.openNow();
+        const solid = !!worldSolidAt(PT.x, PT.z);
+        if (open === solid) rec(R.portalBad, PT.name + ' open=' + open + ' solid=' + solid);
+      } catch (e) { rec(R.portalBad, PT.name + ' threw: ' + e.message); }
+    }
+  } catch (e) {}
+}
+window.__invariantSweep = invariantSweep;
+
+/* ── the rules ticker: beams re-marched every ~6 frames, the invariant
+   sweep every ~5 s of play (never during Pearl's voyage — her cine owns
+   the boat). This wrap is appended after every region part, so it is the
+   outermost link of the cullChunks chain p7 calls each render frame. ── */
+const _rulesCull = cullChunks;
+let _rulesBeamF = 0, _rulesSweepTick = -1e9;
+cullChunks = function (ccx, ccz) {
+  _rulesCull(ccx, ccz);
+  if ((++_rulesBeamF % 6) === 0) {
+    try {
+      grottoClampBeam();
+      hollowClampBeams();
+    } catch (e) {}
+  }
+  if (state === 'play' && !VOYAGE.active && simTick - _rulesSweepTick >= 300) {
+    _rulesSweepTick = simTick;
+    invariantSweep();
+  }
+};
+window.__telemetryHooks.push(function (T) {
+  T.regOwners = window.__WORLD_REG.length;
+  T.portalCount = window.__PORTALS.length;
+  T.hullCount = window.__HULLS.length;
+  T.sweepRuns = window.__invariantReport.runs;
+  T.sweepFixes = window.__invariantReport.fixes.length;
+  T.sweepPortalBad = window.__invariantReport.portalBad.length;
+});
 </script>

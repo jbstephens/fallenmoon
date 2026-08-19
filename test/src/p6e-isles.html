@@ -3012,6 +3012,43 @@ function animateTortoise(dtv, now, near) {
   refreshTortBar(false);
 }
 
+/* ── census #25: p6d bakes a dark S_SOOT "doorway" slab into the 'kiln'
+   chunk right at the door face (boxW at FOUNDRY_DOOR, w 1.55 / d 0.3 / h
+   4.2 at z-0.35). With the bronze leaves OPEN it still renders: blackness
+   through an open door, masked only by the throat's own dark. The PROPER
+   fix belongs in p6d — bake that slab into its own togglable mesh — but
+   p6d is not this part's to edit, so we locate the slab's 36 vertices by
+   position at runtime, park them under the threshold while the gate
+   stands open, and restore them when a NEW GAME reseals the doors. ── */
+let fSootSlab = null;   // { att, idx, orig, parked } | 'missing'
+function fParkSootSlab(open) {
+  if (fSootSlab === 'missing') return;
+  if (!fSootSlab) {
+    let ch = null;
+    for (let i = 0; i < seaChunks.length; i++) if (seaChunks[i].id === 'kiln') ch = seaChunks[i];
+    const att = ch && ch.mesh && ch.mesh.geometry.getAttribute('position');
+    if (!att) { fSootSlab = 'missing'; return; }
+    const yD = seaHMesh(FOUNDRY_DOOR.x, FOUNDRY_DOOR.z);   // the y the builder used
+    const idx = [];
+    for (let i = 0; i < att.count; i++) {
+      const px = att.getX(i), pz = att.getZ(i), py = att.getY(i);
+      if (px > FOUNDRY_DOOR.x - 1.6 && px < FOUNDRY_DOOR.x + 1.6 &&
+          pz > FOUNDRY_DOOR.z - 0.7 && pz < FOUNDRY_DOOR.z - 0.02 &&
+          py > yD - 0.1 && py < yD + 4.3) idx.push(i);
+    }
+    if (idx.length < 24 || idx.length > 48) { fSootSlab = 'missing'; return; }   // p6d moved it — do nothing
+    const orig = new Float32Array(idx.length);
+    for (let i = 0; i < idx.length; i++) orig[i] = att.getY(idx[i]);
+    fSootSlab = { att, idx, orig, yPark: yD - 2.5, parked: false };
+  }
+  const S = fSootSlab;
+  if (open === S.parked) return;
+  for (let i = 0; i < S.idx.length; i++) S.att.setY(S.idx[i], open ? S.yPark : S.orig[i]);
+  S.att.needsUpdate = true;
+  S.parked = open;
+  window.__sootSlabParked = { found: S.idx.length, parked: S.parked };
+}
+
 /* ═══ THE ONE DERIVATION — every phase-three fact flows from the save,
    both ways. A completed save taken to NEW GAME must put the bell back on
    the tortoise, relock every door, shut the chest, and pin the sun. ═══ */
@@ -3031,6 +3068,7 @@ function isleDeriveWorld(S) {
   if (window.__foundryDoorColl) window.__foundryDoorColl.off = fGateOpenNow;
   fGateL.rotation.y = fGateOpenNow ? 1.95 : 0;
   fGateR.rotation.y = fGateOpenNow ? -1.95 : 0;
+  fParkSootSlab(fGateOpenNow);   // census #25: p6d's baked soot slab follows the gate
   fGateSaid = false;
   /* the AIM shell + the channel */
   fShell.angle = S.fGlyph1 ? fShell.target : 2.4;
@@ -3225,4 +3263,93 @@ function extendIsleDebugOnce() {
     },
   });
 }
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6e (pure addition — this block
+   is appended; nothing above it is edited) ═══════════ */
+const __regFoundryGround = groundH;    // p6e's final chain, captured pre-p6f
+window.__WORLD_REG.push({
+  name: 'foundry', kind: 'ground', over: ['sea'],
+  owns: (x, z) => fInBox(x, z) && inFoundryFieldQ(x, z),
+  ground: (x, z) => __regFoundryGround(x, z),
+  note: 'the Foundry works cut into Kiln Isle (foundry floor field); solid = fMassifAt with plugs first, carve second',
+});
+/* Rule 2: the works’ two doors. openNow reads the SAVE (intent); the
+   live chain answers from the derived plug state (fGateOpenNow /
+   fResOpenNow) — the invariant sweep checks they never disagree. The
+   resonance door also opens TRANSIENTLY on a sustained tone, which
+   fResOpenNow carries and SAVE.fGlyph3 makes permanent. */
+window.__PORTALS.push(
+  { name: 'foundry-gate', x: FGATE.x, z: FGATE.z,
+    openNow: () => !!(SAVE && SAVE.watchBell) },
+  { name: 'resonance-door', x: FGLYPH3.x, z: FGLYPH3.z,
+    openNow: () => !!(fResOpenNow || (SAVE && SAVE.fGlyph3)) },
+);
+</script>
+<script>
+/* ═══════════ RULES CORE — Rule 2 readability patch (pure addition).
+   The rules suite's own portal screenshots caught BOTH faces of the
+   bronze doors reading as featureless slabs at walking distance (the
+   panel relief is too shallow for a baked-color material up close).
+   Straps, end studs and a pale meeting-seam stripe are ADDED onto the
+   existing leaves; the leaf groups themselves are untouched, so the
+   open-gate swing carries the new detail for free. ═══════════ */
+(function dressFoundryGate() {
+  if (!fGateL || !fGateR) return;
+  const dress = (node, sgn) => {
+    const md = MD();
+    const cx = -sgn * 0.72;
+    for (const zf of [0.12, -0.12]) {                 // both faces of the leaf
+      for (const yy of [0.55, 1.95, 3.35]) {
+        boxF(md, { x: cx, y: yy, z: zf, w: 0.68, d: 0.025, h: 0.16, col: C_BRONZE, colB: C_BRONZE2 });
+        for (const ex of [-0.56, 0.56]) {
+          boxF(md, { x: cx + ex, y: yy + 0.03, z: zf * 1.25, w: 0.045, d: 0.02, h: 0.09, col: C_BRONZE2 });
+        }
+      }
+    }
+    /* the meeting seam: a pale worn stripe down the free edge — the one
+       line the eye needs to read "two leaves that part" from either side */
+    boxF(md, { x: cx - sgn * 0.66, y: 0.1, z: 0, w: 0.035, d: 0.15,
+      h: 4.1, col: mix3(C_BRONZE, [1, 1, 1], 0.35) });
+    const m = mdMesh(md, WORLD_MAT, false);
+    m.frustumCulled = false;
+    node.add(m);
+  };
+  dress(fGateL, -1); dress(fGateR, 1);
+})();
+</script>
+<script>
+/* ═══════════ RULES CORE — Rule 2, the way OUT (pure addition).
+   p6d bakes the bluff's cut face as a box that reaches ~7 m into the
+   throat, so from INSIDE the works the open doorway hides behind that
+   baked rear face: walkable, but it reads as wall — the exact failure
+   Rule 2 exists for (caught by the rules suite's own B-side screenshot).
+   p6d's chunk is not this part's to re-carve, so the opening is made to
+   READ instead: a door of daylight painted on the occluding face, exactly
+   over the walk line, shown only while the gate stands open. It hangs on
+   fGateGroup, so p6e's own culling and the save derivation carry it. ═══ */
+let fWayOutGlow = null;
+(function buildWayOutGlow() {
+  if (!fGateGroup) return;
+  const md = MD();
+  const zi = -3.95;                 // just proud of the baked face's rear
+  const warm = [1.0, 0.93, 0.7], core = [1.0, 0.98, 0.86];
+  /* the doorway: a soft outer wash and a brighter core, floor to lintel */
+  pushQuad(md, [-1.9, 0.0, zi], [1.9, 0.0, zi], [1.7, 4.35, zi], [-1.7, 4.35, zi], warm);
+  pushQuad(md, [-1.05, 0.05, zi - 0.02], [1.05, 0.05, zi - 0.02],
+    [0.95, 3.9, zi - 0.02], [-0.95, 3.9, zi - 0.02], core);
+  /* and its spill lying on the floor toward the walker (deeper inside the
+     throat is MORE-negative local z) */
+  pushQuad(md, [-1.6, 0.02, zi], [1.6, 0.02, zi], [2.4, 0.02, zi - 5.5], [-2.4, 0.02, zi - 5.5], warm);
+  fWayOutGlow = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.42,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  fWayOutGlow.frustumCulled = false;
+  fWayOutGlow.visible = false;
+  fGateGroup.add(fWayOutGlow);
+})();
+window.__worldStateHooks.push(function (S) {
+  if (fWayOutGlow) fWayOutGlow.visible = !!S.watchBell;
+});
 </script>

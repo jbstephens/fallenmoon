@@ -30,6 +30,27 @@ readable lines.
 | `p6e-isles.html` | (after p6d) | **Phase 3** — the Foundry, the three-verb puzzle, the Hour Tortoise, the sun-moves payoff, both end cards |
 | `p7-flow.html` | (last) | state flow, HUD, telemetry, main loop |
 
+## THE WORLD RULES layer (8/18 — read DESIGN.md "THE WORLD RULES" first)
+
+Registries (guard-init `window.X = window.X || []` so part order never
+matters; each part registers in an appended script block at its END):
+- `__WORLD_REG` — 9 declared ground owners in wrap order; the harness
+  `rules` suite derives its zero-carve-out conformance sweep from this.
+- `__PORTALS` — 11 registered thresholds {name, x, z, openNow()}; the
+  suite walk-tests them, checks solid-vs-openNow agreement both states,
+  and screenshots BOTH sides of every portal every run (shots-portals/).
+- `__HULLS` — floating vessels (sailboat afloat-or-moored, skiff; never
+  the sunken wreck); every dynamic water surface consults it — full clamp
+  within r + one grid cell so LOWFX's 11.5m lattice is covered.
+- `beamHitDist`/`beamHitDistIn` (p4 top block) — ALL beams get length
+  from terrain/interior-air marches. No fixed-length beam geometry.
+- `__invariantSweep` (p6h end block) — repair pass at applyWorldState
+  tail + every ~300 sim ticks; report in `__invariantReport`.
+- Cull anchor rule: `viewX/Y/Z` in p7 = camera when CAM.mode !== follow —
+  cinematics film a rendered world. Play path byte-identical.
+- Rule 6 pattern: door plugs read the RENDERED slab position (stair
+  organ doors, hollow glyph doors) — passable when it looks passable.
+
 ## Phase 4 at a glance
 
 `p6g-crown.html` (~3,300 lines): the gold-hour glint, the Falls Stair, THE

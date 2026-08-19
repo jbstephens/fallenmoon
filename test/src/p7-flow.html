@@ -160,6 +160,10 @@ function applyWorldState() {
      derive the world from SAVE in BOTH directions. Hooks run in build.sh
      concatenation order — later regions may override earlier sky state. */
   for (const h of window.__worldStateHooks) { try { h(S); } catch (e) {} }
+  /* RULE 6: derive, then REPAIR. After every derivation the invariant
+     sweep re-checks the player's footing, every hull's mooring and every
+     portal's solid-vs-openNow agreement (defined in p6h). */
+  if (window.__invariantSweep) { try { window.__invariantSweep(); } catch (e) {} }
   /* quest line */
   if (SAVE) setQuest(S.q);
   else { QUEST.q = 0; questEl.textContent = ''; questEl.classList.remove('on'); }
@@ -621,6 +625,14 @@ function tickSim() {
 /* ── render-frame visuals ── */
 let grottoT = 0;
 const _fogC = [0, 0, 0];
+/* RULE 5 — THE CULL ANCHOR (viewX/viewY/viewZ). Visibility derives from
+   the CAMERA's position whenever the camera is not the follow cam (cines,
+   the title vista, freecam, the handoff): a cinematic must film a RENDERED
+   world, not the one culled around a player it left behind. In normal play
+   the anchor is the player — identical behaviour, zero perf change. Every
+   culler in the wrap chain receives viewX/viewZ as ccx/ccz and may read
+   viewY for height-aware culls. */
+let viewX = 0, viewY = 0, viewZ = 0;
 function updateVisuals(dtv, now) {
   if (PORTRAIT.on) {
     const d = PORTRAIT.def;
@@ -650,7 +662,13 @@ function updateVisuals(dtv, now) {
   scene.fog.far = lerp(FOG0.far, FOG_GROTTO.far, grottoT);
   // sky follows the camera
   skyGrp.position.set(camera.position.x, 0, camera.position.z);
-  cullChunks(camera.position.x, camera.position.z);
+  {
+    const followCam = CAM.mode === 'follow' && state !== 'title' && !FREECAM.on;
+    viewX = followCam ? P.x : camera.position.x;
+    viewY = followCam ? P.fy : camera.position.y;
+    viewZ = followCam ? P.z : camera.position.z;
+  }
+  cullChunks(viewX, viewZ);
   // draw-call budget: far props and cast hide beyond the fog
   {
     const ccx = camera.position.x, ccz = camera.position.z;

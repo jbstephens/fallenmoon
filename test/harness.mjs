@@ -61,15 +61,16 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
    hours, ate five of ten cores, and quietly failed the perf and timing
    gates of every later run before anyone noticed the machine was busy.
    484 abandoned profiles had also piled up (2.3 GB).
-   So: before this run starts, kill any stray fm-* Chrome and bin any
-   profile older than an hour. Never touch a real browser — the match is on
-   our own `--user-data-dir=<tmp>/fm-*` and nothing else. */
+   So: before this run starts, bin any fm-* profile older than an hour AND
+   kill the Chrome that still holds it. Never touch a real browser — the
+   match is on our own `--user-data-dir=<tmp>/fm-*` and nothing else.
+   PARALLEL-AGENT RULE: the old version pkilled EVERY <tmp>/fm-* Chrome
+   unconditionally, which shot down the other agents' LIVE harness runs on
+   a shared build night (and theirs shot down ours). A true orphan's
+   profile goes stale; a live run's is minutes old — so the kill now rides
+   the same older-than-an-hour test the rm always used. */
 function sweepStrayChrome() {
   const tmp = os.tmpdir();
-  try {
-    cp.execSync(`pkill -f "user-data-dir=${tmp.replace(/\/$/, '')}/fm-" 2>/dev/null`,
-      { stdio: 'ignore' });
-  } catch (e) { /* nothing to kill is the normal case */ }
   const cutoff = Date.now() - 3600e3;
   let binned = 0;
   try {
@@ -79,6 +80,7 @@ function sweepStrayChrome() {
       try {
         const st = fs.statSync(full);
         if (!st.isDirectory() || st.mtimeMs > cutoff) continue;
+        try { cp.execSync(`pkill -f "user-data-dir=${full}" 2>/dev/null`, { stdio: 'ignore' }); } catch (e) {}
         fs.rmSync(full, { recursive: true, force: true });
         binned++;
       } catch (e) {}
@@ -5735,6 +5737,459 @@ async function suiteIsles(base) {
 }
 
 
+/* ═══ THE WORLD RULES — registry coverage, ownership conformance, portals,
+   beams, water. Everything here is driven FROM the registries the parts
+   declare (__WORLD_REG / __PORTALS / __HULLS): the suite enumerates, it
+   never hand-lists world knowledge the game already wrote down. ═══ */
+const PORTAL_SHOTS = path.join(DIR, 'test', 'probes', 'shots-portals');
+/* side points for the portal camera: [ax, az, bx, bz] — A and B a few
+   metres to either side of the threshold, on ground a player can stand on */
+const PORTAL_SIDES = {
+  /* [ax, az, bx, bz, aCamH?, bCamH?] — camera heights above ground for
+     each side's shot (default 1.55, walking eye height; outdoor
+     thresholds read better a little higher and further out) */
+  'grotto-mouth': [30, 121, 30, 144, 2.8, 2.2],
+  'grotto-kelp-plug': [43, 156.5, 51, 160.5],
+  'cedar-door': [1294.6, 203.3, 1300, 210, 2.6],
+  'basin-gap': [1919.5, 1174.5, 1944, 1197, 3.0, 3.0],
+  /* A stays OUT of the stair field: nearer than ~6.6 m to the crack flips
+     stairMode and the gallery stops rendering around the camera */
+  'glyph-door-1': [1976, 1238, 1997.5, 1257, 2.2],
+  'glyph-door-2': [2025, 1283.2, 2033, 1291.8, 2.2, 2.2],
+  'foundry-gate': [-1520, -345.5, -1520, -363, 2.6],
+  'resonance-door': [-1463.5, -433, -1466.5, -439],
+  'stair-crack': [1978.3, 1244.3, 1986.7, 1252.7, 2.2],
+  'stair-out': [2070.3, 1363.8, 2090, 1355, 2.0, 4.2],
+};
+/* worlds for the two portal states: openNow reads intent (the SAVE), the
+   chain answers from derived plugs — both must agree in BOTH states */
+const RULES_SHUT = {
+  ...N2_FLOODED, wallBurned: false, basinOpen: false, glyph1: false, glyph2: false,
+  wyrmDone: false, watchBell: false, stairOpen: false, crownGlint: true,
+  fGlyph1: false, fGlyph2: false, fGlyph3: false, sunArc: false, lampLit: false,
+  boatRefit: true, keelFound: true, moonSeen: true,
+};
+const RULES_OPEN = {
+  ...N2_FLOODED, basinOpen: true, glyph1: true, glyph2: true, wyrmDone: true,
+  watchBell: true, stairOpen: true, crownGlint: true, crownSeen: true,
+  fGlyph1: true, fGlyph2: true, fGlyph3: true, sunArc: true, lampLit: true,
+  boatRefit: true, keelFound: true, moonSeen: true, isleLandfall: true,
+  riverWet: true, q: 12, ph: 3, sky: 3,
+};
+/* in-page registry sweep: coverage + undeclared overlap + ownership
+   conformance, every point taken from a coarse world grid and judged
+   against the owners the parts DECLARED. No hand-kept carve-out list:
+   each owner's own points are checked against ITS authority. */
+const RULES_REG_SRC = `window.__rules = { done: false, err: null, res: null };
+(function () {
+try {
+  const REG = window.__WORLD_REG;
+  const res = { owners: REG.map(r => r.name), pts: 0, walkable: 0, unowned: [],
+    undeclared: [], conf: [], confChecked: 0, worstDh: 0 };
+  const push = (a, s) => { if (a.length < 25) a.push(s); };
+  const over = {};
+  for (const r of REG) over[r.name] = new Set(r.over || []);
+  const pts = [];
+  for (let x = -108; x <= 108; x += 18) for (let z = -108; z <= 184; z += 18) pts.push([x, z]);
+  for (let x = 115; x <= 2175; x += 40) for (let z = -35; z <= 1395; z += 40) pts.push([x, z]);
+  for (let x = -2460; x <= -110; x += 80) for (let z = -1180; z <= 385; z += 80) pts.push([x, z]);
+  for (let x = 1932; x <= 2076; x += 6) for (let z = 1188; z <= 1336; z += 6) pts.push([x, z]);
+  for (let x = -1545; x <= -1420; x += 5) for (let z = -470; z <= -350; z += 5) pts.push([x, z]);
+  for (let x = 1950; x <= 2350; x += 12) for (let z = 1250; z <= 1560; z += 12) pts.push([x, z]);
+  for (const R of ROOMS) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1])
+    pts.push([R.x + dx * 1.1, R.z + dz * 1.1]);
+  for (const [x, z] of pts) {
+    res.pts++;
+    let solid = true;
+    try { solid = worldSolidAt(x, z); } catch (e) {}
+    const inRoom = x > 300 && z < -30 && typeof roomAt === 'function' && roomAt(x, z);
+    if (solid && !inRoom) continue;      // walls own themselves; walkable air is what needs an owner
+    res.walkable++;
+    const own = [];
+    for (const r of REG) { try { if (r.owns(x, z)) own.push(r); } catch (e) {} }
+    const ground = own.filter(r => r.kind === 'ground');
+    if (!ground.length) { push(res.unowned, x + ',' + z); continue; }
+    for (let a = 0; a < own.length; a++) for (let b = a + 1; b < own.length; b++) {
+      const A = own[a].name, B = own[b].name;
+      if (!over[A].has(B) && !over[B].has(A)) push(res.undeclared, A + '+' + B + ' @' + x + ',' + z);
+    }
+    /* conformance: registration order IS wrap order, so the last matching
+       ground owner is the authority the live chain must answer with */
+    const top = ground[ground.length - 1];
+    if (top.ground) {
+      res.confChecked++;
+      const dh = Math.abs(groundH(x, z) - top.ground(x, z));
+      if (dh > 0.05) push(res.conf, top.name + ' @' + x + ',' + z + ' dh=' + dh.toFixed(3));
+      else if (dh > res.worstDh) res.worstDh = dh;
+    }
+  }
+  __rules.res = res;
+} catch (e) { __rules.err = String(e && e.stack || e); }
+__rules.done = true;
+})();`;
+async function rulesPortalTable(api) {
+  return JSON.parse(await api.eval(
+    `JSON.stringify(window.__PORTALS.map(P2 => ({ n: P2.name, x: P2.x, z: P2.z,
+      o: !!P2.openNow(), s: !!worldSolidAt(P2.x, P2.z) })))`));
+}
+async function rulesPortalShots(api, check, state) {
+  fs.mkdirSync(PORTAL_SHOTS, { recursive: true });
+  const table = await rulesPortalTable(api);
+  for (const P2 of table) {
+    const sides = PORTAL_SIDES[P2.n];
+    if (!sides) { check(`rules: portal '${P2.n}' has side points for the camera`, false, 'add it to PORTAL_SIDES'); continue; }
+    for (const [tag, sx, sz, camH] of [['A', sides[0], sides[1], sides[4] || 1.55],
+                                       ['B', sides[2], sides[3], sides[5] || 1.55]]) {
+      /* warp FIRST, then judge standability where the player actually is:
+         the stair's solid answer is 3D (it follows stairMode, which follows
+         the player), so a solid check from far away answers for the wrong
+         world */
+      await api.eval(`__fmDebug.warp(${sx}, ${sz}); P.hearts = P.maxHearts; P.iframes = 900;
+        if (typeof swelterT !== 'undefined') swelterT = 0; 0`);
+      await api.waitTicks(4).catch(() => {});
+      const standable = await api.eval(`!worldSolidAt(P.x, P.z) && Math.hypot(P.x - (${sx}), P.z - (${sz})) < 2`);
+      if (!standable) { console.log(`  (skip ${P2.n}-${tag}-${state}: no player footing on this side in this state)`); continue; }
+      /* freecam, never the follow cam: a 6 m orbit arm buries itself in the
+         wall of every corridor, and even a 2 m pull-back lands inside a
+         junction wall's overhang. The camera stands EXACTLY in the walkable
+         side column at walking-eye height — the one column the world
+         guarantees is open — and the player takes a step toward the
+         threshold so the shot reads as someone at the door. */
+      await api.eval(`(function () {
+        const px = ${P2.x}, pz = ${P2.z}, sx2 = ${sx}, sz2 = ${sz};
+        const d = Math.hypot(px - sx2, pz - sz2) || 1;
+        const wx2 = sx2 + (px - sx2) / d * 1.6, wz2 = sz2 + (pz - sz2) / d * 1.6;
+        if (!worldSolidAt(wx2, wz2)) { P.x = wx2; P.z = wz2; P.fy = groundH(wx2, wz2); }
+        P.heading = Math.atan2(px - P.x, pz - P.z);
+        __fmDebug.cam(sx2, groundH(sx2, sz2) + ${camH}, sz2, px, groundH(px, pz) + 1.2, pz);
+      })(); 0`);
+      await sleep(900);
+      const png = await api.evalShot();
+      await api.eval('__fmDebug.camOff(); 0');
+      const f = path.join(PORTAL_SHOTS, `${P2.n}-${tag}-${state}.png`);
+      fs.writeFileSync(f, png);
+      console.log('  portal shot →', f);
+    }
+  }
+  return table;
+}
+async function suiteRules(base) {
+  const check = gate;    // house vocabulary: these are checks, never anything else
+  /* ── run 1: the SHUT world — registry sweep, portal agreement, mirror beams ── */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    api.evalShot = async () => Buffer.from((await c.send('Page.captureScreenshot', { format: 'png' })).data, 'base64');
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(RULES_SHUT);
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      check('rules: all nine owners registered', (await api.eval('window.__WORLD_REG.length')) >= 9,
+        'owners=' + await api.eval('JSON.stringify(window.__WORLD_REG.map(r => r.name))'));
+      check('rules: portals and hulls registered', (await api.eval('window.__PORTALS.length')) >= 10 &&
+        (await api.eval('window.__HULLS.length')) >= 2,
+        `portals=${await api.eval('window.__PORTALS.length')} hulls=${await api.eval('window.__HULLS.length')}`);
+      /* (a)+(b) the registry sweep — coverage, undeclared overlap, conformance */
+      await api.eval(RULES_REG_SRC + '\n;0');
+      await api.waitFor('__rules.done', 120000, 'registry sweep');
+      const err = await api.eval('__rules.err');
+      check('rules: registry sweep ran clean', !err, String(err).slice(0, 300));
+      const r = JSON.parse(await api.eval('JSON.stringify(__rules.res || {})'));
+      check('rules: coverage — every walkable point has an owner', r.unowned && r.unowned.length === 0,
+        `${r.walkable}/${r.pts} walkable; unowned: ` + (r.unowned || []).slice(0, 6).join(' | '));
+      check('rules: no undeclared overlaps between owners', r.undeclared && r.undeclared.length === 0,
+        (r.undeclared || []).slice(0, 6).join(' | '));
+      check('rules: conformance — the chain answers with the declared owner everywhere',
+        r.conf && r.conf.length === 0,
+        `checked=${r.confChecked} worst=${(r.worstDh || 0).toFixed(4)}m ` + (r.conf || []).slice(0, 6).join(' | '));
+      check('rules: the sweep actually covered the world', r.walkable > 2000, `walkable=${r.walkable}`);
+      /* (c) portal agreement, shut state */
+      const pt = await rulesPortalTable(api);
+      const bad1 = pt.filter(P2 => P2.o === P2.s);
+      check('rules: every portal agrees with the chain (shut world)', bad1.length === 0,
+        bad1.map(P2 => `${P2.n} open=${P2.o} solid=${P2.s}`).join(' | '));
+      check('rules: the invariant sweep reports no portal drift (shut world)',
+        (await api.eval('__invariantSweep(); __invariantReport.portalBad.length')) === 0,
+        await api.eval('JSON.stringify(__invariantReport.portalBad.slice(0, 4))'));
+      await rulesPortalShots(api, check, 'shut');
+      /* (d) beams — a deliberately mis-aimed GROTTO mirror stops at the wall */
+      await api.eval('__fmDebug.warp(24, 143); 0');
+      await api.waitTicks(8);
+      const gb = JSON.parse(await api.eval(`(function () {
+        mirror.angle = mirror.target + 0.5;
+        beamOut.rotation.y = -mirror.angle;
+        beamOut.material.opacity = 0.1; beamOut.visible = true;
+        _grottoBeamT = -1;                     // force a rewrite this call
+        grottoClampBeam();
+        const hit = beamHitDistIn(_grottoBeamOpen, MIRROR_POS.x, MIRROR_POS.z,
+          Math.cos(mirror.angle), Math.sin(mirror.angle), GROTTO_BEAM_L);
+        const far = beamOut.geometry.getAttribute('position').array[6];
+        mirror.angle = mirror.target; beamOut.rotation.y = -mirror.angle;
+        _grottoBeamT = -1; grottoClampBeam();
+        const farAligned = beamOut.geometry.getAttribute('position').array[6];
+        return JSON.stringify({ hit, far, L: GROTTO_BEAM_L, farAligned });
+      })()`));
+      check('rules: mis-aimed grotto beam stops at the chamber wall',
+        gb.far < gb.L - 3 && Math.abs(gb.far - gb.hit) < 1.2,
+        `far=${gb.far.toFixed(1)} hit=${gb.hit.toFixed(1)} L=${gb.L.toFixed(1)}`);
+      check('rules: aimed grotto beam still reaches the kelp wall',
+        gb.farAligned > gb.L - 1.5, `farAligned=${gb.farAligned.toFixed(1)}`);
+      /* the HOLLOW mirror, same law */
+      await api.eval('__fmDebug.warp(1969, 1235); 0');
+      await api.waitTicks(8);
+      const hb = JSON.parse(await api.eval(`(function () {
+        hm1.angle = hm1.target + 0.5;
+        hm1.group.rotation.y = -hm1.angle;
+        const B = _hBeamMeta[0];
+        B.m.visible = true; B.m.material.opacity = 0.1;
+        B.t = -1; hollowClampBeams();
+        const hit = beamHitDistIn(hollowOpenCore, B.px, B.pz,
+          Math.cos(hm1.angle), Math.sin(hm1.angle), B.L);
+        const far = B.m.geometry.getAttribute('position').array[6];
+        hm1.angle = hm1.target; hm1.group.rotation.y = -hm1.angle;
+        B.t = -1; hollowClampBeams();
+        const farAligned = B.m.geometry.getAttribute('position').array[6];
+        return JSON.stringify({ hit, far, L: B.L, farAligned });
+      })()`));
+      check('rules: mis-aimed hollow mirror beam stops at the gallery wall',
+        hb.far < hb.L - 3 && Math.abs(hb.far - hb.hit) < 1.2,
+        `far=${hb.far.toFixed(1)} hit=${hb.hit.toFixed(1)} L=${hb.L.toFixed(1)}`);
+      check('rules: aimed hollow beam still reaches its glyph door',
+        hb.farAligned > hb.L - 1.5, `farAligned=${hb.farAligned.toFixed(1)}`);
+      const bad = api.consoleBad;
+      check('rules: zero console errors (shut world)', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      check('rules shut-world run', false, e.message);
+      await api.shot('rules-shut-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* ── run 2: the OPEN world — agreement, real-input walk-throughs, lamp ── */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    api.evalShot = async () => Buffer.from((await c.send('Page.captureScreenshot', { format: 'png' })).data, 'base64');
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(RULES_OPEN);
+      await api.nav(base + '/?turbo=6');
+      await n2ContinueIn(api);
+      const pt = await rulesPortalTable(api);
+      const bad2 = pt.filter(P2 => P2.o === P2.s);
+      check('rules: every portal agrees with the chain (open world)', bad2.length === 0,
+        bad2.map(P2 => `${P2.n} open=${P2.o} solid=${P2.s}`).join(' | '));
+      /* the periodic sweep really runs during play */
+      await api.waitFor('__fm.sweepRuns >= 2', 40000, 'periodic invariant sweep');
+      check('rules: the invariant sweep runs on its own clock', true,
+        `runs=${await api.eval('__fm.sweepRuns')}`);
+      await rulesPortalShots(api, check, 'open');
+      /* walk-throughs with REAL input — a portal that agrees but cannot be
+         walked is still a wall */
+      await api.installBot('pad');
+      const walk = async (name, wx, wz, tx, tz, tol) => {
+        await api.eval(`__fmDebug.warp(${wx}, ${wz}); P.hearts = P.maxHearts;
+          if (typeof swelterT !== 'undefined') swelterT = 0; 0`);
+        await api.waitTicks(10);
+        await api.walkTo(tx, tz, tol, 60000);
+        const d = await api.eval(`Math.hypot(__fm.x - (${tx}), __fm.z - (${tz}))`);
+        check(`rules: ${name} is walkable on foot with real input`, d < tol + 1.2, `ended ${d.toFixed(1)}m out`);
+      };
+      await walk('grotto-mouth', 30, 120, 30, 145, 1.6);
+      await walk('cedar-door', 1293.5, 201.5, 1300, 210, 1.4);
+      await walk('glyph-door-1', 1984, 1247, 1998, 1257.5, 1.6);
+      /* the Foundry gate needs the staged waypoints (the isles lesson) */
+      await api.eval('__fmDebug.warp(-1520, -344); P.hearts = P.maxHearts; 0');
+      await api.waitTicks(10);
+      for (const [wx2, wz2] of [[-1520, -351], [-1520, -360], [-1512, -374]]) {
+        await api.eval(`__fmBot.tol = 1.6; __fmBot.target = [${wx2}, ${wz2}]; 0`);
+        await api.waitFor(`Math.hypot(__fm.x-(${wx2}), __fm.z-(${wz2})) < 2.6`, 45000, 'walk ' + wx2 + ',' + wz2).catch(() => {});
+        await api.eval('P.hearts = P.maxHearts; 0');
+      }
+      await api.eval('__fmBot.target = null; 0');
+      check('rules: foundry-gate is walkable on foot with real input',
+        (await api.eval('__fm.inFoundry')) === true,
+        `x=${(await api.eval('__fm.x')).toFixed(0)} z=${(await api.eval('__fm.z')).toFixed(0)}`);
+      await api.eval('__fmBot.release(); 0');
+      /* (d) the LAMP — forced inland, the beam dies on the headland; out to
+         sea it runs its whole length */
+      await api.eval('__fmDebug.warp(44, -34); 0');
+      await api.waitTicks(8);
+      const lb = JSON.parse(await api.eval(`(function () {
+        lampLitNow = true;
+        if (!lampBeam.visible) { lampBeam.visible = true; lampBeamMat.opacity = 0.06; }
+        /* the tower stands inside a rimmed bay: nearly every level bearing
+           meets the rim, and the ONE long line out is the harbour channel.
+           Scan the compass for the longest march, then park the beam's
+           BACK half on it — the front half faces inland and must die on
+           the terrain at exactly the marched distance. */
+        const by = lampBeam.position.y, dy = -LAMP_DROP / LAMP_LEN;
+        let bestA = 0, bestHit = 0;
+        for (let i = 0; i < 96; i++) {
+          const a = i / 96 * Math.PI * 2;
+          const d = beamHitDist(LIGHTHOUSE.x, by, LIGHTHOUSE.z, Math.sin(a), dy, Math.cos(a), LAMP_LEN);
+          if (d > bestHit) { bestHit = d; bestA = a; }
+        }
+        lampSpin = bestA + Math.PI;            // mesh[1] (dir −1) rides the clear bearing
+        lampBeam.rotation.y = lampSpin;
+        for (const B of lampBeams) B.t = -1;
+        lampClampBeams();
+        const inland = Math.abs(lampBeams[0].mesh.geometry.getAttribute('position').array[8]);
+        const seaSide = Math.abs(lampBeams[1].mesh.geometry.getAttribute('position').array[8]);
+        const hitInland = beamHitDist(LIGHTHOUSE.x, by, LIGHTHOUSE.z,
+          Math.sin(lampSpin), dy, Math.cos(lampSpin), LAMP_LEN);
+        return JSON.stringify({ inland, seaSide, hitInland, bestHit, bestA, LEN: LAMP_LEN });
+      })()`));
+      check('rules: lamp beam pointed inland dies on the terrain',
+        lb.inland < lb.LEN - 20 && Math.abs(lb.inland - lb.hitInland) < 2,
+        `inland=${lb.inland.toFixed(0)} hit=${lb.hitInland.toFixed(0)}`);
+      check('rules: lamp beam down the clear bearing runs the marched distance',
+        Math.abs(lb.seaSide - lb.bestHit) < 2 && lb.bestHit > 220,
+        `seaSide=${lb.seaSide.toFixed(0)} bestHit=${lb.bestHit.toFixed(0)} bearing=${lb.bestA.toFixed(2)}`);
+      const bad = api.consoleBad;
+      check('rules: zero console errors (open world)', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      check('rules open-world run', false, e.message);
+      await api.shot('rules-open-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+  /* ── run 3: WATER under LOWFX — the console's own lattice ── */
+  {
+    const { proc, port } = await launchChrome();
+    const c = await pageSession(port);
+    const api = makeApi(c);
+    await api.init(); await api.stubPad();
+    try {
+      await api.seedSave(RULES_OPEN);
+      await api.nav(base + '/?fx=low&turbo=6');
+      await n2ContinueIn(api);
+      /* the BAY plane first: she wakes moored on the flat sheet at WL —
+         sample her liner against it across a few bob cycles */
+      await api.eval(`window.__bayMargin = 99;
+        (function m(n) {
+          if (n <= 0 || !window.__bayMargin) return;
+          const mg = (sailboat.group.position.y + 0.48) - WL;
+          if (mg < window.__bayMargin) window.__bayMargin = mg;
+          requestAnimationFrame(() => m(n - 1));
+        })(160); 0`);
+      await api.waitTicks(200);
+      const bayMargin = await api.eval('(() => { const r = __bayMargin; __bayMargin = 0; return r; })()');
+      check('rules: moored liner clears the flat bay sheet at bob-down',
+        bayMargin > 0.1 && bayMargin < 1.0, `margin=${bayMargin.toFixed(3)}m`);
+      /* moor her at the Kiln Isle anchor, park a forced BIG SET on her */
+      await api.eval(`
+        BOAT.x = -1480; BOAT.z = -253;
+        sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
+        sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z;
+        if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
+        __fmDebug.warp(${FOUNDRY_ANCHOR[0]}, ${FOUNDRY_ANCHOR[1]});
+        P.hearts = P.maxHearts; 0`);
+      await api.waitTicks(20);
+      const amp = await api.eval('swellAmpAt(BOAT.x, BOAT.z)');
+      check('rules: the mooring test spot actually carries swell', amp > 0.2, 'amp=' + amp.toFixed(2));
+      await api.eval(`
+        SET.on = true; SET.nx = 0.94; SET.nz = 0.34; SET.amp = 2.4;
+        SET.c = BOAT.x * SET.nx + BOAT.z * SET.nz;
+        window.__wviol = { n: 0, frames: 0, casts: 0, teeth: 0, worst: -99, inClampMax: -99, hulls: 0 };
+        (function m() {
+          const W = window.__wviol; if (!W) return;
+          W.frames++;
+          SET.on = true; SET.c = BOAT.x * SET.nx + BOAT.z * SET.nz;   // hold the crest on her
+          const liner = sailboat.group.position.y + 0.48;
+          W.hulls = Math.max(W.hulls, _hulN);
+          /* full clamp really covers the LOWFX cell: every vertex within
+             hull.r + WG_CELL sits AT her waterline */
+          const rIn = 4.5 + WG_CELL;
+          for (let i = 0; i < wavePos.length; i += 3) {
+            const d = Math.hypot(wavePos[i] - BOAT.x, wavePos[i + 2] - BOAT.z);
+            if (d < rIn && wavePos[i + 1] > W.inClampMax) W.inClampMax = wavePos[i + 1];
+          }
+          /* the RENDERED surface inside the bilge rect, by raycast */
+          if ((W.frames % 10) === 0 && waveMesh.visible) {
+            const rc = new THREE.Raycaster();
+            for (const [ox, oz] of [[0,0],[1.6,0],[-1.6,0],[0,1.6],[0,-1.6],[1.2,1.2],[-1.2,1.2],[1.2,-1.2],[-1.2,-1.2]]) {
+              rc.set(new THREE.Vector3(BOAT.x + ox, WL + 30, BOAT.z + oz), new THREE.Vector3(0, -1, 0));
+              const hits = rc.intersectObject(waveMesh, false);
+              if (hits.length) {
+                W.casts++;
+                const y = WL + 30 - hits[0].distance;
+                if (y > liner - 0.02) { W.n++; if (y - liner > W.worst) W.worst = y - liner; }
+              }
+            }
+          }
+          /* teeth: the UNCLAMPED sea would be over her liner */
+          const un = WL + (swellRawAt(BOAT.x, BOAT.z, seaClock) + bigSetHeight(BOAT.x, BOAT.z)) * swellAmpAt(BOAT.x, BOAT.z);
+          if (un > liner) W.teeth++;
+          if (W.frames < 260) requestAnimationFrame(m);
+        })(); 0`);
+      await api.waitFor('__wviol && __wviol.frames >= 260', 60000, 'water monitor');
+      const wv = JSON.parse(await api.eval('JSON.stringify(__wviol)'));
+      check('rules: forced big set never surfaces inside the moored hull (LOWFX)',
+        wv.n === 0 && wv.casts > 100, `viol=${wv.n} worst=+${(wv.worst).toFixed(2)}m casts=${wv.casts}`);
+      check('rules: the test has teeth — unclamped sea WOULD breach the liner',
+        wv.teeth > 60, `teeth=${wv.teeth}/${wv.frames}`);
+      check('rules: full clamp covers the LOWFX cell around the hull',
+        wv.inClampMax < (await api.eval('sailboat.group.position.y + 0.1')),
+        `inClampMax=${wv.inClampMax.toFixed(2)} (waterline≈${(await api.eval('sailboat.group.position.y + 0.04')).toFixed(2)})`);
+      check('rules: hull registry drives the grid', wv.hulls >= 1, 'hulls=' + wv.hulls);
+      const calls = await api.eval('__fm.calls'), tris = await api.eval('__fm.tris');
+      check('rules: frame budget holds at the moored isle (LOWFX)', calls <= 80 && tris <= 120000,
+        `calls=${calls} tris=${tris}`);
+      /* ── the SKIFF rides a graded riffle on the true interpolated sheet ── */
+      await api.eval('SET.on = false; 0');
+      const ferry = JSON.parse(await api.eval('JSON.stringify({ x: LANDINGS[1].x, z: LANDINGS[1].z })'));
+      await api.eval(`skiffPlaceAt(${ferry.x}, ${ferry.z}); skiffMoorToBank();
+        const sp = skiffAshoreSpot();
+        __fmDebug.warp(sp ? sp.x : SKF.x + 2.5, sp ? sp.z : SKF.z);
+        P.hearts = P.maxHearts; if (typeof swelterT !== 'undefined') swelterT = 0; 0`);
+      await api.waitTicks(12);
+      await api.installBot('pad');
+      await api.walkTo((await api.eval('SKF.x')), (await api.eval('SKF.z')), 2.4, 30000).catch(() => {});
+      await api.waitFor(`__fm.prompt === 'skiffOn'`, 12000, 'skiff prompt');
+      await tapUntil(api, () => api.tap(0), '__fm.skiffing === true', 8, 'aboard the skiff');
+      check('rules: the skiff boards with real input', true);
+      await api.eval(`window.__sviol = { n: 0, frames: 0, maxDelta: 0, worst: -9, i0: SKF.i, iMin: SKF.i, iMax: SKF.i };
+        (function m() {
+          const W = window.__sviol; if (!W) return;
+          W.frames++;
+          if (P.skiffing) {
+            const wy = riverSurfaceAt(SKF.x, SKF.z);
+            if (wy !== null) {
+              const liner = skiffGrp.position.y + 0.38;
+              if (wy > liner - 0.02) { W.n++; if (wy - liner > W.worst) W.worst = wy - liner; }
+              const dq = Math.abs(wy - RUN[SKF.i].y);
+              if (dq > W.maxDelta) W.maxDelta = dq;
+            }
+            W.iMin = Math.min(W.iMin, SKF.i); W.iMax = Math.max(W.iMax, SKF.i);
+          }
+          requestAnimationFrame(m);
+        })(); 0`);
+      /* ride her downstream through real stations (the current helps) */
+      const down = JSON.parse(await api.eval(
+        'JSON.stringify({ x: RUN[Math.max(2, SKF.i - 40)].x, z: RUN[Math.max(2, SKF.i - 40)].z })'));
+      await api.eval(`__fmBot.tol = 3.0; __fmBot.target = [${down.x}, ${down.z}]; 0`);
+      await api.waitFor(`__fmBot.done || Math.abs(__sviol.iMin - __sviol.i0) > 34`, 90000, 'downstream run').catch(() => {});
+      await api.eval('__fmBot.release(); 0');
+      const sv = JSON.parse(await api.eval('(() => { const r = JSON.stringify(__sviol); __sviol = undefined; return r; })()'));
+      check('rules: the river never surfaces inside the skiff on a graded run',
+        sv.n === 0 && (sv.i0 - sv.iMin) > 20,
+        `viol=${sv.n} worst=+${sv.worst.toFixed(3)}m stations=${sv.i0 - sv.iMin}`);
+      check('rules: the skiff rides the INTERPOLATED sheet, not a quantized station',
+        sv.maxDelta > 0.004 && sv.maxDelta < 0.6, `maxDelta=${sv.maxDelta.toFixed(3)}m`);
+      const bad = api.consoleBad;
+      check('rules: zero console errors (water, LOWFX)', bad.length === 0, bad.slice(0, 3).join(' | '));
+    } catch (e) {
+      check('rules water run', false, e.message);
+      await api.shot('rules-water-FAIL').catch(() => {});
+    }
+    c.close(); proc.kill();
+  }
+}
+const FOUNDRY_ANCHOR = [-1520, -350.4];
+
 /* ═══ JOURNEYS: the blind spots the review found — real input, one session ═══ */
 async function suiteJourneys(base) {
   /* 1. RESUME WHERE YOU STOOD (lastPos had zero coverage; every fixture
@@ -5855,6 +6310,7 @@ try {
   if (wants('sail')) await suiteSail(base);
   if (wants('n2shots')) await suiteN2Shots(base);
   if (wants('isles')) await suiteIsles(base);
+  if (wants('rules')) await suiteRules(base);
   if (wants('journeys')) await suiteJourneys(base);
 } finally {
   srv.close();

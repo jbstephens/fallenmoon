@@ -113,31 +113,44 @@ const lampRoom = {
    turning about the tower, cheap enough to leave on forever: no shadow map,
    no light, just geometry that sweeps. Drawn from the real lamp height on
    the real tower so it lines up from the bay AND from the isles. */
+const LAMP_LEN = 300, LAMP_W0 = 0.35, LAMP_W1 = 4.6, LAMP_DROP = 5.5;
+let lampBeamMat = null, lampBeams = null, lampClampF = 0;
 (function buildLampBeam() {
   const bx = LIGHTHOUSE.x, bz = LIGHTHOUSE.z;
   const by = groundH(bx, bz) - 0.3 + 8.95;
-  const md = MD();
   /* A LIGHTHOUSE BEAM, NOT A LASER BAR. The first cut was 620m long and 26m
      wide at the far end, additive and bright — from the shore it read as a
      solid glowing girder lying across the horizon. What sells a beam is a
      NARROW shaft that fades out long before it ends, tilted down onto the
      water, faint enough to be atmosphere. Two wedges crossed in an X so it
-     reads from any bearing without a cone's triangles. */
-  const LEN = 300, W0 = 0.35, W1 = 4.6, DROP = 5.5;
+     reads from any bearing without a cone's triangles.
+     RULE 3 — light is occluded by the world: each direction is its OWN
+     mesh, and its far verts are pulled in to beamHitDist against the live
+     terrain every few frames (rewritten in place — scale.z would distort
+     the 5.5 m drop), so the inland half of the sweep dies on the headland
+     instead of lancing through it. */
+  const LEN = LAMP_LEN, W0 = LAMP_W0, W1 = LAMP_W1, DROP = LAMP_DROP;
+  lampBeamMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.0,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
+    side: THREE.DoubleSide,
+  });
+  lampBeam = new THREE.Group();
+  lampBeams = [];
   for (const dir of [1, -1]) {
+    const md = MD();
     const near = [1.0, 0.95, 0.78], far = [1.0, 0.88, 0.55];
     const fz = LEN * dir, fy = -DROP;
     // horizontal blade
     pushQuad(md, [-W0, 0, 0], [W0, 0, 0], [W1, fy, fz], [-W1, fy, fz], near, far);
     // vertical blade
     pushQuad(md, [0, -W0, 0], [0, W0, 0], [0, fy + W1 * 0.6, fz], [0, fy - W1 * 0.6, fz], near, far);
+    const m = mdMesh(md, lampBeamMat, false);
+    m.renderOrder = 4;
+    m.frustumCulled = false;
+    lampBeam.add(m);
+    lampBeams.push({ mesh: m, dir, t: 1 });
   }
-  lampBeam = mdMesh(md, new THREE.MeshBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 0.0,
-    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
-    side: THREE.DoubleSide,
-  }), false);
-  lampBeam.renderOrder = 4;
   lampBeam.position.set(bx, by, bz);
   lampBeam.frustumCulled = false;
   lampBeam.visible = false;
@@ -154,6 +167,40 @@ const lampRoom = {
   lampGlowMesh.visible = false;
   scene.add(lampGlowMesh);
 })();
+
+/* Rule 3: pull one direction's far verts in to a clamped fraction t of the
+   full length. The wedge is 2 quads = 4 tris; each quad's far verts sit at
+   soup slots 2,4 (c twice) and 5 (d). The drop and the taper both scale
+   with t so the centreline's slope — and therefore the hit distance the
+   march computed against it — stays true. */
+function lampSetBeamFar(B, t) {
+  if (Math.abs(t - B.t) < 0.01) return;
+  B.t = t;
+  const a = B.mesh.geometry.getAttribute('position');
+  const p = a.array;
+  const fz = LAMP_LEN * t * B.dir, fy = -LAMP_DROP * t;
+  const w = LAMP_W0 + (LAMP_W1 - LAMP_W0) * t;
+  // horizontal blade: c = (±w, fy, fz)
+  p[6] = w; p[7] = fy; p[8] = fz;
+  p[12] = w; p[13] = fy; p[14] = fz;
+  p[15] = -w; p[16] = fy; p[17] = fz;
+  // vertical blade: c/d = (0, fy ± w·0.6, fz)
+  p[24] = 0; p[25] = fy + w * 0.6; p[26] = fz;
+  p[30] = 0; p[31] = fy + w * 0.6; p[32] = fz;
+  p[33] = 0; p[34] = fy - w * 0.6; p[35] = fz;
+  a.needsUpdate = true;
+}
+function lampClampBeams() {
+  const bx = LIGHTHOUSE.x, bz = LIGHTHOUSE.z;
+  const by = lampBeam.position.y;
+  const dy = -LAMP_DROP / LAMP_LEN;
+  for (let i = 0; i < lampBeams.length; i++) {
+    const B = lampBeams[i];
+    const dx = Math.sin(lampSpin) * B.dir, dz = Math.cos(lampSpin) * B.dir;
+    const hit = beamHitDist(bx, by, bz, dx, dy, dz, LAMP_LEN);
+    lampSetBeamFar(B, Math.max(0.04, Math.min(1, hit / LAMP_LEN)));
+  }
+}
 
 function lampSunk() {   // 0 at noon, 1 at the bottom of the gold hour
   try { if (typeof fSunK === 'number') return clamp(fSunK, 0, 1); } catch (e) {}
@@ -271,8 +318,10 @@ cullChunks = function (ccx, ccz) {
   if (lampBeam) {
     lampSpin += 0.0065;                                    // ~6s a revolution
     lampBeam.rotation.y = lampSpin;
-    lampBeam.material.opacity = want * 0.17;   // atmosphere, not a bar
+    lampBeamMat.opacity = want * 0.17;         // atmosphere, not a bar
     lampBeam.visible = lit && want > 0.02;
+    // Rule 3: re-march both directions against the terrain every ~6 frames
+    if (lampBeam.visible && (++lampClampF % 6) === 0) lampClampBeams();
   }
   if (lampGlowMesh) {
     lampGlowMesh.material.opacity = lit ? 0.35 + 0.4 * lampSunk() : 0;
@@ -285,7 +334,7 @@ cullChunks = function (ccx, ccz) {
 window.__worldStateHooks.push(function (S) {
   lampLitNow = !!S.lampLit;
   lampFlare = lampLitNow ? 1 : 0;
-  if (lampBeam) { lampBeam.visible = false; lampBeam.material.opacity = 0; }
+  if (lampBeam) { lampBeam.visible = false; lampBeamMat.opacity = 0; }
   if (lampGlowMesh) { lampGlowMesh.visible = false; lampGlowMesh.material.opacity = 0; }
   if (lampRoom.glow) lampRoom.glow.material.opacity = 0;
 });
@@ -311,7 +360,8 @@ function extendLampDebugOnce() {
   d.lampInfo = function () {
     return { lit: !!(SAVE && SAVE.lampLit), stairs: lampStairsOpen(),
       beam: !!(lampBeam && lampBeam.visible),
-      opacity: lampBeam ? +lampBeam.material.opacity.toFixed(3) : null,
+      opacity: lampBeamMat ? +lampBeamMat.opacity.toFixed(3) : null,
+      beamT: lampBeams ? lampBeams.map(b => +b.t.toFixed(3)) : null,
       sunk: +lampSunk().toFixed(3) };
   };
 }
