@@ -120,12 +120,15 @@ gate((await api.eval('__fm.quest')) === 13, 'quest 13: FOLLOW THE GOLD LIGHT', '
 gate((await api.eval(`document.getElementById('questLine').textContent`)) === 'FOLLOW THE GOLD LIGHT',
   'and the banner says so');
 
-/* ── the compass now points at the crack, not the tower ── */
+/* ── the compass hands you on BY THE DOOR: from the tower it points at
+      the falls, not through the mountain at the crack (staged objectives —
+      the beeline walked the family into the throat's flank, 8/18) ── */
 {
   const ob = await jget('({b:__fm.objBearing, d:__fm.objDist})');
-  const want = Math.atan2(1978 - (await api.eval('__fm.x')), 1243 - (await api.eval('__fm.z')));
+  const bs = await jget('({x:BASIN.x, z:BASIN.z})');
+  const want = Math.atan2(bs.x - (await api.eval('__fm.x')), bs.z - (await api.eval('__fm.z')));
   gate(Math.abs(((ob.b - want + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < 0.15,
-    'the compass hands you on to the Hollow’s upper gallery', JSON.stringify(ob));
+    'the compass points at the falls door first', JSON.stringify(ob));
 }
 
 /* ── THE WARDEN gains her line ── */
@@ -145,6 +148,11 @@ for (let i = 0; i < 8 && (await api.eval(`__fm.state === 'dialog'`)); i++) { awa
 /* ── the crack answers now ── */
 await api.eval('__fmDebug.warpCrown("crack"); 0');
 await api.waitTicks(20);
+{
+  const ob = await jget('({b:__fm.objBearing, d:__fm.objDist})');
+  gate(ob.d !== null && ob.d < 12,
+    'and INSIDE the gallery it points at the crack itself', JSON.stringify(ob));
+}
 gate((await api.eval('__fm.prompt')) === 'stairCrack', 'NOW the crack offers ✕ LOOK',
   'prompt=' + await api.eval('__fm.prompt'));
 /* the gallery's hornet nest is right here: a press taken while stunned
@@ -164,6 +172,10 @@ await api.shot('world-2-crack');
 
 /* ── the compass leads UP the stair, landing by landing ── */
 {
+  /* from INSIDE the stair: outside it, staged objectives answer the door
+     (pointing at a vent through rock is the throat-flank bug again) */
+  await api.eval('__fmDebug.warpStair(1); 0');
+  await api.waitTicks(15);
   const p1 = await jget('({b:__fm.objBearing})');
   await api.eval('SAVE.organ1 = true; SAVE.organ2 = true; storeSave(); applyWorldState(); 0');
   await api.waitTicks(10);
@@ -171,6 +183,8 @@ await api.shot('world-2-crack');
   gate(p1.b !== null && p3.b !== null && Math.abs(p1.b - p3.b) > 0.05,
     'the compass follows the climb: it moves on as each landing sings');
   await api.eval('SAVE.organ1 = false; SAVE.organ2 = false; storeSave(); applyWorldState(); 0');
+  await api.eval('__fmDebug.warpCrown("crack"); 0');
+  await api.waitTicks(15);
 }
 
 /* ── RESUME: quit on the Crown, come back to the Crown ──
