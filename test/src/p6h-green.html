@@ -2135,7 +2135,10 @@ animateWick = function (dtv, now) {
 /* the compass */
 const _crownObjPoint = objectivePoint;
 objectivePoint = function () {
-  if (SAVE && QUEST.q === 16) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+  /* q16 is OWNED by p6g's staged chain (garden pads -> stair door ->
+     gallery -> falls door -> the wheel). Answering the wheel here,
+     outermost and unconditionally, pointed the carry home straight over
+     the crag (John, live, 8/19 — the compass must follow paths). */
   if (SAVE && QUEST.q >= 17) return null;
   return _crownObjPoint();
 };
