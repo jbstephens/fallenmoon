@@ -2291,6 +2291,15 @@ function tickSailing() {
       else { nx = B.x; nz = B.z; B.stuckT = (B.stuckT || 0) + (tgt > 1 ? 1 : 0); }
       B.spd *= 0.86;
       if (B.spd > 1.5 && (simTick % 14) === 0) SFX.splashSm();
+      /* the stop must SAY so (house rule: instructive, rate-limited): a
+         whole shoreline of silent grounding read as an invisible wall */
+      if (tgt > 1) {
+        B.shoalCapT = (B.shoalCapT || 0) + 1;
+        if (B.shoalCapT === 40 && (!B.shoalCapCd || simTick > B.shoalCapCd)) {
+          showCaption('Shallows — she needs deeper water under her keel.', 3200);
+          B.shoalCapCd = simTick + 60 * 30;   // at most twice a minute
+        }
+      } else B.shoalCapT = 0;
       /* NEVER STRANDED AGROUND. In a shallow pocket — John found one between
          a sandbar and the spire ring — every heading grounds, speed sheds to
          nothing each tick, and no amount of steering rebuilds steerage: a
