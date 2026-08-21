@@ -24,7 +24,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P4-RULES-3';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-P5-MIRROR-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ───────────────────────── math utils ───────────────────────── */
@@ -543,6 +543,20 @@ function defaultSave() {
     riverWet: false,          // THE SILVERRUN RUNS — derived world, both ways
     skiffX: null, skiffZ: null,   // where the skiff is tied up
     tbc4Seen: false,
+    /* PHASE 5 — THE RIVER'S MOUTH & THE NIGHT MARKET */
+    sluiceG: 0,               // sluice gates opened in time with the river (0-3)
+    mouthOpen: false,         // the Silverrun reaches the bay — the mouth is open
+    swingKeel: false,         // refit: the keel pivots — her draft halves in shallows
+    paddleWheel: false,       // refit: the wound stern wheel — HOLD ○ churns it
+    poleFound: false,         // the ferry pole rides the skiff (p6j)
+    braziers: [false, false, false, false, false],   // the eddy braziers, lit (p6j)
+    marketOpen: false,        // the night market berthed at the ferry landing (p6j)
+    sliver5: false,           // the fifth sliver, given at the lantern ceremony (p6j)
+    pennant: 0,               // skiff pennant colour, 0 = none (p6j)
+    spyglass: false,          // the spyglass bought (p6j)
+    fireworks: 0,             // firework charges aboard the skiff (p6j)
+    marketHeart: false,       // the market heart container (p6j)
+    tbc5Seen: false,
     tbc2Seen: false, tbc3Seen: false,   // end cards shown once each
     lastPos: null,            // where you ACTUALLY were — what CONTINUE resumes to
     lastShade: [8.2, 7.0],    // the SUNSTRUCK respawn anchor, and only that
@@ -591,6 +605,11 @@ function loadSave() {
     if (out.crownSeen) qMin = Math.max(qMin, 15);
     if (out.stagDone) qMin = Math.max(qMin, 15);  // pickup beat preserved (tortoise lesson)
     if (out.sky >= 4 || out.ph >= 4) qMin = Math.max(qMin, 17);
+    /* phase 5 */
+    out.sluiceG = clamp(out.sluiceG | 0, 0, 3);
+    if (out.mouthOpen) { out.sluiceG = 3; qMin = Math.max(qMin, 19); }
+    if (out.marketOpen) qMin = Math.max(qMin, 21);
+    if (out.sky >= 5 || out.ph >= 5) qMin = Math.max(qMin, 22);
     if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }

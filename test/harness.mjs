@@ -3930,6 +3930,10 @@ try {
         sx = cx + Math.sign(x - cx || 1) * 1e-4;
         sz = cz + Math.sign(z - cz || 1) * 1e-4;
       }
+      /* the river-mouth corridor (p6i) re-owns ground on BOTH lattices;
+         inside it the live chain IS the rendered truth (the sheets were
+         cut onto the same fields in place) */
+      if (window.__mouthGroundQ && window.__mouthGroundQ(sx, sz)) return groundH(sx, sz);
       return isForest(x, z) ? forestHMesh(sx, sz) : groundH(sx, sz);
     };
     for (const [cxx, czz, ry] of cellCorners(x, z)) {
@@ -4125,6 +4129,19 @@ async function suiteTrees(base) {
         if (!ch || !ch.mesh) { res.collMiss++; continue; }
         const p = ch.mesh.geometry.getAttribute('position');
         const col = ch.mesh.geometry.getAttribute('color');
+        /* a PARKED prop (p6h surgery: triangles collapsed to a point —
+           the market clearing) renders nothing: nothing to sit, collide
+           or shade. Detect the collapse and skip. */
+        {
+          /* parking collapses each TRIANGLE to its own point — test
+             zero-area per triangle, not one global point */
+          let collapsed = true;
+          for (let v = t.v0; v + 2 < t.vTrunk && collapsed; v += 3) {
+            if (p.getX(v) !== p.getX(v + 1) || p.getY(v) !== p.getY(v + 1) || p.getZ(v) !== p.getZ(v + 1) ||
+                p.getX(v) !== p.getX(v + 2) || p.getY(v) !== p.getY(v + 2) || p.getZ(v) !== p.getZ(v + 2)) collapsed = false;
+          }
+          if (collapsed) continue;
+        }
         let minY = 1e9;
         for (let v = t.v0; v < t.vTrunk; v++) {
           if (col.getZ(v) > col.getX(v) + 0.02) res.blueVerts++;   // warm-bark hue band: B never dominates R
@@ -5794,6 +5811,14 @@ const PORTAL_SIDES = {
   'resonance-door': [-1463.5, -433, -1466.5, -439],
   'stair-crack': [1978.3, 1244.3, 1986.7, 1252.7, 2.2],
   'stair-out': [2070.3, 1363.8, 2090, 1355, 2.0, 4.2],
+  /* the sluice gates (p6i): A upstream berm, B downstream bed — dry
+     footing in both states */
+  'sluice-gate-1': [270.3, 61.5, 259.4, 48.4, 2.4, 2.4],
+  'sluice-gate-2': [254.4, 49.5, 245.6, 41.4, 2.4, 2.4],
+  'sluice-gate-3': [231.5, 45.3, 220.2, 35.7, 2.4, 2.4],
+  /* the night market's gate (p6j): A the downstream shore path, B inside
+     the stall row — both on the dry bank */
+  'market-gate': [1367.3, 591.3, 1350.2, 584.8, 2.4, 2.4],
 };
 /* worlds for the two portal states: openNow reads intent (the SAVE), the
    chain answers from derived plugs — both must agree in BOTH states */
@@ -5809,6 +5834,7 @@ const RULES_OPEN = {
   fGlyph1: true, fGlyph2: true, fGlyph3: true, sunArc: true, lampLit: true,
   boatRefit: true, keelFound: true, moonSeen: true, isleLandfall: true,
   riverWet: true, q: 12, ph: 3, sky: 3,
+  sluiceG: 3, mouthOpen: true,
 };
 /* in-page registry sweep: coverage + undeclared overlap + ownership
    conformance, every point taken from a coarse world grid and judged

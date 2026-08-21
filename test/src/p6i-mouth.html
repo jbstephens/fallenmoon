@@ -1,0 +1,1940 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PHASE 5, PART ONE — THE RIVER'S MOUTH (p6i-mouth)
+
+   Owns: the SLUICE (three ancient gates opened IN TIME with the river's
+   surge — the bell/organ lineage: keep time with the river, no text),
+   THE RIVER FALLS cinematic, the RAPIDS terrain + water connecting the
+   Silverrun's dead end to the bay, the carved bay channel + MOUTH POOL,
+   and the boat REFIT MECHANICS (swing keel + stern paddlewheel — the
+   flags are p6j's story beat; the physics and the metal are here).
+
+   Concatenated AFTER p6h-green.html: RUN / runNear / riverSurfaceAt /
+   riverDepthAt / riverWet / LANDINGS / FORDS are in scope, as are the
+   boat (BOAT / tickSailing / poseBoatOnSwell / waterDepthAt) and every
+   earlier authority. p6j-night loads after this file and consumes ONLY
+   the interface below, by feature detection.
+
+   ── INTERFACE (consumed by p6j; stable) ──────────────────────────────
+   SLUICE               {x,z}         where p6h's river dies (surface 4.77)
+   S_GATES              [{x,z,need}]  the three gates, river → bay order
+   MOUTH_POOL           {x,z,r}       the rapids' mouth pool in the bay
+   ANCHORAGE            {x,z}         deep-bay flotilla wait (depth ≥ 2m,
+                                      nothing registered there)
+   FIRST_FORD_D         150           p6h run-distance of the boat's limit
+   window.__mouthOpenNow()            true once the river runs to the bay
+   window.__lowerRiverAt(x,z)         water surface y of the lower river
+                                      (sluice reaches, rapids, pool,
+                                      carved channel) or null
+   window.__lowerRiverDepth(x,z)      depth ≥ 0 of that water (0 = dry)
+   window.__riverSpineLower           ordered [{x,z,y}] SLUICE → … →
+                                      MOUTH_POOL → bay
+   window.__sluicePulseK()            the river's pulse, 0..1 (1 = surge
+                                      window open; period 4 s, window
+                                      1.3 s) — p6j keeps this time
+   window.__refitCine5()              plays the refit beat; SETS
+                                      swingKeel + paddleWheel itself
+                                      (idempotent) and applies them live
+   window.__mouthGroundQ(x,z)         true where this part owns ground
+                                      (harness sweep consults it)
+   Save flags owned here (p2-core): mouthOpen, sluiceG (0-3), swingKeel,
+   paddleWheel  (+ the rest of the phase-5 schema for p6j: poleFound,
+   braziers[], marketOpen, sliver5, pennant, spyglass, fireworks,
+   marketHeart, tbc5Seen).
+   Quest staging owned here: q18 (→ ANCHORAGE via the shore path) and
+   q19 (→ the next gate via the pass path). q20-22 pass through to p6j.
+   ─────────────────────────────────────────────────────────────────────── */
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
+
+/* ── pinned geography (authoritative; p6j mirrors these) ── */
+const SLUICE = { x: 269, z: 62 };            // p6h's river dies here (4.77 m)
+const MOUTH_POOL = { x: 118, z: 40, r: 14 };
+const ANCHORAGE = { x: 70, z: 30 };
+const FIRST_FORD_D = 150;                    // p6h run-distance; FORDS[0]
+
+/* ── the LOWER RIVER SPINE — authored nodes, SLUICE → bay ──
+   zone: head (the river standing against gate 1) · r1/r2 (the built
+   sluice reaches, berm-banked) · rap (the stepped white-water descent)
+   · glide (the wadeable bar the walk route crosses — depth ~0.5, which
+   is exactly why the SWING KEEL exists) · pool · chan (carved bay
+   channel, joins the bay ≥ 1.3 m deep). Surfaces drop 4.77 → −0.55:
+   the pinned 5.3 m over ~170 m. */
+const LRN = [
+  { x: 268.9, z: 61.6, y: 4.77, zone: 'head' },
+  { x: 266.5, z: 57.0, y: 4.77, zone: 'head' },   // ← GATE 1 (the head wall)
+  { x: 261.5, z: 51.0, y: 3.20, zone: 'r1' },
+  { x: 256.0, z: 47.5, y: 3.20, zone: 'r1' },
+  { x: 250.0, z: 45.0, y: 3.20, zone: 'r1' },     // ← GATE 2
+  { x: 243.0, z: 43.2, y: 2.35, zone: 'r2' },
+  { x: 236.0, z: 41.0, y: 2.35, zone: 'r2' },
+  { x: 226.0, z: 40.4, y: 2.35, zone: 'r2' },     // ← GATE 3
+  { x: 217.0, z: 39.6, y: 1.70, zone: 'rap' },
+  { x: 209.0, z: 39.0, y: 1.32, zone: 'rap' },
+  { x: 197.0, z: 37.6, y: 0.98, zone: 'rap' },
+  { x: 184.5, z: 36.4, y: 0.60, zone: 'rap' },    // the pine narrows
+  { x: 172.0, z: 35.3, y: 0.30, zone: 'rap' },
+  { x: 159.0, z: 35.1, y: 0.02, zone: 'rap' },
+  { x: 147.0, z: 36.3, y: -0.28, zone: 'glide' },
+  { x: 137.0, z: 37.9, y: -0.44, zone: 'glide' },
+  { x: 128.0, z: 39.3, y: -0.55, zone: 'glide' },
+  { x: 118.0, z: 45.5, y: -0.55, zone: 'pool' },
+  { x: 107.0, z: 41.3, y: -0.55, zone: 'chan' },
+  { x: 97.0, z: 41.3, y: -0.55, zone: 'chan' },
+  { x: 87.0, z: 40.3, y: -0.55, zone: 'chan' },
+];
+const LR_GATE_I = [1, 4, 7];                 // node index of each gate
+/* arc-length + per-node frames */
+(function lrFrames() {
+  let s = 0;
+  for (let i = 0; i < LRN.length; i++) {
+    const a = LRN[i], b = LRN[Math.min(i + 1, LRN.length - 1)];
+    const p = LRN[Math.max(i - 1, 0)];
+    let fx = b.x - p.x, fz = b.z - p.z;
+    const L = Math.hypot(fx, fz) || 1;
+    a.fx = fx / L; a.fz = fz / L;            // bayward (downstream) +
+    a.nx = -a.fz; a.nz = a.fx;               // left-hand perp
+    a.s = s;
+    if (i < LRN.length - 1) s += Math.hypot(b.x - a.x, b.z - a.z);
+  }
+})();
+const LR_LEN = LRN[LRN.length - 1].s;
+const S_GATES = LR_GATE_I.map((gi, k) => {
+  const n = LRN[gi];
+  return { x: n.x, z: n.z, s: n.s, i: gi, need: k + 1,
+           fx: n.fx, fz: n.fz, nx: n.nx, nz: n.nz,
+           hi: n.y, lo: LRN[gi + 1].y };
+});
+/* zone widths: [flat-bottom half, wetted half, carve-blend half] */
+const LR_W = {
+  head: [3.4, 5.2, 0],       // no carve under the standing river
+  r1: [2.6, 4.0, 6.6], r2: [2.6, 4.0, 6.6],
+  rap: [3.0, 4.2, 7.0],
+  glide: [4.5, 6.0, 9.0],
+  pool: [0, 0, 0],           // the pool carves as its own disc
+  chan: [3.2, 5.0, 8.0],
+};
+const LR_NAVD = { head: 0, r1: 1.15, r2: 1.1, rap: 0.95, glide: 0.5, pool: 0, chan: 1.6 };
+
+/* nearest point on the spine: {i, t, d (unsigned), off (signed), s, surf} */
+function lrNear(x, z) {
+  let bi = 0, bt = 0, bd2 = 1e18;
+  for (let i = 0; i < LRN.length - 1; i++) {
+    const a = LRN[i], b = LRN[i + 1];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const L2 = dx * dx + dz * dz || 1;
+    const t = clamp(((x - a.x) * dx + (z - a.z) * dz) / L2, 0, 1);
+    const px = a.x + dx * t, pz = a.z + dz * t;
+    const d2 = (x - px) * (x - px) + (z - pz) * (z - pz);
+    if (d2 < bd2) { bd2 = d2; bi = i; bt = t; }
+  }
+  const a = LRN[bi], b = LRN[bi + 1];
+  const segL = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+  const px = a.x + (b.x - a.x) * bt, pz = a.z + (b.z - a.z) * bt;
+  const fx = (b.x - a.x) / segL, fz = (b.z - a.z) / segL;
+  const off = (x - px) * -fz + (z - pz) * fx;
+  return { i: bi, t: bt, d: Math.sqrt(bd2), off,
+           s: a.s + segL * bt, surf: lerp(a.y, b.y, bt),
+           zone: bt < 0.5 ? a.zone : b.zone, fx, fz, px, pz };
+}
+function lrZoneW(zone) { return LR_W[zone] || LR_W.rap; }
+
+/* ── the coarse near-mask (the groundH wrap must reject cheaply) ── */
+const MOM_X0 = 80, MOM_Z0 = 18, MOM_S = 4;
+const MOM_W = Math.ceil((284 - MOM_X0) / MOM_S), MOM_H = Math.ceil((78 - MOM_Z0) / MOM_S);
+const MOMASK = new Uint8Array(MOM_W * MOM_H);
+function mouthNearQ(x, z) {
+  if (x < MOM_X0 || z < MOM_Z0) return false;
+  const ix = (x - MOM_X0) / MOM_S | 0, iz = (z - MOM_Z0) / MOM_S | 0;
+  if (ix >= MOM_W || iz >= MOM_H) return false;
+  return MOMASK[iz * MOM_W + ix] === 1;
+}
+window.__mouthGroundQ = mouthNearQ;
+window.__mouthCorridorQ = mouthNearQ;
+
+/* ── the CARVE — one analytic pass over the pre-existing chain ──
+   Lowers a bed under the authored surfaces, raises the sluice berms and
+   the head wall, digs the pool bowl (deep north lane, wadeable south
+   shelf — the foot road to the forest crosses there) and the bay
+   channel. Where it does nothing it returns base EXACTLY, so the two
+   lattice fields below equal the pre-existing fields outside it. */
+const _moGroundH = groundH;                  // the pre-phase-5 chain
+/* per-node carve deepening, tuned by MEASUREMENT below: the lattice
+   under-carves a narrow profile wherever its nearest vertex falls on the
+   wall slope, so the analytic target is deepened until the INTERPOLATED
+   lane actually holds the water the zone promises */
+const LR_BOOST = new Float32Array(LRN.length);
+function moPoolDepth(x, z) {
+  /* deep lane north (z ≥ 41), shelf south (z ≤ 36.5); never carved
+     north of z 51 (the pass wall owns z > 53) */
+  const zz = clamp(z, 24, 51);
+  const k = smoothstep(clamp((zz - 38) / 10, 0, 1));
+  return lerp(0.35, 2.3, k);
+}
+function moCarveRaw(x, z, base) {
+  let h = base;
+  /* the pool disc */
+  {
+    const dp = Math.hypot(x - MOUTH_POOL.x, z - MOUTH_POOL.z);
+    if (dp < MOUTH_POOL.r + 3 && z < 51.5) {
+      const w = smoothstep(clamp((MOUTH_POOL.r + 2.5 - dp) / 4.5, 0, 1));
+      const bed = -0.55 - moPoolDepth(x, z);
+      h = lerp(h, Math.min(h, bed), w);
+    }
+  }
+  const r = lrNear(x, z);
+  const zw = lrZoneW(r.zone);
+  const ad = Math.abs(r.off);
+  if (r.zone !== 'head' && r.zone !== 'pool' && zw[2] > 0 && ad < zw[2]) {
+    const boost = Math.max(LR_BOOST[r.i], LR_BOOST[Math.min(r.i + 1, LRN.length - 1)]);
+    const nav = (LR_NAVD[r.zone] || 0.9) + boost;
+    const bed = r.surf - nav;
+    let t;
+    if (ad <= zw[0]) t = 1;
+    else t = 1 - smoothstep((ad - zw[0]) / (zw[2] - zw[0]));
+    h = lerp(h, Math.min(h, bed), t);
+    /* the sluice berms: the raceway rides the pass floor, banked */
+    if (r.zone === 'r1' || r.zone === 'r2') {
+      const bermY = r.surf + (r.zone === 'r1' ? 0.55 : 0.55);
+      if (ad > zw[1] && ad < zw[1] + 2.6) {
+        const bw = Math.sin(Math.PI * clamp((ad - zw[1]) / 2.6, 0, 1));
+        h = Math.max(h, lerp(h, bermY, bw * 0.9));
+      }
+    }
+  }
+  /* THE HEAD WALL: a stone weir across the river's dead-end pool, gate 1
+     in the middle — it is why the pool never poured down the pass, and
+     it is now the dry way across the river head */
+  {
+    const g = S_GATES[0];
+    const alo = (x - g.x) * g.fx + (z - g.z) * g.fz;    // along flow
+    const off = (x - g.x) * g.nx + (z - g.z) * g.nz;
+    const aw = 1 - smoothstep(clamp((Math.abs(alo) - 1.1) / 1.5, 0, 1));
+    if (aw > 0 && Math.abs(off) > 2.3 && Math.abs(off) < 13) {
+      const ow = 1 - smoothstep(clamp((Math.abs(off) - 10.5) / 2.5, 0, 1));
+      h = Math.max(h, lerp(h, 5.3, aw * ow));
+    }
+  }
+  /* the gate notches: through every opening the bed carries the LOWER
+     reach's draft, so a hull crosses the sill instead of striking it */
+  for (let k = 0; k < S_GATES.length; k++) {
+    const g = S_GATES[k];
+    const alo = (x - g.x) * g.fx + (z - g.z) * g.fz;
+    const off = (x - g.x) * g.nx + (z - g.z) * g.nz;
+    if (Math.abs(alo) < 3.0 && Math.abs(off) < 2.3) {
+      const bed = g.lo - 1.05 - LR_BOOST[g.i];
+      const w = (1 - smoothstep(clamp((Math.abs(alo) - 1.2) / 1.8, 0, 1)))
+              * (1 - smoothstep(clamp((Math.abs(off) - 1.4) / 0.9, 0, 1)));
+      h = lerp(h, Math.min(h, bed), w);
+    }
+  }
+  /* THE FOOT ROAD KEEPS ITS CROSSING: the family's walk line bay ↔ pass
+     crosses this water exactly once — over the glide and the pool's
+     south shelf. Whatever the shapes above carved, the walk band wades:
+     bed clamped to half a metre under the LOCAL surface, never deeper. */
+  {
+    let bd = 1e9;
+    for (let i = 0; i < MO_WALK.length - 1; i++) {
+      const a = MO_WALK[i], b = MO_WALK[i + 1];
+      const dx = b[0] - a[0], dz = b[1] - a[1];
+      const L2 = dx * dx + dz * dz || 1;
+      const t = clamp(((x - a[0]) * dx + (z - a[1]) * dz) / L2, 0, 1);
+      const d = Math.hypot(x - (a[0] + dx * t), z - (a[1] + dz * t));
+      if (d < bd) bd = d;
+    }
+    const full = x >= 111 ? 5.0 : 2.6, fade = x >= 111 ? 2.2 : 1.6;
+    if (bd < full + fade) {
+      const w = 1 - smoothstep(clamp((bd - full) / fade, 0, 1));
+      const floor = r.surf - 0.52;
+      h = lerp(h, Math.max(h, floor), w);
+    }
+  }
+  return h;
+}
+const MO_WALK = [[95, 34], [108, 35.2], [120, 36.3], [132, 37.4], [146, 38.6]];
+/* fill the near-mask: a cell is NEAR if the carve could touch it */
+(function bakeMouthMask() {
+  for (let iz = 0; iz < MOM_H; iz++) {
+    for (let ix = 0; ix < MOM_W; ix++) {
+      const x = MOM_X0 + ix * MOM_S + MOM_S / 2, z = MOM_Z0 + iz * MOM_S + MOM_S / 2;
+      const r = lrNear(x, z);
+      const dp = Math.hypot(x - MOUTH_POOL.x, z - MOUTH_POOL.z);
+      if (r.d < 16 || dp < MOUTH_POOL.r + 6) MOMASK[iz * MOM_W + ix] = 1;
+    }
+  }
+})();
+/* the two lattice fields — Brightharbor's lattice west of 110, the
+   forest's east of it: makeMeshField discipline, rendered == physics */
+let moBayField = null, moForestField = null;
+function moRebuildFields() {
+  moBayField = makeMeshField((x, z) => moCarveRaw(x, z, _moGroundH(x, z)),
+    -110, -110, 110, 186, 2.2, BAY_FINE);
+  moForestField = makeMeshField((x, z) => moCarveRaw(x, z, _moGroundH(x, z)),
+    110, -38, 2182, 1402, 8, FOREST_FINE);
+}
+moRebuildFields();
+function mouthGroundAt(x, z) {
+  return x >= 110 ? moForestField(x, z) : moBayField(x, z);
+}
+/* MEASURE, THEN CARVE DEEPER: the lane the water promises is sampled
+   against the interpolated field, and every deficit deepens its nodes'
+   analytic target until the promise measures true. Runs BEFORE the
+   sheets are cut, so rendered == physics == the tuned field. */
+/* the promises the probe asserts: everything ABOVE the glide is
+   swing-keel water (she grounds at 0.28 there), so 0.6-odd is honest;
+   the glide itself is the keel's whole reason (≈ 0.5, wadeable) */
+const LR_LANE_MIN = { r1: 0.7, r2: 0.7, rap: 0.62, glide: 0.45, chan: 1.3 };
+(function tuneLane() {
+  for (let it = 0; it < 18; it++) {
+    let deficits = 0;
+    const add = new Float32Array(LRN.length);      // per-pass deltas ACCUMULATE
+    for (let s = S_GATES[0].s + 3; s < LR_LEN - 2; s += 0.5) {
+      let i = 0;
+      while (i < LRN.length - 2 && LRN[i + 1].s < s) i++;
+      const a = LRN[i], b = LRN[i + 1];
+      const t = clamp((s - a.s) / ((b.s - a.s) || 1), 0, 1);
+      const zone = t < 0.5 ? a.zone : b.zone;
+      const want = LR_LANE_MIN[zone];
+      if (want === undefined) continue;
+      const x = lerp(a.x, b.x, t), z = lerp(a.z, b.z, t);
+      const nx = -(b.z - a.z), nz = b.x - a.x;
+      const nl = Math.hypot(nx, nz) || 1;
+      const surf = lerp(a.y, b.y, t);
+      /* the lane is a boat wide, not a line: sample across it */
+      let dep = 1e9;
+      for (const u of [-1.1, 0, 1.1]) {
+        dep = Math.min(dep, surf - mouthGroundAt(x + nx / nl * u, z + nz / nl * u));
+      }
+      if (dep < want) {
+        const need = (want - dep) + 0.16;
+        add[i] = Math.max(add[i], need);
+        add[i + 1] = Math.max(add[i + 1], need);
+        deficits++;
+      }
+    }
+    if (!deficits) break;
+    for (let i = 0; i < LRN.length; i++) LR_BOOST[i] += add[i];
+    moRebuildFields();
+  }
+})();
+groundH = function (x, z) {
+  if (mouthNearQ(x, z)) return mouthGroundAt(x, z);
+  return _moGroundH(x, z);
+};
+</script>
+<script>
+/* ═══════════ p6i/2 — the carve, cut into the sheets that render it ═══════════
+   p6d's harbour-gap pattern: the ground was finalised long ago, so the
+   channel is cut by moving the rendered sheets' OWN vertices onto the
+   new fields and re-baking their colours. Trees riding the changed
+   ground TRANSLATE with it whole (registry-true: bases stay on groundH,
+   trunks keep colliding, canopies keep shading — the trees suite stays
+   green by construction). */
+/* NEAR-ACHROMATIC on purpose: p6h's re-green relerps every forest ground
+   vertex it snapshots, and it snapshots AFTER this carve — grey (sat <
+   0.055) is what its greenify() leaves untouched. A green riverbed is
+   worse than a grey one. */
+const C_MOBED = col(0x787672), C_MOBED2 = col(0x5c5a57), C_MOWET = col(0x6c6b66),
+      C_MOCUT = col(0x86847e), C_MOCUT2 = col(0xa3a09a), C_MOGRAVEL = col(0x98958e),
+      C_MOSTONE = col(0x8f8d86), C_MOSTONE2 = col(0x6e6c66);
+const _moc = [0, 0, 0], _mbc = [0, 0, 0];
+function moGroundColor(x, z, y) {
+  const n = vnoise(x * 0.11, z * 0.11), n2 = vnoise(x * 0.31 + 5, z * 0.31);
+  const r = lrNear(x, z);
+  const dep = clamp((r.surf - y) / 2.2, 0, 1);
+  mix3(C_MOGRAVEL, C_MOBED, clamp(dep * 1.2 + n * 0.25, 0, 1), _moc);
+  if (dep > 0.4) mix3(_moc, C_MOBED2, clamp((dep - 0.4) * 1.2, 0, 0.8), _moc);
+  const steep = Math.abs(groundH(x + 1.1, z) - groundH(x - 1.1, z)) +
+                Math.abs(groundH(x, z + 1.1) - groundH(x, z - 1.1));
+  if (steep > 1.4) {
+    const band = 0.5 + 0.5 * Math.sin(y * 1.6 + n * 2.4);
+    mix3(_moc, band > 0.55 ? C_MOCUT2 : C_MOCUT, clamp((steep - 1.4) / 2.6, 0, 0.85), _moc);
+  }
+  if (dep < 0.18) mix3(_moc, C_MOWET, 0.3 + n2 * 0.15, _moc);
+  return _moc;
+}
+window.__mouthCarve = { tris: 0, skipped: 0, trees: 0, worst: 0 };
+(function carveMouthCorridor() {
+  const St = window.__mouthCarve;
+  const A = [0, 0, 0], B = [0, 0, 0], C = [0, 0, 0];
+  const inRect = (x, z) => x > MOM_X0 && x < 282 && z > MOM_Z0 && z < 76;
+  /* THE x=110 SEAM: groundH dispatches by coordinate, but the forest
+     sheet's own western column sits at FOREST heights on that exact
+     column, the bay sheet's eastern column at BAY heights, and a stitch
+     skirt bridges the 1.5 m between them. Every vertex is therefore
+     resolved against ITS OWN field (forced off the seam by an epsilon),
+     and skirt vertices — parked BETWEEN the fields — move by their
+     blend fraction, so the stitching survives the carve. */
+  const vertNew = (x, z, y) => {
+    const fx = Math.max(x, 110.01);
+    const oF = _moGroundH(fx, z), nF = moForestField(fx, z);
+    const bx = Math.min(x, 109.99);
+    const oB = _moGroundH(bx, z), nB = moBayField(bx, z);
+    if (Math.abs(y - oF) <= 0.25) return nF;
+    if (Math.abs(y - oB) <= 0.25) return nB;
+    const lo = Math.min(oF, oB), hi = Math.max(oF, oB);
+    if (x < 113 && y > lo - 0.3 && y < hi + 0.3 && hi - lo > 0.05) {
+      const t = clamp((y - oB) / (oF - oB), 0, 1);
+      return lerp(nB, nF, t);
+    }
+    return null;                                    // a prop vertex — untouched
+  };
+  /* tree vertices are OFF LIMITS to the ground pass: a trunk-base ring
+     vertex sits within tolerance of the old field, and moving it with
+     the ground and AGAIN with its tree buries the tree twice over */
+  const moTreeVerts = new Map();
+  for (const t of (window.__fmTreeAudit || [])) {
+    if (!inRect(t.x, t.z)) continue;
+    let m = moTreeVerts.get(t.key);
+    if (!m) { m = []; moTreeVerts.set(t.key, m); }
+    m.push(t.v0, t.v1);
+  }
+  const keyOfChunk = (map, c) => {
+    if (map !== fchunkMap) return null;
+    for (const [k, v] of fchunkMap.entries()) if (v === c) return k;
+    return null;
+  };
+  const doMap = (map) => {
+    for (const c of map.values()) {
+      if (!c.mesh) continue;
+      const g = c.mesh.geometry;
+      const pos = g.attributes.position, colA = g.attributes.color;
+      const key = keyOfChunk(map, c);
+      const ranges = key !== null ? moTreeVerts.get(key) : null;
+      const inTree = (v) => {
+        if (!ranges) return false;
+        for (let i = 0; i < ranges.length; i += 2) if (v >= ranges[i] && v < ranges[i + 1]) return true;
+        return false;
+      };
+      let dirty = false;
+      for (let t = 0; t + 2 < pos.count; t += 3) {
+        if (inTree(t)) continue;
+        let near = false, isGround = true, inR = true;
+        const nys = [0, 0, 0];
+        for (let k = 0; k < 3; k++) {
+          const x = pos.getX(t + k), z = pos.getZ(t + k), y = pos.getY(t + k);
+          if (!inRect(x, z)) { inR = false; break; }
+          if (mouthNearQ(x, z)) near = true;
+          const ny = vertNew(x, z, y);
+          if (ny === null) { isGround = false; break; }
+          nys[k] = ny;
+        }
+        if (!inR || !near) continue;
+        if (!isGround) { St.skipped++; continue; }
+        let changed = false;
+        for (let k = 0; k < 3; k++) {
+          const x = pos.getX(t + k), z = pos.getZ(t + k);
+          const ny = nys[k];
+          const dy = Math.abs(ny - pos.getY(t + k));
+          if (dy > 0.0005) { changed = true; if (dy > St.worst) St.worst = dy; }
+          const dst = k === 0 ? A : k === 1 ? B : C;
+          dst[0] = x; dst[1] = ny; dst[2] = z;
+        }
+        if (!changed) continue;
+        for (let k = 0; k < 3; k++) {
+          const dst = k === 0 ? A : k === 1 ? B : C;
+          pos.setXYZ(t + k, dst[0], dst[1], dst[2]);
+        }
+        const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
+        const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+        let nx = uy * vz - uz * vy, ny2 = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        const l = Math.hypot(nx, ny2, nz) || 1;
+        nx /= l; ny2 /= l; nz /= l;
+        /* SCALAR shade only: bakeCol's deep-shade branch tints blue, and
+           any tint here hands these vertices to the re-green's greenify
+           (it eats everything with sat ≥ 0.055). One grey multiplier keeps
+           the bed a bed forever. */
+        const sh = 0.62 + 0.46 * Math.max(0, nx * SUNDIR[0] + ny2 * SUNDIR[1] + nz * SUNDIR[2]);
+        for (let k = 0; k < 3; k++) {
+          const dst = k === 0 ? A : k === 1 ? B : C;
+          const cc = moGroundColor(dst[0], dst[2], dst[1]);
+          colA.setXYZ(t + k, Math.min(1, cc[0] * sh), Math.min(1, cc[1] * sh), Math.min(1, cc[2] * sh));
+        }
+        St.tris++; dirty = true;
+      }
+      if (dirty) {
+        pos.needsUpdate = true; colA.needsUpdate = true;
+        g.computeBoundingSphere();
+      }
+    }
+  };
+  doMap(chunkMap);
+  doMap(fchunkMap);
+  /* the trees ride their ground: translate each affected tree WHOLE */
+  for (const t of (window.__fmTreeAudit || [])) {
+    if (!inRect(t.x, t.z) || !mouthNearQ(t.x, t.z)) continue;
+    const dy = moForestField(t.x, t.z) - _moGroundH(t.x, t.z);
+    if (Math.abs(dy) < 0.02) continue;
+    const ch = fchunkMap.get(t.key);
+    if (!ch || !ch.mesh) continue;
+    const pos = ch.mesh.geometry.attributes.position;
+    for (let v = t.v0; v < t.v1; v++) pos.setY(v, pos.getY(v) + dy);
+    pos.needsUpdate = true;
+    St.trees++;
+  }
+})();
+</script>
+<script>
+/* ═══════════ p6i/3 — the water of the lower river ═══════════
+   Static authored sheets (Rule 4 is enforced from the vessel side —
+   hulls ride the interpolated surface; no vertex ever moves in y).
+   Flow is a colour modulation over the visible slice, like the
+   Silverrun's own. Sheets and their gating:
+     moWaterHead    the river standing against gate 1     — riverWet
+     moWaterR1/R2   the sluice reaches                    — sluiceG ≥ 1/2
+     moWaterRun     the rapids + glide release            — mouthOpen
+     moWaterTide    pool + channel + bay lip (tide-fed)   — flooded()   */
+const C_LSHOAL = [0.62, 0.78, 0.66], C_LMID = [0.38, 0.66, 0.70], C_LDEEP = [0.20, 0.44, 0.62];
+const C_LFOAM = [0.88, 0.93, 0.94], C_LFOAM2 = [0.74, 0.85, 0.88];
+const _lrc = [0, 0, 0];
+function lrColAt(depth, jitter) {
+  const t = clamp(depth / 2.2, 0, 1);
+  if (t < 0.42) mix3(C_LSHOAL, C_LMID, t / 0.42, _lrc);
+  else mix3(C_LMID, C_LDEEP, (t - 0.42) / 0.58, _lrc);
+  const j = 1 + jitter * 0.06;
+  return [_lrc[0] * j, _lrc[1] * j, _lrc[2] * j];
+}
+function lrWetHalf(i, side) {
+  /* measured against the FINAL ground field, out to where the water is
+     a hand deep — the p6h shoreline law */
+  const n = LRN[i];
+  const w = lrZoneW(n.zone)[1];
+  let best = 1.2;
+  for (let u = 1.2; u <= w + 2.5; u += 0.4) {
+    const gy = groundH(n.x + n.nx * u * side, n.z + n.nz * u * side);
+    if (gy > n.y - 0.14) break;
+    best = u;
+  }
+  return best;
+}
+function moSheet(iA, iB, opts) {
+  const md = MD();
+  const segs = [];
+  const SP = 3;
+  for (let i = iA; i < iB; i++) {
+    const a = LRN[i], b = LRN[i + 1];
+    const v0 = md.p.length / 3;
+    const rows = [a, b];
+    const wl = [lrWetHalf(i, -1), lrWetHalf(i + 1, -1)];
+    const wr = [lrWetHalf(i, 1), lrWetHalf(i + 1, 1)];
+    for (let k = 0; k < SP; k++) {
+      for (let r = 0; r < 1; r++) {
+        const uA0 = -wl[0] + (wl[0] + wr[0]) * (k / SP), uA1 = -wl[0] + (wl[0] + wr[0]) * ((k + 1) / SP);
+        const uB0 = -wl[1] + (wl[1] + wr[1]) * (k / SP), uB1 = -wl[1] + (wl[1] + wr[1]) * ((k + 1) / SP);
+        const node = (n2, u) => {
+          const x = n2.x + n2.nx * u, z = n2.z + n2.nz * u;
+          const gy = groundH(x, z);
+          const dep = n2.y - gy;
+          const y = dep <= 0.05 ? Math.min(n2.y, gy + 0.06) : n2.y;
+          return { p: [x, y + (opts.lift || 0), z], c: lrColAt(Math.max(0, dep), vnoise(x * 0.07, z * 0.07)) };
+        };
+        const A = node(a, uA0), B = node(a, uA1), C = node(b, uB1), D = node(b, uB0);
+        pushQuad(md, A.p, B.p, C.p, D.p, A.c);
+        /* re-colour corners individually (pushQuad takes one colour) */
+        const cA = md.c.length / 3 - 6;
+        const set = (slot, c) => { md.c[(cA + slot) * 3] = c[0]; md.c[(cA + slot) * 3 + 1] = c[1]; md.c[(cA + slot) * 3 + 2] = c[2]; };
+        set(0, A.c); set(1, B.c); set(2, C.c); set(3, A.c); set(4, C.c); set(5, D.c);
+      }
+    }
+    /* foam where the surface drops hard (the chutes) */
+    const grade = (a.y - b.y) / (Math.hypot(b.x - a.x, b.z - a.z) || 1);
+    if (opts.foam && grade > 0.02) {
+      const w = Math.min(wl[0], wr[0]) * 0.8;
+      for (let k = -2; k <= 2; k++) {
+        const u = k * w * 0.4;
+        const t = 0.3 + Math.abs(hash2(i, k)) * 0.4;
+        const x = lerp(a.x, b.x, t) + a.nx * u, z = lerp(a.z, b.z, t) + a.nz * u;
+        const y = lerp(a.y, b.y, t) + 0.05 + (opts.lift || 0);
+        const L = 1.0 + Math.abs(hash2(i, k + 3)) * 1.4, W = 0.4 + Math.abs(hash2(i + 5, k)) * 0.45;
+        pushQuad(md,
+          [x - a.fx * L - a.nx * W, y, z - a.fz * L - a.nz * W],
+          [x - a.fx * L + a.nx * W, y, z - a.fz * L + a.nz * W],
+          [x + a.fx * L + a.nx * W, y, z + a.fz * L + a.nz * W],
+          [x + a.fx * L - a.nx * W, y, z + a.fz * L - a.nz * W],
+          (i + k) % 2 ? C_LFOAM : C_LFOAM2);
+      }
+    }
+    segs.push({ v0, v1: md.p.length / 3, s: a.s, x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 });
+  }
+  const mesh = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false,
+  }), false);
+  mesh.renderOrder = 2;
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+  scene.add(mesh);
+  return { mesh, segs, base: new Float32Array(mesh.geometry.attributes.color.array) };
+}
+const moWaterHead = moSheet(0, 1, { foam: false });
+const moWaterR1 = moSheet(1, 4, { foam: true });
+const moWaterR2 = moSheet(4, 7, { foam: true });
+const moWaterRun = moSheet(7, 17, { foam: true });
+/* the tide sheet: pool bowl + channel, a fan at WL over the carved bed */
+let moWaterTide = null, moTideBase = null;
+(function buildTideSheet() {
+  const md = MD();
+  const wet = (x, z) => groundH(x, z) < WL - 0.04;
+  const STEP = 3;
+  for (let x = 86; x < 136; x += STEP) {
+    for (let z = 24; z < 56; z += STEP) {
+      if (!wet(x + STEP / 2, z + STEP / 2)) continue;
+      const corner = (cx, cz) => {
+        const gy = groundH(cx, cz);
+        const dep = WL - gy;
+        const y = dep <= 0.05 ? Math.min(WL, gy + 0.06) : WL;
+        return { p: [cx, y, cz], c: lrColAt(Math.max(0, dep), vnoise(cx * 0.07, cz * 0.07)) };
+      };
+      const A = corner(x, z), B = corner(x + STEP, z), C = corner(x + STEP, z + STEP), D = corner(x, z + STEP);
+      pushQuad(md, A.p, B.p, C.p, D.p, A.c);
+      const cA = md.c.length / 3 - 6;
+      const set = (slot, c) => { md.c[(cA + slot) * 3] = c[0]; md.c[(cA + slot) * 3 + 1] = c[1]; md.c[(cA + slot) * 3 + 2] = c[2]; };
+      set(0, A.c); set(1, B.c); set(2, C.c); set(3, A.c); set(4, C.c); set(5, D.c);
+      /* a foam rim on every water edge that meets dry ground — the
+         shoreline is what makes still water read as water at night */
+      const edges = [
+        [x + STEP / 2, z - STEP / 2, A.p, B.p], [x + STEP / 2, z + STEP * 1.5, D.p, C.p],
+        [x - STEP / 2, z + STEP / 2, A.p, D.p], [x + STEP * 1.5, z + STEP / 2, B.p, C.p],
+      ];
+      for (const [ex, ez, P0, P1] of edges) {
+        if (wet(ex, ez)) continue;
+        const mx = (P0[0] + P1[0]) / 2, mz = (P0[2] + P1[2]) / 2;
+        const nx2 = (mz - z - STEP / 2), nz2 = -(mx - x - STEP / 2);
+        const nl2 = Math.hypot(nx2, nz2) || 1;
+        pushQuad(md,
+          [P0[0], WL + 0.045, P0[2]], [P1[0], WL + 0.045, P1[2]],
+          [P1[0] + nx2 / nl2 * 0.5, WL + 0.045, P1[2] + nz2 / nl2 * 0.5],
+          [P0[0] + nx2 / nl2 * 0.5, WL + 0.045, P0[2] + nz2 / nl2 * 0.5],
+          C_LFOAM2);
+      }
+    }
+  }
+  moWaterTide = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.92, depthWrite: false,
+  }), false);
+  moWaterTide.renderOrder = 2;
+  moWaterTide.frustumCulled = false;
+  moWaterTide.visible = false;
+  moWaterTide.matrixAutoUpdate = false; moWaterTide.updateMatrix();
+  scene.add(moWaterTide);
+  moTideBase = new Float32Array(moWaterTide.geometry.attributes.color.array);
+})();
+
+/* ── the guaranteed lane: measured against the final fields ── */
+window.__mouthLane = { minRap: 9, minGlide: 9, minChan: 9, minPoolLane: 9 };
+(function measureLane() {
+  const L = window.__mouthLane;
+  L.minR12 = 9;
+  for (let s = S_GATES[0].s + 3; s < LR_LEN - 2; s += 0.5) {
+    /* walk the spine by arc, a boat wide */
+    let i = 0;
+    while (i < LRN.length - 2 && LRN[i + 1].s < s) i++;
+    const a = LRN[i], b = LRN[i + 1];
+    const t = clamp((s - a.s) / ((b.s - a.s) || 1), 0, 1);
+    const x = lerp(a.x, b.x, t), z = lerp(a.z, b.z, t);
+    const nx = -(b.z - a.z), nz = b.x - a.x;
+    const nl = Math.hypot(nx, nz) || 1;
+    const surf = lerp(a.y, b.y, t);
+    let dep = 1e9;
+    for (const u of [-1.1, 0, 1.1]) {
+      dep = Math.min(dep, surf - groundH(x + nx / nl * u, z + nz / nl * u));
+    }
+    const zone = t < 0.5 ? a.zone : b.zone;
+    if (zone === 'rap') L.minRap = Math.min(L.minRap, dep);
+    else if (zone === 'glide') L.minGlide = Math.min(L.minGlide, dep);
+    else if (zone === 'chan') L.minChan = Math.min(L.minChan, dep);
+    else if (zone === 'r1' || zone === 'r2') L.minR12 = Math.min(L.minR12, dep);
+  }
+  for (let x = 112; x <= 126; x += 1.5) {
+    L.minPoolLane = Math.min(L.minPoolLane, WL - groundH(x, 45));
+  }
+})();
+</script>
+<script>
+/* ═══════════ p6i/4 — THE SLUICE: gates, wheels, the rhythm ═══════════ */
+const C_GSTONE = col(0x8a8172), C_GSTONE2 = col(0x6b6355), C_GCUT = col(0xa79c82),
+      C_GWOOD = col(0x6d5236), C_GWOOD2 = col(0x4f3b26), C_GIRON = col(0x4c4a45),
+      C_GPALE = col(0xcfc6ae);
+/* per-gate live state */
+const MOGATES = S_GATES.map((g) => ({
+  g, slabK: 0, spin: 0, spinV: 0, progress: 0, windowHit: false,
+  grp: null, slab: null, wheel: null, glowMat: null,
+}));
+function moGatesOpen() { return SAVE ? clamp(SAVE.sluiceG | 0, 0, 3) : 0; }
+window.__mouthOpenNow = () => !!(SAVE && SAVE.mouthOpen);
+
+let moPropMesh = null, moSurgeMesh = null, moSurgeMat = null;
+(function buildSluiceWorks() {
+  const mdS = MD();       // shared static stone (frames, sills, berm stones)
+  for (let k = 0; k < MOGATES.length; k++) {
+    const G = MOGATES[k], g = G.g;
+    const ry = Math.atan2(g.fx, g.fz) + Math.PI / 2;   // width lies ACROSS the flow
+    const sillY = groundH(g.x, g.z);
+    /* Rule 2: a frame, a light gradient, a floor cue — a door that reads
+       as a door from both sides */
+    for (const s of [-1, 1]) {
+      boxW(mdS, { x: g.x + g.nx * s * 3.1, y: sillY - 0.6, z: g.z + g.nz * s * 3.1,
+        w: 1.0, d: 1.4, h: 5.6, ry, warm: true, col: C_GSTONE, colB: C_GSTONE2 });
+      boxW(mdS, { x: g.x + g.nx * s * 2.55, y: sillY - 0.4, z: g.z + g.nz * s * 2.55,
+        w: 0.4, d: 0.9, h: 4.9, ry, warm: true, col: C_GCUT });
+    }
+    boxW(mdS, { x: g.x, y: sillY + 4.6, z: g.z, w: 4.4, d: 1.5, h: 0.9, ry, warm: true, col: C_GSTONE, colB: C_GSTONE2 });
+    boxW(mdS, { x: g.x, y: sillY + 4.25, z: g.z, w: 3.4, d: 0.9, h: 0.4, ry, warm: true, col: C_GCUT });
+    /* the order's mark: eight phases over the lintel, the FIFTH cut deep */
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * TAU;
+      latheW(mdS, [[i === 4 ? 0.2 : 0.12, 0], [0, 0.09]],
+        { seg: 6, x: g.x + g.nx * Math.cos(a) * 0.95, y: sillY + 5.25 + Math.sin(a) * 0.95,
+          z: g.z + g.nz * Math.cos(a) * 0.95, flat: true, col: i === 4 ? C_GPALE : C_GCUT });
+    }
+    /* floor cue: a pale worn strip through the opening */
+    pushQuad(mdS,
+      [g.x - g.nx * 2.3 - g.fx * 1.4, sillY + 0.05, g.z - g.nz * 2.3 - g.fz * 1.4],
+      [g.x + g.nx * 2.3 - g.fx * 1.4, sillY + 0.05, g.z + g.nz * 2.3 - g.fz * 1.4],
+      [g.x + g.nx * 2.3 + g.fx * 1.4, sillY + 0.05, g.z + g.nz * 2.3 + g.fz * 1.4],
+      [g.x - g.nx * 2.3 + g.fx * 1.4, sillY + 0.05, g.z - g.nz * 2.3 + g.fz * 1.4], C_GPALE);
+    /* THE SLAB — timber and iron, sliding down into the sill (Rule 6:
+       the plug follows the visible position) */
+    {
+      const md = MD();
+      for (let i = 0; i < 6; i++) {
+        boxW(md, { x: 0, y: 0.06 + i * 0.62, z: 0, w: 2.5, d: 0.16, h: 0.62,
+          warm: true, col: i % 2 ? C_GWOOD : C_GWOOD2 });
+      }
+      boxW(md, { x: 0, y: 1.95, z: 0, w: 2.55, d: 0.2, h: 0.14, warm: true, col: C_GIRON });
+      boxW(md, { x: 0, y: 0.55, z: 0, w: 2.55, d: 0.2, h: 0.14, warm: true, col: C_GIRON });
+      boxW(md, { x: -1.15, y: 0.2, z: 0, w: 0.14, d: 0.22, h: 3.5, warm: true, col: C_GIRON });
+      boxW(md, { x: 1.15, y: 0.2, z: 0, w: 0.14, d: 0.22, h: 3.5, warm: true, col: C_GIRON });
+      const slab = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+      slab.frustumCulled = false;
+      const grp = new THREE.Group();
+      grp.add(slab);
+      grp.position.set(g.x, sillY, g.z);
+      grp.rotation.y = ry;
+      grp.visible = false;
+      scene.add(grp);
+      G.grp = grp; G.slab = slab;
+      G.sillY = sillY;
+    }
+    /* THE WHEEL — a real wheel (rim + spokes + handles, nothing on one
+       axis), on an iron post on the south berm, facing the gate */
+    {
+      const md = MD();
+      const R = 0.62, N = 10;
+      for (let i = 0; i < N; i++) {
+        const a0 = i / N * TAU, a1 = (i + 1) / N * TAU;
+        const p0 = [Math.cos(a0) * R, Math.sin(a0) * R, 0], p1 = [Math.cos(a1) * R, Math.sin(a1) * R, 0];
+        boxW(md, { x: (p0[0] + p1[0]) / 2, y: (p0[1] + p1[1]) / 2, z: 0,
+          w: 0.07, d: 0.07, h: Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) + 0.06,
+          rz: Math.atan2(p1[0] - p0[0], p1[1] - p0[1]), warm: true, col: i % 2 ? C_GWOOD : C_GWOOD2 });
+      }
+      for (let i = 0; i < 4; i++) {
+        const a = i / 4 * TAU + 0.4;
+        boxW(md, { x: Math.cos(a) * R * 0.5, y: Math.sin(a) * R * 0.5, z: 0,
+          w: 0.06, d: 0.06, h: R * 1.06, rz: a + Math.PI / 2, warm: true, col: C_GWOOD2 });
+        boxW(md, { x: Math.cos(a) * (R + 0.12), y: Math.sin(a) * (R + 0.12), z: 0,
+          w: 0.05, d: 0.16, h: 0.05, rz: a + Math.PI / 2, warm: true, col: C_GIRON });
+      }
+      latheW(md, [[0.1, -0.1], [0.12, 0.1]], { seg: 7, x: 0, y: 0, z: 0, rx: Math.PI / 2, warm: true, col: C_GIRON });
+      const wheel = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+      wheel.frustumCulled = false;
+      const post = new THREE.Group();
+      /* the wheel stands at the gate's DOWNSTREAM shoulder, on the south
+         berm — the side the climb approaches from, never across water */
+      const wx = g.x + g.fx * 2.4 + g.nx * 3.5, wz = g.z + g.fz * 2.4 + g.nz * 3.5;
+      const wy = groundH(wx, wz);
+      boxW(mdS, { x: wx, y: wy - 0.2, z: wz, w: 0.16, d: 0.16, h: 1.35, warm: true, col: C_GIRON });
+      post.position.set(wx, wy + 1.15, wz);
+      post.rotation.y = ry;
+      post.add(wheel);
+      post.visible = false;
+      scene.add(post);
+      G.wheel = post; G.wheelSpin = wheel;
+      G.wx = wx; G.wz = wz;
+    }
+    /* the light standing in the doorway — a soft gradient, never a slab */
+    {
+      const mdG = MD();
+      const c0 = [0.72, 0.86, 0.9];
+      for (let i = 0; i < 4; i++) {
+        const kk = i / 4;
+        pushQuad(mdG,
+          [g.x - g.nx * 2.3 * (1 - kk * 0.2), sillY + 3.9 * kk, g.z - g.nz * 2.3 * (1 - kk * 0.2)],
+          [g.x + g.nx * 2.3 * (1 - kk * 0.2), sillY + 3.9 * kk, g.z + g.nz * 2.3 * (1 - kk * 0.2)],
+          [g.x + g.nx * 2.3 * (1 - (kk + 0.25) * 0.2), sillY + 3.9 * (kk + 0.25), g.z + g.nz * 2.3 * (1 - (kk + 0.25) * 0.2)],
+          [g.x - g.nx * 2.3 * (1 - (kk + 0.25) * 0.2), sillY + 3.9 * (kk + 0.25), g.z - g.nz * 2.3 * (1 - (kk + 0.25) * 0.2)],
+          [c0[0] * (1 - kk * 0.5), c0[1] * (1 - kk * 0.5), c0[2] * (1 - kk * 0.5)]);
+      }
+      const mat = new THREE.MeshBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.0,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+      });
+      const glow = mdMesh(mdG, mat, false);
+      glow.frustumCulled = false;
+      glow.matrixAutoUpdate = false; glow.updateMatrix();
+      glow.visible = false;
+      scene.add(glow);
+      G.glow = glow; G.glowMat = mat;
+    }
+    /* jamb colliders (walls read as walls; the opening is the slab's) */
+    addColl(g.x + g.nx * 3.1, g.z + g.nz * 3.1, 1.1);
+    addColl(g.x - g.nx * 3.1, g.z - g.nz * 3.1, 1.1);
+  }
+  /* berm edging stones along the raceway */
+  for (let i = 1; i < 7; i++) {
+    const a = LRN[i], b = LRN[i + 1];
+    for (let t = 0.2; t < 1; t += 0.36) {
+      for (const s of [-1, 1]) {
+        const u = lrZoneW(a.zone)[1] + 1.1;
+        const x = lerp(a.x, b.x, t) + a.nx * u * s, z = lerp(a.z, b.z, t) + a.nz * u * s;
+        const gy = groundH(x, z);
+        latheW(mdS, [[0.55, 0], [0.5, 0.3], [0.32, 0.5]],
+          { seg: 6, ex: 0.8 + Math.abs(hash2(i * 7 + t * 10, s)) * 0.3, x, y: gy - 0.12, z,
+            ry: hash2(i, t * 9) * 3, flat: true, segJitter: 0.15,
+            col: (i + (s > 0 ? 1 : 0)) % 2 ? C_MOSTONE : C_MOSTONE2 });
+      }
+    }
+  }
+  moPropMesh = mdMesh(mdS, WORLD_MAT, false);
+  moPropMesh.matrixAutoUpdate = false; moPropMesh.updateMatrix();
+  moPropMesh.visible = false;
+  scene.add(moPropMesh);
+  /* THE SWELL LINE — one bright band that runs down the water and
+     arrives at the active gate exactly when the window opens */
+  const mdW = MD();
+  pushQuad(mdW, [-4.4, 0, -0.9], [4.4, 0, -0.9], [4.4, 0, 0.9], [-4.4, 0, 0.9], [0.95, 0.99, 1.0]);
+  pushQuad(mdW, [-3.6, 0.06, -0.45], [3.6, 0.06, -0.45], [3.6, 0.06, 0.45], [-3.6, 0.06, 0.45], [1, 1, 1]);
+  moSurgeMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+  });
+  moSurgeMesh = mdMesh(mdW, moSurgeMat, false);
+  moSurgeMesh.frustumCulled = false;
+  moSurgeMesh.visible = false;
+  scene.add(moSurgeMesh);
+})();
+
+/* ── the pulse: period 4 s, window 1.3 s, taught by ear and eye ── */
+const MO_SURGE_T = 240, MO_SURGE_W = 78;         // sim ticks
+let moSurgeTick = 0;
+function moSurgePh() { return (moSurgeTick % MO_SURGE_T) / MO_SURGE_T; }
+function moSurgeOn() { return (moSurgeTick % MO_SURGE_T) < MO_SURGE_W; }
+window.__sluicePulseK = function () {
+  const t = moSurgeTick % MO_SURGE_T;
+  if (t >= MO_SURGE_W) return 0;
+  return Math.min(smoothstep(clamp(t / 14, 0, 1)), smoothstep(clamp((MO_SURGE_W - t) / 14, 0, 1)));
+};
+
+/* ── sounds of the works (lazy ctx, guarded like every SFX) ── */
+SFX.surgeWhoomp = function () {
+  if (!AC) return; const t = AC.currentTime;
+  tone(52, t, 0.55, 0.16, 'sine');
+  tone(38, t + 0.06, 0.5, 0.12, 'sine');
+  noiseBurst(t, 0.5, 0.12, 220, 90, 0.9, 'lowpass');
+};
+SFX.wheelRatchet = function () {
+  if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.09, 0.16, 900, 2400, 1.4);
+  tone(340, t + 0.02, 0.08, 0.05, 'square');
+  tone(510, t + 0.07, 0.06, 0.03, 'square');
+};
+SFX.wheelSlip = function () {
+  if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.16, 0.14, 500, 260, 1.0, 'lowpass');
+  tone(180, t + 0.04, 0.14, 0.06, 'sawtooth');
+  tone(88, t + 0.1, 0.18, 0.07, 'sine');
+};
+SFX.gateGive = function () {
+  if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 0.7, 0.2, 300, 110, 0.9, 'lowpass');
+  tone(66, t, 0.7, 0.14, 'sine');
+  tone(99, t + 0.2, 0.5, 0.08, 'sine');
+  noiseBurst(t + 0.35, 0.8, 0.16, 1400, 2600, 1.2);
+};
+SFX.paddleClack = function (k) {
+  if (!AC) return; const t = AC.currentTime;
+  tone(220 + (k ? 40 : 0), t, 0.05, 0.05, 'square');
+  noiseBurst(t, 0.05, 0.1, 700, 1900, 1.5);
+};
+SFX.riverRush = function () {
+  if (!AC) return; const t = AC.currentTime;
+  noiseBurst(t, 1.6, 0.16, 900, 2400, 0.8);
+  noiseBurst(t + 0.2, 1.4, 0.12, 300, 140, 0.8, 'lowpass');
+};
+
+/* ── the rhythm check itself ──
+   HOLD or PRESS ✕ at the wheel: a press while the surge stands in the
+   gate = the river turns the wheel with you (a HIT). A press against
+   slack water = the wheel shudders back and the count starts over —
+   never punished, only waited. A hold begun just before the surge
+   counts when the surge arrives (kid grace); a stale grip only strains.
+   Gate 1 gives on one hit, gate 2 on two in a row, gate 3 on three. */
+const MOP = {
+  engaged: -1, holdT: 0, pressAge: 999, windowUsed: false,
+  hits: 0, shudders: 0, opens: 0, capT: 0,
+};
+function moActiveGate() {
+  const open = moGatesOpen();
+  return open >= 3 ? null : MOGATES[open];
+}
+function moGateGive(G) {
+  MOP.opens++;
+  SFX.gateGive();
+  rumble({ duration: 700, strong: 0.7, weak: 0.9 }, 'gate-give');
+  CAM.shake = Math.max(CAM.shake, 0.3);
+  G.giving = true;                       // slab slides; sluiceG set at the
+  G.spinV = 6;                           // passable moment (Rule 6)
+}
+function moGateHit(G) {
+  G.progress++;
+  MOP.hits++;
+  SFX.wheelRatchet();
+  rumble({ duration: 120, strong: 0.35, weak: 0.6 }, 'wheel-hit');
+  G.spinV = Math.max(G.spinV, 2.2);
+  if (G.progress >= G.g.need) {
+    const k = MOGATES.indexOf(G);
+    if (k === 2) {
+      /* gate three IS the cinematic — the wall gives in frame */
+      startCine('riverFalls');
+    } else {
+      moGateGive(G);
+    }
+  }
+}
+function moGateShudder(G) {
+  if (G.progress > 0 || true) {
+    G.progress = 0;
+    MOP.shudders++;
+    SFX.wheelSlip();
+    rumble({ duration: 90, strong: 0.12, weak: 0.3 }, 'wheel-slip');
+    G.spinV = Math.min(G.spinV, -1.4);
+  }
+}
+function moSluiceReady() {
+  return !!(SAVE && riverWet() && !SAVE.mouthOpen);
+}
+function tickSluice() {
+  moSurgeTick = simTick;
+  const G = moActiveGate();
+  const wasOn = MOP.surgeWasOn;
+  const on = moSurgeOn();
+  MOP.surgeWasOn = on;
+  if (!moSluiceReady() || !G) { MOP.engaged = -1; return; }
+  if (on && !wasOn) {
+    MOP.windowUsed = false;
+    /* the cue: heard and felt if you are anywhere near the works */
+    const d = Math.hypot(P.x - G.g.x, P.z - G.g.z);
+    if (d < 70 && state === 'play') {
+      SFX.surgeWhoomp();
+      if (d < 26) rumble({ duration: 260, strong: 0.18, weak: 0.42 }, 'surge');
+    }
+  }
+  if (state !== 'play' || P.skiffing || P.sailing) { MOP.engaged = -1; return; }
+  const near = Math.hypot(P.x - G.wx, P.z - G.wz) < 3.4;
+  MOP.engaged = near ? moGatesOpen() : -1;
+  if (!near) { MOP.holdT = 0; MOP.pressAge = 999; return; }
+  /* the wheel owns ✕ while you stand at it */
+  const pressed = IN.atk;
+  if (pressed) { IN.atk = false; MOP.pressAge = 0; } else MOP.pressAge++;
+  if (IN.atkHeld) MOP.holdT++; else MOP.holdT = 0;
+  P.heading = angLerp(P.heading, Math.atan2(G.g.x - P.x, G.g.z - P.z), 0.2);
+  if (pressed) {
+    if (on && !MOP.windowUsed) { MOP.windowUsed = true; moGateHit(G); }
+    else if (!on) moGateShudder(G);
+    return;
+  }
+  /* hold grace: a grip taken just before the surge gives WITH it */
+  if (on && !wasOn && !MOP.windowUsed && IN.atkHeld && MOP.holdT > 0 && MOP.holdT <= 60) {
+    MOP.windowUsed = true;
+    moGateHit(G);
+  } else if (on && !wasOn && IN.atkHeld && MOP.holdT > 90) {
+    G.spinV = Math.min(G.spinV, -0.8);      // the stale grip strains, teaches, waits
+    SFX.creak();
+  }
+}
+</script>
+<script>
+/* ═══════════ p6i/5 — the lower water's truth, and the wraps that serve it ═══════════ */
+let moFill = [0, 0, 0];                    // reach1, reach2, release: 0 dry … 1 full
+let moRunFrontS = -1;                      // cine reveal front (arc s); -1 = full
+function moReachSurf(zone, base) {
+  if (zone === 'r1') return moFill[0] <= 0 ? null : base - (1 - moFill[0]) * 1.3;
+  if (zone === 'r2') return moFill[1] <= 0 ? null : base - (1 - moFill[1]) * 1.3;
+  return base;
+}
+function lowerSurfaceAt(x, z) {
+  /* the tide first: any carved ground below the waterline holds the bay */
+  const r = lrNear(x, z);
+  const zw = lrZoneW(r.zone);
+  const inPool = Math.hypot(x - MOUTH_POOL.x, z - MOUTH_POOL.z) < MOUTH_POOL.r + 2.5 && z < 51.5;
+  const tidal = (SAVE && SAVE.sky >= 2) && groundH(x, z) < WL - 0.04 &&
+                (inPool || (r.zone === 'chan' || r.zone === 'glide' || r.zone === 'pool') && Math.abs(r.off) < zw[1] + 2);
+  if (r.d > 60 && !inPool) return null;
+  let y = null;
+  const ad = Math.abs(r.off);
+  if (r.zone === 'head') {
+    if (riverWet() && ad < zw[1] + 1.5) y = r.surf;
+  } else if (r.zone === 'r1' || r.zone === 'r2') {
+    const open = moGatesOpen();
+    const need = r.zone === 'r1' ? 1 : 2;
+    if (riverWet() && open >= need && ad < zw[1] + 0.8) y = moReachSurf(r.zone, r.surf);
+  } else if (r.zone === 'rap' || r.zone === 'glide') {
+    if (window.__mouthOpenNow() && ad < zw[1] + 0.8) {
+      if (moRunFrontS < 0 || r.s <= moRunFrontS) y = r.surf;
+    }
+  } else if (r.zone === 'pool' || r.zone === 'chan') {
+    if ((SAVE && SAVE.sky >= 2) && (inPool || ad < zw[1] + 1.5)) y = WL;
+  }
+  if (y === null && tidal) y = WL;
+  if (y === null) return null;
+  if (y - groundH(x, z) <= 0) return null;
+  return y;
+}
+function lowerDepthAt(x, z) {
+  const y = lowerSurfaceAt(x, z);
+  if (y === null) return 0;
+  return Math.max(0, y - groundH(x, z));
+}
+window.__lowerRiverAt = (x, z) => lowerSurfaceAt(x, z);
+window.__lowerRiverDepth = (x, z) => lowerDepthAt(x, z);
+window.__riverSpineLower = LRN.map(n => ({ x: n.x, z: n.z, y: n.y }));
+
+/* the corridor rect the depth/solid wraps test first (cheap reject) */
+const moRectQ = (x, z) => x > 80 && x < 284 && z > 18 && z < 78;
+/* the boat also sails p6h's low reach (sluice → first ford) */
+const moUpperRectQ = (x, z) => x > 255 && x < 395 && z > 40 && z < 130;
+
+/* p6h's river answers 4.77 m of phantom water SOUTH-WEST of its own last
+   station (runNear clamps to station 0); the sluice works stand exactly
+   there. This part is the authority on that ground now. */
+const _moRiverDepthAt = riverDepthAt;
+riverDepthAt = function (x, z) {
+  if (moRectQ(x, z)) {
+    const r = runNear(x, z);
+    if (r.i <= 1 && r.along < -1.5) return lowerDepthAt(x, z);
+  }
+  return _moRiverDepthAt(x, z);
+};
+/* waterDepthAt: the bay's own answer stops at x = 100 ("the sea lives in
+   the bay") and reads pre-carve ground; the corridor and the low reach
+   answer here. Everything that already consults waterDepthAt — the wade
+   rule, the crabs, the hull sweeps, the boat — inherits the truth. */
+const _moWaterDepthAt = waterDepthAt;
+waterDepthAt = function (x, z) {
+  if (moRectQ(x, z)) {
+    const d = lowerDepthAt(x, z);
+    if (d > 0) return d;
+    if (x <= 100) return _moWaterDepthAt(x, z);
+    return 0;
+  }
+  if (moUpperRectQ(x, z) && riverWet()) {
+    const d = _moRiverDepthAt(x, z);
+    if (d > 0) return d;
+  }
+  return _moWaterDepthAt(x, z);
+};
+
+/* ── the gate plugs follow the RENDERED slabs (Rule 6) ── */
+function moGateSolidAt(x, z) {
+  if (!moRectQ(x, z)) return false;
+  for (let k = 0; k < MOGATES.length; k++) {
+    const G = MOGATES[k], g = G.g;
+    const dx = x - g.x, dz = z - g.z;
+    if (dx * dx + dz * dz > 16) continue;
+    const alo = dx * g.fx + dz * g.fz;
+    const off = dx * g.nx + dz * g.nz;
+    if (Math.abs(alo) > 0.9) continue;
+    if (Math.abs(off) > 2.55) return true;               // the jambs
+    /* passable when it LOOKS passable: the slab's own rendered travel */
+    if (G.slabK < 0.65) return true;
+  }
+  return false;
+}
+const _moWorldSolid = worldSolidAt;
+worldSolidAt = function (x, z) {
+  if (moGateSolidAt(x, z)) return true;
+  return _moWorldSolid(x, z);
+};
+const _moForestSolid = window.__forestSolid;
+window.__forestSolid = function (x, z) {
+  if (moGateSolidAt(x, z)) return true;
+  return _moForestSolid(x, z);
+};
+</script>
+<script>
+/* ═══════════ p6i/6 — THE REFIT: the swing keel and the stern wheel ═══════════ */
+const moKeel = { pivot: null, foldK: 0, ok: false };
+(function stealKeelFin() {
+  /* the phase-3 keel gains its pivot: re-seat p6d's keelFin under a hinge
+     at the hull, so "up" swings it aft along her bottom */
+  if (typeof keelFin === 'undefined' || !keelFin) return;
+  const pivot = new THREE.Group();
+  pivot.position.set(0, -0.12, 0.85);
+  keelFin.parent.add(pivot);
+  keelFin.parent.remove(keelFin);
+  keelFin.position.set(0, 0.12, -0.85);
+  pivot.add(keelFin);
+  moKeel.pivot = pivot;
+  moKeel.ok = true;
+})();
+const moSwingKeel = () => !!(SAVE && SAVE.swingKeel);
+const moPaddleFit = () => !!(SAVE && SAVE.paddleWheel);
+
+/* THE STERN PADDLEWHEEL — paddles all the way AROUND the rim (p6b's
+   builder put twelve on one axis; this one is built from the hub out) */
+let moPaddleGrp = null, moPaddleSpin = null, moPaddleK = 0, moPaddlePh = 0, moClackPh = 0;
+(function buildPaddleWheel() {
+  if (typeof sailboat === 'undefined' || !sailboat) return;
+  const C_PW = col(0x6d5236), C_PW2 = col(0x4f3b26), C_PIRON = col(0x45433e), C_BRASS = col(0x9a7c3a);
+  const grp = new THREE.Group();
+  const mdF = MD();
+  /* housing arms from the transom + the wound-spring drum (the soul of
+     the thing — wheels are this world's heart) */
+  for (const s of [-1, 1]) {
+    boxW(mdF, { x: 0.62 * s, y: 0.55, z: -1.98, w: 0.07, d: 0.6, h: 0.1, rx: -0.5, warm: true, col: C_PW2 });
+    boxW(mdF, { x: 0.62 * s, y: 0.28, z: -2.3, w: 0.07, d: 0.07, h: 0.6, warm: true, col: C_PIRON });
+  }
+  boxW(mdF, { x: 0, y: 0.62, z: -1.86, w: 0.5, d: 0.3, h: 0.3, warm: true, col: C_PW });
+  latheW(mdF, [[0.16, -0.12], [0.19, 0.12]], { seg: 8, x: 0, y: 0.62, z: -1.86, rz: Math.PI / 2, col: C_BRASS });
+  const frame = mdMesh(mdF, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  frame.frustumCulled = false;
+  grp.add(frame);
+  const md = MD();
+  const R = 0.66, HW = 0.5, N = 8;
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < N; i++) {
+      const a0 = i / N * TAU, a1 = (i + 1) / N * TAU;
+      boxW(md, { x: HW * s, y: (Math.sin(a0) + Math.sin(a1)) / 2 * R, z: (Math.cos(a0) + Math.cos(a1)) / 2 * R,
+        w: 0.05, d: 0.07, h: 2 * R * Math.sin(Math.PI / N) + 0.04,
+        rx: (a0 + a1) / 2 + Math.PI / 2, warm: true, col: i % 2 ? C_PW : C_PW2 });
+    }
+  }
+  for (let i = 0; i < N; i++) {
+    const a = i / N * TAU;
+    /* the paddle: a blade riding the rim at ITS OWN angle around the axle
+       (w/d are HALF-extents — the boxW law) */
+    boxW(md, { x: 0, y: Math.sin(a) * R * 0.92, z: Math.cos(a) * R * 0.92,
+      w: HW + 0.06, d: 0.045, h: 0.3, rx: a, warm: true, col: i % 2 ? C_PW : C_PW2 });
+    if (i % 2 === 0) {
+      boxW(md, { x: 0, y: Math.sin(a) * R * 0.45, z: Math.cos(a) * R * 0.45,
+        w: HW * 0.9, d: 0.04, h: R * 0.94, rx: a, warm: true, col: C_PW2 });
+    }
+  }
+  boxW(md, { x: 0, y: 0, z: 0, w: HW + 0.14, d: 0.05, h: 0.1, warm: true, col: C_PIRON });
+  moPaddleSpin = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  moPaddleSpin.frustumCulled = false;
+  moPaddleSpin.position.set(0, 0.35, -2.32);
+  grp.add(moPaddleSpin);
+  grp.visible = false;
+  sailboat.group.add(grp);
+  moPaddleGrp = grp;
+})();
+
+/* ── the boat rides the LOWER RIVER's surface, not the sea's ── */
+let moBoatDy = 0;
+function moBoatWaterY() {
+  if (moRectQ(BOAT.x, BOAT.z)) {
+    const y = lowerSurfaceAt(BOAT.x, BOAT.z);
+    if (y !== null) return y;
+  }
+  if (moUpperRectQ(BOAT.x, BOAT.z) && riverWet()) {
+    const y = riverSurfaceAt(BOAT.x, BOAT.z);
+    if (y !== null) return y;
+  }
+  return WL;
+}
+/* the keel-scaled depth: with the keel swung UP, the same checks fire at
+   HALF the water — 0.55/0.45 become 0.28/0.22 without touching p6c */
+const MO_KEEL_SCALE = 0.55 / 0.28;
+let _moDepthRealFn = null;
+function moKeelScaledDepth(x, z) { return _moDepthRealFn(x, z) * MO_KEEL_SCALE; }
+
+let moFordCd = 0, moFordSaid = false, moPaddleWasOn = false;
+const _moTickSailing = tickSailing;
+tickSailing = function () {
+  const east = BOAT.x > -40;
+  const keel = moSwingKeel();
+  const r0 = OUTER.r;
+  /* the chart's edge has no business inside the home bay, let alone up a
+     river — measured: the harbour itself sits 2 m past OUTER.r, so the
+     edge push was already nibbling at moored boats east of the headland */
+  if (east) OUTER.r = 1e7;
+  if (keel) { _moDepthRealFn = waterDepthAt; waterDepthAt = moKeelScaledDepth; }
+  const spd0 = BOAT.spd;
+  try { _moTickSailing(); } finally {
+    if (keel) waterDepthAt = _moDepthRealFn;
+    OUTER.r = r0;
+  }
+  if (!P.sailing) { moPaddleK = Math.max(0, moPaddleK - DT * 2); return; }
+  /* THE PADDLEWHEEL replaces the sprint-sail hold, once fitted */
+  const mag = moveVec();
+  const paddleOn = moPaddleFit() && !VOYAGE.active && IN.sprintHeld && mag > 0.1 && state === 'play';
+  if (moPaddleFit() && !VOYAGE.active) {
+    let tgt = mag > 0.1 ? (paddleOn ? 13.9 : 4.2) : 0;
+    if (typeof SET !== 'undefined' && SET.spillT > 0) tgt = Math.min(tgt, 3.0);
+    BOAT.spd = spd0 + (tgt - spd0) * (tgt > spd0 ? 0.028 : 0.045);
+    BOAT.sailK = Math.min(BOAT.sailK, 0.4);        // the wheel drives, the canvas rests
+  }
+  moPaddleK += ((paddleOn ? 1 : 0) - moPaddleK) * (paddleOn ? 0.09 : 0.045);
+  if (paddleOn && !moPaddleWasOn) SFX.creakBoat ? SFX.creakBoat() : SFX.creak();
+  moPaddleWasOn = paddleOn;
+  if (moPaddleK > 0.1) {
+    moPaddlePh += DT * (1.5 + moPaddleK * (2.2 + BOAT.spd * 0.35));
+    moClackPh += DT * moPaddleK * (1.6 + BOAT.spd * 0.3);
+    if (moClackPh > 0.5) {
+      moClackPh = 0;
+      SFX.paddleClack(Math.random() < 0.5);
+      if (BOAT.spd > 6) rumble({ duration: 40, strong: 0.08, weak: 0.22 }, 'paddle');
+    }
+    /* the boiling wake (pooled spray; LOWFX keeps its frame) */
+    if (!LOWFX && (simTick % 3) === 0 && typeof psSpray !== 'undefined') {
+      const wy = moBoatWaterY();
+      const bx = BOAT.x - Math.sin(BOAT.ang) * 2.35, bz = BOAT.z - Math.cos(BOAT.ang) * 2.35;
+      psSpray.spawn(bx + (Math.random() - 0.5) * 0.9, wy + 0.15, bz + (Math.random() - 0.5) * 0.9,
+        -Math.sin(BOAT.ang) * (1.6 + BOAT.spd * 0.2), 1.1 + Math.random() * 0.8,
+        -Math.cos(BOAT.ang) * (1.6 + BOAT.spd * 0.2), 0.55);
+      psSpray.spawn(bx, wy + 0.35, bz, (Math.random() - 0.5) * 1.4, 1.6, (Math.random() - 0.5) * 1.4, 0.4);
+    }
+  }
+  /* THE UPSTREAM LIMIT: her beam is too broad above the first ford —
+     a soft push, never a wall, exactly the sea edge's manners */
+  if (moUpperRectQ(BOAT.x, BOAT.z) && riverWet()) {
+    const r = runNear(BOAT.x, BOAT.z);
+    const lim = FIRST_FORD_D - 8;
+    if (r.s.d >= lim - 6) {
+      const over = (r.s.d + r.along) - lim;
+      if (over > 0) {
+        BOAT.x -= r.s.fx * over * 0.25;
+        BOAT.z -= r.s.fz * over * 0.25;
+        BOAT.spd *= 0.9;
+        if (moFordCd <= 0) {
+          moFordCd = 480;
+          if (!moFordSaid) {
+            moFordSaid = true;
+            showCaption('Her beam is too broad for the white water — the skiff knows the way.', 4200);
+          }
+          SFX.splash();
+          rumble({ duration: 220, strong: 0.3, weak: 0.55 });
+        }
+      }
+    }
+  }
+  if (moFordCd > 0) moFordCd--;
+  /* she rides the local water, wherever it stands */
+  const wy = moBoatWaterY();
+  moBoatDy += (Math.max(0, wy - WL) - moBoatDy) * 0.25;
+  P.fy = WL + moBoatDy + 0.45;
+};
+
+/* the visible pose: the hull, the keel, the wheel */
+const _moPoseBoat = poseBoatOnSwell;
+poseBoatOnSwell = function (now) {
+  _moPoseBoat(now);
+  if (typeof sailboat === 'undefined' || !sailboat.group.visible) return;
+  if (moBoatDy > 0.005) sailboat.group.position.y += moBoatDy;
+  /* the swing keel: folds up along the hull as the water thins */
+  if (moKeel.ok) {
+    let want = 0;
+    if (moSwingKeel()) {
+      const dep = waterDepthAt(BOAT.x, BOAT.z);
+      want = dep < 0.9 ? 1 : 0;
+    }
+    moKeel.foldK += (want - moKeel.foldK) * 0.045;
+    moKeel.pivot.rotation.x = -moKeel.foldK * 1.32;
+  }
+  if (moPaddleGrp) {
+    moPaddleGrp.visible = moPaddleFit();
+    if (moPaddleSpin) moPaddleSpin.rotation.x = -moPaddlePh * TAU * 0.35;
+  }
+};
+
+/* the camera follows her UP the river (p6c's sail camera pins the sea's
+   waterline; this one stands on the local water) */
+const _moUpdateCamera = updateCamera;
+updateCamera = function (dtv) {
+  if (P.sailing && CAM.mode === 'follow' && moBoatDy > 0.02) {
+    let manual = false;
+    if (state === 'play') {
+      const sx = clamp(IN.cx, -1, 1), sy = clamp(IN.cy, -1, 1);
+      if (sx || sy) { CAM.yaw -= sx * 3.1 * dtv; CAM.pitch += sy * 2.0 * dtv; manual = true; }
+      if (CAMIN.mdx || CAMIN.mdy) { CAM.yaw -= CAMIN.mdx * 0.0034; CAM.pitch += CAMIN.mdy * 0.0026; manual = true; }
+      if (CAMIN.tdx || CAMIN.tdy) { CAM.yaw -= CAMIN.tdx * 0.0085; CAM.pitch += CAMIN.tdy * 0.0065; manual = true; }
+    }
+    CAMIN.mdx = CAMIN.mdy = CAMIN.tdx = CAMIN.tdy = 0;
+    if (manual || CAMIN.touching) CAM.stickAge = 0; else CAM.stickAge += dtv;
+    CAM.pitch = clamp(CAM.pitch, PITCH_MIN, PITCH_MAX);
+    if (CAM.stickAge > 3 && BOAT.spd > 1.2) {
+      CAM.yaw = angLerp(CAM.yaw, BOAT.ang + Math.PI, Math.min(1, dtv * 0.7));
+    }
+    const wy = WL + moBoatDy;
+    const ty = wy + 1.35;
+    const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
+    const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp;
+    let dd = 6.8;
+    for (let s = 0.25; s <= 1.0; s += 0.15) {
+      const sx2 = BOAT.x + dx * dd * s, sz2 = BOAT.z + dz * dd * s;
+      /* the gorge banks are GROUND, not colliders: the arm shortens for
+         either, or the shot is the inside of a hillside */
+      if (worldSolidAt(sx2, sz2) || groundH(sx2, sz2) > ty + 0.5) {
+        dd = Math.max(2.4, dd * (s - 0.15));
+        break;
+      }
+    }
+    const cx = BOAT.x + dx * dd, cz = BOAT.z + dz * dd;
+    let cy = ty + spv * dd;
+    cy = Math.max(cy, wy + 0.9, groundH(cx, cz) + 0.7);
+    const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 5)) : 1;
+    CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
+    CAM.ready = true;
+    camera.position.set(CAM.x, CAM.y, CAM.z);
+    CAM.shake = Math.max(0, CAM.shake - dtv * 1.6);
+    _mocv.set(BOAT.x + Math.sin(BOAT.ang) * 1.2, ty, BOAT.z + Math.cos(BOAT.ang) * 1.2);
+    camera.lookAt(_mocv);
+    return;
+  }
+  _moUpdateCamera(dtv);
+};
+const _mocv = new THREE.Vector3();
+
+/* going ashore up the river: p6c's search pins the sea's waterline, so
+   the reaches get their own (the same walk-connected footing law) */
+/* footing in the river's mouth may honestly be ankle-deep: a gravel
+   shelf under half a metre of water is a place a kid stands (and wades
+   home from) — the mooring law and the ashore prompt both accept it */
+function moAshoreSpotAt(bx, bz, wy) {
+  for (let r = 1.7; r <= 4.4; r += 0.8) {
+    for (let i = 0; i < 12; i++) {
+      const a = BOAT.ang + i * (TAU / 12);
+      const px = bx + Math.sin(a) * r, pz = bz + Math.cos(a) * r;
+      if (worldSolidAt(px, pz) || (window.__forestSolid && window.__forestSolid(px, pz))) continue;
+      let blocked = false;
+      for (let s = 1; s <= 4; s++) {
+        const mx = bx + (px - bx) * s / 5, mz = bz + (pz - bz) * s / 5;
+        if (worldSolidAt(mx, mz) || (window.__forestSolid && window.__forestSolid(mx, mz))) { blocked = true; break; }
+      }
+      if (blocked) continue;
+      const gy = groundH(px, pz);
+      if (gy > wy - 0.62 && gy < wy + 2.0 && waterDepthAt(px, pz) < 0.55) return { x: px, z: pz, y: gy };
+    }
+  }
+  return null;
+}
+function moAshoreSpot() {
+  return moAshoreSpotAt(BOAT.x, BOAT.z, WL + moBoatDy);
+}
+/* p6c's stranded-boat law measures footing against the SEA's waterline
+   and re-moors to ≥ 1.3 m — up here that would sweep a pool-moored boat
+   back to the bay coast on every load. In this part's water, this
+   part's footing law answers first. */
+const _moRescueStranded = rescueStrandedBoat;
+rescueStrandedBoat = function () {
+  if (moRectQ(BOAT.x, BOAT.z)) {
+    const y = lowerSurfaceAt(BOAT.x, BOAT.z);
+    if (y !== null && waterDepthAt(BOAT.x, BOAT.z) > 0.5 && moAshoreSpotAt(BOAT.x, BOAT.z, y)) return;
+  }
+  _moRescueStranded();
+};
+/* patch the sailboat's hull record: moored in a reach, "deep enough" is
+   the reach's own law (keel-up mooring), and her waterline follows the
+   local surface — Rule 4 stays whole without re-registering her */
+(function patchSailboatHull() {
+  const H = (window.__HULLS || []).find(h => h.name === 'sailboat');
+  if (!H) return;
+  const _ok = H.depthOk;
+  H.depthOk = function () {
+    if (moBoatDy > 0.02 || (moRectQ(BOAT.x, BOAT.z) && lowerSurfaceAt(BOAT.x, BOAT.z) !== null)) {
+      return waterDepthAt(BOAT.x, BOAT.z) >= (moSwingKeel() ? 0.35 : 0.6);
+    }
+    return _ok();
+  };
+  /* waterlineY needs no patch: her group y already rides the lifted
+     surface, and the record reads the LIVE group */
+})();
+</script>
+<script>
+/* ═══════════ p6i/7 — THE RIVER FALLS + the refit beat (cinematics) ═══════════ */
+const moRings = [];
+(function buildRings() {
+  for (let i = 0; i < 3; i++) {
+    const md = MD();
+    const N = 24;
+    for (let s = 0; s < N; s++) {
+      const a0 = s / N * TAU, a1 = (s + 1) / N * TAU;
+      pushQuad(md,
+        [Math.cos(a0) * 0.92, 0, Math.sin(a0) * 0.92], [Math.cos(a1) * 0.92, 0, Math.sin(a1) * 0.92],
+        [Math.cos(a1) * 1.0, 0, Math.sin(a1) * 1.0], [Math.cos(a0) * 1.0, 0, Math.sin(a0) * 1.0],
+        [0.85, 0.95, 1.0]);
+    }
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    });
+    const m = mdMesh(md, mat, false);
+    m.frustumCulled = false;
+    m.visible = false;
+    m.position.set(MOUTH_POOL.x, WL + 0.12, MOUTH_POOL.z);
+    scene.add(m);
+    moRings.push({ m, mat, t: -1 });
+  }
+})();
+const psRapids = makePS(60, 0.7, 0xe8f4f6, false, false);
+
+/* spine point at arc s (for the cine camera and the front) */
+function lrPointAt(s) {
+  s = clamp(s, 0, LR_LEN);
+  let i = 0;
+  while (i < LRN.length - 2 && LRN[i + 1].s < s) i++;
+  const a = LRN[i], b = LRN[i + 1];
+  const t = clamp((s - a.s) / ((b.s - a.s) || 1), 0, 1);
+  return { x: lerp(a.x, b.x, t), z: lerp(a.z, b.z, t), y: lerp(a.y, b.y, t),
+           fx: a.fx, fz: a.fz, nx: a.nx, nz: a.nz };
+}
+/* release-mesh draw front by arc s */
+function moRunDrawFront(s) {
+  const g = moWaterRun.mesh.geometry;
+  const total = g.attributes.position.count;
+  if (s < 0) { g.setDrawRange(0, total); return; }
+  let vEnd = 0;
+  for (const seg of moWaterRun.segs) {
+    if (seg.s <= s) vEnd = seg.v1;
+  }
+  g.setDrawRange(0, vEnd);
+}
+function moSetMouthFlags() {
+  if (!SAVE) return;
+  if (!SAVE.mouthOpen) {
+    SAVE.mouthOpen = true;
+    SAVE.sluiceG = 3;
+    storeSave();
+    applyWorldState();                      // the set-site derives the world
+    if (QUEST.q < 19) setQuest(19);
+  }
+}
+let moCine0 = null;
+function moCaptureShot() {
+  moCine0 = {
+    px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+    lx: P.x, ly: P.fy + 1.3, lz: P.z,
+  };
+}
+function tickRiverFalls(t) {
+  const G3 = MOGATES[2], g = G3.g;
+  const sillY = G3.sillY;
+  /* ALWAYS skippable once it has said what it is */
+  if (t > 0.9 && IN.confirm) {
+    moSetMouthFlags();
+    moFill[2] = 1; moRunFrontS = -1;
+    moRunDrawFront(-1);
+    endCine();
+    return;
+  }
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    moCaptureShot();
+    G3.giving = true;
+    G3.spinV = 6;
+    SFX.gateGive();
+    rumble({ duration: 900, strong: 0.8, weak: 0.9 }, 'riverfalls');
+  }
+  const sideX = g.x + g.nx * 7.5, sideZ = g.z + g.nz * 7.5;
+  if (t < 2.4) {
+    /* the wall gives: from the player's own shot, the camera slides to
+       the gate's shoulder while the slab goes under */
+    const k = smoothstep(clamp(t / 1.4, 0, 1));
+    CAM.shake = 0.14;
+    cineCam(lerp(moCine0.px, sideX, k), lerp(moCine0.py, sillY + 3.0, k), lerp(moCine0.pz, sideZ, k),
+      lerp(moCine0.lx, g.x, k), lerp(moCine0.ly, sillY + 1.2, k), lerp(moCine0.lz, g.z, k));
+    if (CINE.step === 1 && t > 1.2) {
+      CINE.step = 2;
+      moSetMouthFlags();
+      moFill[2] = 0.001;
+      moRunFrontS = g.s + 2;
+      SFX.riverRush();
+      SFX.waterFill();
+      if (!LOWFX) burst(psRapids, g.x - g.fx * 1.5, sillY + 0.8, g.z - g.fz * 1.5, 26, 2.6, 2.2, 0.9);
+    }
+  } else if (t < 8.2) {
+    /* the river takes the new reach: the camera outruns the front just
+       ahead of the white water, all the way down to the pool */
+    const k = smoothstep(clamp((t - 2.4) / 5.8, 0, 1));
+    const sFront = lerp(g.s + 2, LR_LEN - 12, k);
+    moRunFrontS = sFront;
+    moRunDrawFront(sFront);
+    const pf = lrPointAt(sFront);
+    const pc = lrPointAt(Math.min(sFront + 16, LR_LEN - 4));
+    if (!LOWFX && (simTick % 3) === 0) {
+      burst(psRapids, pf.x, pf.y + 0.5, pf.z, 5, 1.8, 1.6, 0.6);
+    }
+    if ((simTick % 90) === 0) SFX.riverRush();
+    CAM.shake = 0.06;
+    /* above the pines, never through them: the pass picket is 10 m tall */
+    cineCam(pc.x - pc.fx * 4 + pc.nx * 12, pf.y + 15.5, pc.z - pc.fz * 4 + pc.nz * 12,
+      pf.x, pf.y + 0.4, pf.z);
+    if (CINE.step === 2 && k > 0.9) {
+      CINE.step = 3;
+      SFX.splash();
+      rumble({ duration: 500, strong: 0.4, weak: 0.7 }, 'mouth-splash');
+      for (let i = 0; i < 3; i++) moRings[i].t = -i * 0.55;
+      if (!LOWFX) burst(psRapids, MOUTH_POOL.x, WL + 0.4, MOUTH_POOL.z, 30, 3.2, 2.6, 1.0);
+    }
+  } else if (t < 10.4) {
+    /* the bay takes the river: ripple-rings run out from the mouth */
+    moRunFrontS = -1;
+    moRunDrawFront(-1);
+    moFill[2] = 1;
+    const k = smoothstep(clamp((t - 8.2) / 2.0, 0, 1));
+    cineCam(lerp(MOUTH_POOL.x - 26, MOUTH_POOL.x - 34, k), lerp(9, 13, k), lerp(MOUTH_POOL.z - 14, MOUTH_POOL.z - 20, k),
+      MOUTH_POOL.x, WL + 0.4, MOUTH_POOL.z);
+    if (CINE.step === 3 && t > 9.0) {
+      CINE.step = 4;
+      SFX.chime(0.7);
+    }
+  } else {
+    /* home: back to the exact shot this beat departed from */
+    const k = smoothstep(clamp((t - 10.4) / 1.1, 0, 1));
+    cineCam(lerp(MOUTH_POOL.x - 34, moCine0.px, k), lerp(13, moCine0.py, k), lerp(MOUTH_POOL.z - 20, moCine0.pz, k),
+      lerp(MOUTH_POOL.x, moCine0.lx, k), lerp(WL + 0.4, moCine0.ly, k), lerp(MOUTH_POOL.z, moCine0.lz, k));
+    if (t > 11.6) {
+      endCine();
+    }
+  }
+}
+
+/* ── THE REFIT BEAT — p6j calls __refitCine5(); the flags are set HERE
+   (idempotent), then the metal is shown working: the keel folds, the
+   wheel churns once, and the shot goes home ── */
+function tickRefit5(t) {
+  if (t > 0.9 && IN.confirm) { moRefitDone(); endCine(); return; }
+  if (CINE.step === 0) {
+    CINE.step = 1;
+    moCaptureShot();
+    if (SAVE && (!SAVE.swingKeel || !SAVE.paddleWheel)) {
+      SAVE.swingKeel = true; SAVE.paddleWheel = true;
+      storeSave();
+    }
+    if (moPaddleGrp) moPaddleGrp.visible = true;
+    SFX.crank();
+  }
+  const bx = BOAT.x, bz = BOAT.z, by = sailboat.group.position.y;
+  const ang = BOAT.ang;
+  if (t < 2.6) {
+    /* the keel: she shows her new hinge — up along the hull, and back */
+    const k = t < 1.4 ? smoothstep(clamp((t - 0.3) / 0.9, 0, 1)) : smoothstep(clamp((2.5 - t) / 0.9, 0, 1));
+    if (moKeel.ok) moKeel.pivot.rotation.x = -k * 1.32;
+    if (CINE.step === 1 && t > 0.5) { CINE.step = 2; SFX.creakBoat ? SFX.creakBoat() : SFX.creak(); }
+    const a = ang + 2.2;
+    cineCam(bx + Math.sin(a) * 4.6, by + 0.6, bz + Math.cos(a) * 4.6, bx, by + 0.2, bz);
+  } else if (t < 5.4) {
+    /* the wheel: the spring winds, the paddles bite, the water boils */
+    if (CINE.step === 2) { CINE.step = 3; SFX.crank(); }
+    const k = smoothstep(clamp((t - 2.7) / 0.8, 0, 1));
+    moPaddlePh += DT * k * 3.2;
+    if (moPaddleSpin) moPaddleSpin.rotation.x = -moPaddlePh * TAU * 0.35;
+    if (k > 0.5 && (simTick % 22) === 0) SFX.paddleClack(true);
+    if (k > 0.5 && !LOWFX && (simTick % 4) === 0 && typeof psSpray !== 'undefined') {
+      const wx = bx - Math.sin(ang) * 2.35, wz = bz - Math.cos(ang) * 2.35;
+      psSpray.spawn(wx + (Math.random() - 0.5) * 0.8, by + 0.35, wz + (Math.random() - 0.5) * 0.8,
+        (Math.random() - 0.5) * 1.2, 1.4, (Math.random() - 0.5) * 1.2, 0.5);
+    }
+    const a = ang + Math.PI + 0.7 - (t - 2.6) * 0.18;
+    cineCam(bx + Math.sin(a) * 4.2, by + 1.1, bz + Math.cos(a) * 4.2,
+      bx - Math.sin(ang) * 2.2, by + 0.4, bz - Math.cos(ang) * 2.2);
+    if (CINE.step === 3 && t > 4.6) {
+      CINE.step = 4;
+      SFX.chime(1.2);
+      burst(psSparkle, bx, by + 1.2, bz, 16, 1.6, 1.2, 1.0);
+      rumble({ duration: 260, strong: 0.3, weak: 0.6 }, 'refit5');
+    }
+  } else {
+    const k = smoothstep(clamp((t - 5.4) / 1.0, 0, 1));
+    const a = ang + Math.PI + 0.2;
+    cineCam(lerp(bx + Math.sin(a) * 4.2, moCine0.px, k), lerp(by + 1.1, moCine0.py, k), lerp(bz + Math.cos(a) * 4.2, moCine0.pz, k),
+      lerp(bx, moCine0.lx, k), lerp(by + 0.4, moCine0.ly, k), lerp(bz, moCine0.lz, k));
+    if (t > 6.5) { moRefitDone(); endCine(); }
+  }
+}
+function moRefitDone() {
+  if (SAVE && (!SAVE.swingKeel || !SAVE.paddleWheel)) {
+    SAVE.swingKeel = true; SAVE.paddleWheel = true;
+    storeSave();
+  }
+  if (moPaddleGrp) moPaddleGrp.visible = moPaddleFit();
+  showCaption('Swing keel and stern wheel. HOLD ○ — she is fast now.', 4200);
+}
+window.__refitCine5 = function () { startCine('refit5'); };
+
+const _moStartCine = startCine;
+startCine = function (id) {
+  _moStartCine(id);
+  if (id === 'riverFalls' || id === 'refit5') {
+    CAM.mode = 'cine';
+    dlgBox.classList.remove('on');
+  }
+};
+const _moTickCine = tickCine;
+tickCine = function () {
+  if (CINE.id === 'riverFalls') { CINE.t += DT; tickRiverFalls(CINE.t); return; }
+  if (CINE.id === 'refit5') { CINE.t += DT; tickRefit5(CINE.t); return; }
+  _moTickCine();
+};
+</script>
+<script>
+/* ═══════════ p6i/8 — wiring: derive, interact, compass, frame, telemetry ═══════════ */
+
+/* the one derivation — everything phase-5-part-one, from the save, both
+   ways: gates snap to their state, sheets to theirs, the refit to its */
+function moDeriveWorld(S) {
+  const open = S ? clamp(S.sluiceG | 0, 0, 3) : 0;
+  for (let k = 0; k < MOGATES.length; k++) {
+    const G = MOGATES[k];
+    G.giving = false;
+    G.slabK = open > k ? 1 : 0;
+    G.progress = 0;
+    G.grp.position.y = G.sillY - G.slabK * 4.15;
+  }
+  moFill[0] = open >= 1 ? 1 : 0;
+  moFill[1] = open >= 2 ? 1 : 0;
+  moFill[2] = (S && S.mouthOpen) ? 1 : 0;
+  moRunFrontS = -1;
+  moRunDrawFront(-1);
+  moBoatDy = 0;
+  moKeel.foldK = 0;
+  if (moKeel.ok && !moSwingKeel()) moKeel.pivot.rotation.x = 0;
+  if (moPaddleGrp) moPaddleGrp.visible = !!(S && S.paddleWheel);
+  moPaddleK = 0;
+  MOP.engaged = -1;
+  for (const R of moRings) { R.t = -1; R.m.visible = false; }
+}
+window.__worldStateHooks.push(function (S) { moDeriveWorld(S); });
+
+/* ── interactions: the wheel prompt (label only — the rhythm tick owns
+   the button), and going ashore up the reaches ── */
+const _moInteract = currentInteract;
+currentInteract = function () {
+  if (P.sailing && !VOYAGE.active && BOAT.spd < 2.4 && moBoatDy > 0.02) {
+    const s = moAshoreSpot();
+    if (s) return { id: 'moAshore', label: '✕ COME ASHORE' };
+  }
+  if (!P.sailing && !P.skiffing && moSluiceReady()) {
+    const G = moActiveGate();
+    if (G && Math.hypot(P.x - G.wx, P.z - G.wz) < 3.2) {
+      return { id: 'moWheel', label: '✕ THE GATE WHEEL' };
+    }
+  }
+  return _moInteract();
+};
+const _moDoInteract = doInteract;
+doInteract = function (ctx) {
+  if (ctx.id === 'moWheel') return;              // the rhythm tick owns ✕ here
+  if (ctx.id === 'moAshore') {
+    const s = moAshoreSpot();
+    if (!s) return;
+    P.sailing = false;
+    P.x = s.x; P.z = s.z; P.fy = s.y; P.air = false;
+    P.vx = 0; P.vz = 0; P.st = 'idle';
+    sailboatColl.off = false;
+    sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z;
+    if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; SAVE.boatAng = BOAT.ang; storeSave(); }
+    SFX.splashSm ? SFX.splashSm() : SFX.splash();
+    return;
+  }
+  _moDoInteract(ctx);
+};
+
+/* ── the compass follows paths (q18 / q19 are staged; q20+ are p6j's) ──
+   The shore road bay ↔ pass camp is the same line the family walks; the
+   pointer walks it node by node in either direction. */
+const MO_PATH = [
+  { x: 88, z: 33 }, { x: 95, z: 34 }, { x: 108, z: 35 }, { x: 120, z: 36.5 },
+  { x: 138, z: 38 }, { x: 170, z: 41 }, { x: 200, z: 44 }, { x: 226, z: 50 },
+  { x: 243, z: 57 },
+];
+function moPathNext(toEast) {
+  const ch = toEast ? MO_PATH : MO_PATH.slice().reverse();
+  let ni = 0, nd = 1e9;
+  for (let i = 0; i < ch.length; i++) {
+    const d = Math.hypot(P.x - ch[i].x, P.z - ch[i].z);
+    if (d < nd) { nd = d; ni = i; }
+  }
+  return ch[Math.min(ni + (nd < 8 ? 1 : 0), ch.length - 1)];
+}
+const _moObjPoint = objectivePoint;
+objectivePoint = function () {
+  if (SAVE) {
+    if (QUEST.q === 18) {
+      /* the lights on the water: afloat, straight to them; ashore, down
+         the shore road to the water's edge nearest the anchorage */
+      if (P.sailing || P.skiffing) return { x: ANCHORAGE.x, z: ANCHORAGE.z };
+      if (P.x > 100) return moPathNext(false);
+      return { x: ANCHORAGE.x, z: ANCHORAGE.z };
+    }
+    if (QUEST.q === 19 && !SAVE.mouthOpen) {
+      const G = moActiveGate();
+      const tgt = G ? { x: G.wx, z: G.wz } : { x: SLUICE.x, z: SLUICE.z };
+      if (P.sailing || P.skiffing) return tgt;
+      /* west of the works: up the shore road first; at the works: the
+         next wheel */
+      if (P.x < 118) return moPathNext(true);
+      return tgt;
+    }
+  }
+  return _moObjPoint();
+};
+
+/* ── the sim: the sluice rhythm runs with the player tick ── */
+const _moTickPlayer = tickPlayer;
+tickPlayer = function () {
+  tickSluice();
+  _moTickPlayer();
+};
+
+/* ── the render frame ── */
+let moClock = performance.now(), moDbgDone = false, moColF = 0;
+function moAnimGate(G, dtv) {
+  if (G.giving && G.slabK < 1) {
+    G.slabK = Math.min(1, G.slabK + dtv / 1.8);
+    if (G.slabK >= 0.7 && SAVE && (SAVE.sluiceG | 0) <= MOGATES.indexOf(G)) {
+      SAVE.sluiceG = MOGATES.indexOf(G) + 1;
+      storeSave();
+      SFX.waterFill();
+    }
+    if (G.slabK >= 1) G.giving = false;
+  }
+  const k = MOGATES.indexOf(G);
+  const fillI = k === 0 ? 0 : k === 1 ? 1 : 2;
+  if (k < 2 && moGatesOpen() > k && moFill[fillI] < 1) {
+    moFill[fillI] = Math.min(1, moFill[fillI] + dtv / 2.6);
+  }
+  G.grp.position.y = G.sillY - G.slabK * 4.15;
+  G.spin += G.spinV * dtv;
+  G.spinV *= Math.pow(0.02, dtv);
+  if (G.wheelSpin) G.wheelSpin.rotation.z = G.spin;
+}
+function moWaterMod(sheet, tsec, deep) {
+  const colA = sheet.mesh.geometry.attributes.color;
+  const arr = colA.array, base = sheet.base;
+  for (let v = 0; v < arr.length; v += 3) {
+    const f = 1 + 0.07 * Math.sin(v * 0.11 - tsec * 2.4) + 0.03 * Math.sin(v * 0.31 + tsec * 1.2);
+    arr[v] = base[v] * f;
+    arr[v + 1] = base[v + 1] * f;
+    arr[v + 2] = base[v + 2] * (2 - f);
+  }
+  colA.needsUpdate = true;
+}
+const _moCullChunks = cullChunks;
+cullChunks = function (ccx, ccz) {
+  _moCullChunks(ccx, ccz);
+  const now = performance.now();
+  const dtv = Math.min(0.1, (now - moClock) / 1000);
+  moClock = now;
+  const d2 = (x, z) => (x - ccx) * (x - ccx) + (z - ccz) * (z - ccz);
+  const nearWorks = d2(246, 48) < 300 * 300;
+  const worksClose = d2(246, 48) < 100 * 100;
+  const nearMouth = d2(MOUTH_POOL.x, MOUTH_POOL.z) < 300 * 300;
+  const wet = !!(SAVE && SAVE.sky >= 2);
+  /* sheets — the small reach sheets only matter within sight of the works */
+  moWaterHead.mesh.visible = riverWet() && worksClose;
+  moWaterR1.mesh.visible = riverWet() && moFill[0] > 0 && worksClose;
+  moWaterR2.mesh.visible = riverWet() && moFill[1] > 0 && worksClose;
+  moWaterRun.mesh.visible = (window.__mouthOpenNow() || moRunFrontS >= 0) && moFill[2] > 0 && (nearWorks || nearMouth);
+  moWaterTide.visible = wet && nearMouth;
+  /* rising reaches ride their fill */
+  moWaterR1.mesh.position.y = -(1 - moFill[0]) * 1.3;
+  moWaterR1.mesh.updateMatrix();
+  moWaterR2.mesh.position.y = -(1 - moFill[1]) * 1.3;
+  moWaterR2.mesh.updateMatrix();
+  /* the works */
+  moPropMesh.visible = d2(246, 48) < 130 * 130 || d2(160, 38) < 130 * 130;
+  for (const G of MOGATES) {
+    const dg = d2(G.g.x, G.g.z);
+    G.grp.visible = dg < 80 * 80 && G.slabK < 0.98;   // a sunk slab is a buried draw call
+    G.wheel.visible = dg < 55 * 55;
+    G.glow.visible = dg < 80 * 80 && moSluiceReady() && moActiveGate() === G;
+    moAnimGate(G, SIM_FREEZE ? 0 : dtv);
+  }
+  /* the surge, seen and heard: the band runs at the active gate */
+  const G = moActiveGate();
+  if (moSluiceReady() && G && d2(G.g.x, G.g.z) < 130 * 130) {
+    const ph = moSurgePh();
+    const W = MO_SURGE_W / MO_SURGE_T;
+    let bandS, op;
+    if (ph >= W) {
+      const k = (ph - W) / (1 - W);
+      bandS = G.g.s - 30 * (1 - k);
+      op = 0.14 + k * 0.5;
+    } else {
+      bandS = G.g.s;
+      op = 0.75 * (1 - ph / W * 0.6);
+    }
+    const p = lrPointAt(Math.max(0, bandS));
+    /* the swell runs down the STANDING water above the works */
+    const y = bandS <= S_GATES[0].s ? 4.77 :
+      (lowerSurfaceAt(p.x, p.z) !== null ? lowerSurfaceAt(p.x, p.z) : p.y);
+    moSurgeMesh.position.set(p.x, y + 0.07, p.z);
+    moSurgeMesh.rotation.y = Math.atan2(p.fx, p.fz) + Math.PI / 2;
+    moSurgeMat.opacity = op;
+    moSurgeMesh.visible = true;
+    if (G.glowMat) G.glowMat.opacity = 0.1 + window.__sluicePulseK() * 0.3;
+  } else {
+    moSurgeMesh.visible = false;
+  }
+  /* water colour flow — the visible sheets only, every other frame */
+  if ((++moColF % 2) === 0 && !SIM_FREEZE) {
+    const tsec = now / 1000;
+    if (moWaterR1.mesh.visible) moWaterMod(moWaterR1, tsec);
+    if (moWaterR2.mesh.visible) moWaterMod(moWaterR2, tsec);
+    if (moWaterRun.mesh.visible) moWaterMod(moWaterRun, tsec);
+    if (moWaterHead.mesh.visible) moWaterMod(moWaterHead, tsec);
+    if (moWaterTide.visible) {
+      const colA = moWaterTide.geometry.attributes.color;
+      const arr = colA.array;
+      for (let v = 0; v < arr.length; v += 3) {
+        const f = 1 + 0.05 * Math.sin(v * 0.07 - tsec * 1.7);
+        arr[v] = moTideBase[v] * f;
+        arr[v + 1] = moTideBase[v + 1] * f;
+        arr[v + 2] = moTideBase[v + 2] * (2 - f);
+      }
+      colA.needsUpdate = true;
+    }
+  }
+  /* the mouth rings (cine + the first minute after) */
+  for (const R of moRings) {
+    if (R.t < 0 && !R.m.visible) continue;
+    R.t += dtv;
+    if (R.t < 0) continue;
+    const k = R.t / 3.2;
+    if (k >= 1) { R.m.visible = false; R.t = -1; continue; }
+    R.m.visible = true;
+    const sc = 2 + k * 46;
+    R.m.scale.set(sc, 1, sc);
+    R.mat.opacity = 0.5 * (1 - k);
+  }
+  if (!SIM_FREEZE) psRapids.update(dtv);
+  psRapids.pts.visible = state === 'cine' && CINE.id === 'riverFalls' && !LOWFX;
+  /* down in the corridor the gorge frames the view: the distant far tier
+     is a call apiece for ridges the banks mostly hide. The far system
+     re-derives visibility every frame, so this is a per-frame trim, not
+     a state change. */
+  if (mouthNearQ(ccx, ccz) && typeof farTiles !== 'undefined') {
+    for (let i = 0; i < farTiles.length; i++) {
+      const t = farTiles[i];
+      if (!t.mesh || !t.mesh.visible) continue;
+      if (t.__moC === undefined) {
+        const g = t.mesh.geometry;
+        if (!g.boundingSphere) g.computeBoundingSphere();
+        t.__moC = [g.boundingSphere.center.x, g.boundingSphere.center.z];
+      }
+      const tx = t.__moC[0] - ccx, tz = t.__moC[1] - ccz;
+      if (tx * tx + tz * tz > 450 * 450) t.mesh.visible = false;
+    }
+  }
+  moExtendDebugOnce();
+};
+
+/* ── telemetry ── */
+window.__telemetryHooks.push(function (T) {
+  T.moGates = moGatesOpen();
+  T.moMouthOpen = window.__mouthOpenNow();
+  T.moSurgeNow = moSurgeOn();
+  T.moSurgePh = +moSurgePh().toFixed(3);
+  T.moProgress = (moActiveGate() || { progress: -1 }).progress;
+  T.moHits = MOP.hits; T.moShudders = MOP.shudders; T.moOpens = MOP.opens;
+  T.moEngaged = MOP.engaged;
+  T.moSlabs = MOGATES.map(G => +G.slabK.toFixed(2)).join(',');
+  T.moFill = moFill.map(f => +f.toFixed(2)).join(',');
+  T.moDepthHere = +lowerDepthAt(P.x, P.z).toFixed(2);
+  T.moSurfHere = lowerSurfaceAt(P.x, P.z);
+  T.moBoatDy = +moBoatDy.toFixed(2);
+  T.moKeelFold = +moKeel.foldK.toFixed(2);
+  T.moKeelRot = moKeel.ok ? +moKeel.pivot.rotation.x.toFixed(2) : 0;
+  T.moPaddleOn = moPaddleK > 0.5;
+  T.moPaddleK = +moPaddleK.toFixed(2);
+  T.moPaddleVis = !!(moPaddleGrp && moPaddleGrp.visible);
+  T.moSwingKeel = moSwingKeel();
+  T.moPaddleFit = moPaddleFit();
+  T.moFordSaid = moFordSaid;
+  T.moLane = window.__mouthLane;
+  T.moCarveTris = window.__mouthCarve.tris;
+  T.moCarveTrees = window.__mouthCarve.trees;
+});
+
+/* ── debug (setup helpers reach states; they never fake the mechanic) ── */
+function moExtendDebugOnce() {
+  if (moDbgDone || !window.__fmDebug) return;
+  moDbgDone = true;
+  Object.assign(window.__fmDebug, {
+    warpMouth(where) {
+      const spots = {
+        sluice: [S_GATES[0].wx + 2, S_GATES[0].wz + 2],
+        gate2: [S_GATES[1].wx + 2, S_GATES[1].wz + 2],
+        gate3: [S_GATES[2].wx + 2, S_GATES[2].wz + 2],
+        pool: [MOUTH_POOL.x, 32],
+        bar: [140, 33],
+        camp: [243, 57],
+      };
+      const s = spots[where] || spots.sluice;
+      window.__fmDebug.warp(s[0], s[1]);
+      return { at: where || 'sluice', x: s[0], z: s[1] };
+    },
+    mouthInfo() {
+      return {
+        gates: moGatesOpen(), open: window.__mouthOpenNow(),
+        fill: moFill.map(f => +f.toFixed(2)),
+        lane: window.__mouthLane,
+        carve: window.__mouthCarve,
+        surge: { on: moSurgeOn(), ph: +moSurgePh().toFixed(3) },
+        boat: { dy: +moBoatDy.toFixed(2), keel: +moKeel.foldK.toFixed(2), paddle: +moPaddleK.toFixed(2) },
+        depthHere: +lowerDepthAt(P.x, P.z).toFixed(2),
+      };
+    },
+    gateNow(n) {
+      /* setup only: snaps the save to n gates open and re-derives */
+      if (!SAVE) return null;
+      SAVE.sluiceG = clamp(n | 0, 0, 3);
+      if (SAVE.sluiceG >= 3) SAVE.mouthOpen = true;
+      storeSave();
+      applyWorldState();
+      return window.__fmDebug.mouthInfo();
+    },
+    refitNow() {
+      if (!SAVE) return null;
+      SAVE.swingKeel = true; SAVE.paddleWheel = true;
+      storeSave();
+      applyWorldState();
+      return window.__fmDebug.mouthInfo();
+    },
+    boatTo(x, z) {
+      BOAT.x = x; BOAT.z = z; BOAT.spd = 0;
+      sailboatColl.x = x; sailboatColl.z = z;
+      if (SAVE) { SAVE.boatX = x; SAVE.boatZ = z; storeSave(); }
+      return { x, z, depth: +waterDepthAt(x, z).toFixed(2) };
+    },
+  });
+}
+</script>
+<script>
+/* ═══════════ RULES CORE registrations for p6i (pure addition) ═══════════ */
+window.__WORLD_REG.push({
+  name: 'river-mouth', kind: 'ground', over: ['brightharbor', 'forest'],
+  owns: (x, z) => mouthNearQ(x, z),
+  ground: (x, z) => mouthGroundAt(x, z),
+  note: 'the rapids corridor, sluiceway, mouth pool and carved bay channel — two lattice fields on the bay/forest lattices (p6d harbour-gap pattern); the rendered sheets were cut onto the same fields in place',
+});
+window.__WORLD_REG.push({
+  name: 'lower-river-surface', kind: 'water', over: ['river-mouth', 'brightharbor', 'forest', 'river-surface'],
+  owns: (x, z) => mouthNearQ(x, z) && lowerSurfaceAt(x, z) !== null,
+  surface: (x, z) => lowerSurfaceAt(x, z),
+  note: 'the lower river’s authored water — an OVERLAY on river-mouth ground; static sheets, hulls ride the interpolated surface (Rule 4 from the vessel side)',
+});
+/* Rule 2: the three sluice gates. openNow reads intent (the SAVE); the
+   live chain answers from the RENDERED slab (Rule 6) — the invariant
+   sweep checks they never disagree. */
+window.__PORTALS.push(
+  { name: 'sluice-gate-1', x: S_GATES[0].x, z: S_GATES[0].z,
+    openNow: () => moGatesOpen() >= 1 },
+  { name: 'sluice-gate-2', x: S_GATES[1].x, z: S_GATES[1].z,
+    openNow: () => moGatesOpen() >= 2 },
+  { name: 'sluice-gate-3', x: S_GATES[2].x, z: S_GATES[2].z,
+    openNow: () => moGatesOpen() >= 3 },
+);
+</script>
