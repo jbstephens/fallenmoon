@@ -1229,15 +1229,23 @@ THE ARC (quests 18→22):
 3. THE RIVER FALLS (cinematic): the mouth opens and the Silverrun
    thunders down new rapids into the bay. The water CONNECTS — terrain
    carved, the bay's east shallows now hold the rapids' mouth pool.
-3b. THE SWING-KEEL REFIT (John: "also boat refit"): in thanks for the
-   opened mouth, the trader's shipwright refits the sailboat — the
-   phase-3 keel gains a PIVOT. In shallows it visibly swings up along
-   the hull, she rides higher, and her draft halves: the east bay
-   shallows and the river's LOWER REACH (mouth pool up to the first
-   ford) become sailable. Refit cine at the trader's boat (the family
-   loved the keel cine — same beat, same visible-upgrade law: you SEE
-   the keel fold on every shallow crossing). Save flag: swingKeel.
-   The old "Shallows" caption keeps firing only where even she can't go.
+3b. THE REFIT — THE WOUND HEART (John: "also boat refit... some sort of
+   motor. Fast ish."): in thanks for the opened mouth, the flotilla's
+   tinker-shipwright refits the sailboat with TWO visible things:
+   - a SWING KEEL: the phase-3 keel gains a pivot — in shallows it
+     visibly folds up the hull, she rides higher, draft halves; the
+     east bay and the river's LOWER REACH (mouth pool to the first
+     ford) become sailable. The "Shallows" caption keeps firing only
+     where even she can't go.
+   - a STERN PADDLEWHEEL, wound-spring driven (wheels are this world's
+     soul — the Moonwheel, the mills, the pinwheels; now she has hers).
+     HOLD ○ = the wheel churns: clack-clack SFX, boiling wake, and
+     fast-ish speed (~1.45× sprint-sail; replaces the sprint-sail hold
+     once fitted — one control, visibly upgraded). Big boat owns big
+     water; the white chutes above the first ford stay skiff-only
+     (too narrow for her beam — one caption says so, once).
+   Refit cine at the trader's boat (the keel cine beat the family
+   loved). Save flags: swingKeel, paddleWheel (granted together).
 4. q20 LIGHT THE WAY UP THE SILVERRUN — the trader gives THE FERRY POLE
    (found item beat at their boat; visible on the skiff; ✕ swings it
    aboard). THE ASCENT: current pushes down; EDDIES (behind boulders,
@@ -1276,6 +1284,6 @@ drop-in preserved. Budgets: the river run and the lit market must hold
 lights. The pre-existing skiff hotspot (92 calls at station 355) must be
 FIXED as part of the ascent work, not inherited.
 
-Save: mouthOpen, swingKeel, poleFound, braziers[], marketOpen, sliver5, sky 5,
+Save: mouthOpen, swingKeel, paddleWheel, poleFound, braziers[], marketOpen, sliver5, sky 5,
 tbc5Seen, pennant, spyglass, fireworks, marketHeart; forward-derivation
 per p2-core pattern; flags apply LIVE at set-site.
