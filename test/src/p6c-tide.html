@@ -2545,6 +2545,34 @@ function tickTide() {
         dunkCaption = true;
         showCaption('Too deep to wade. The boat knows the way.', 3200);
       }
+      /* THE DUNK MUST NOT ORPHAN THE BOAT: fished out onto a shore with
+         deep water between you and her is a soft-lock (John fell off the
+         trader's gangplank, night one). If she is moored out of reach
+         across unwadeable water, she comes to your shore — the same
+         validated ring-search every rescue uses. */
+      if (FLOODLIVE.boatDone && !P.sailing) {
+        const bd = Math.hypot(P.x - BOAT.x, P.z - BOAT.z);
+        let crossing = false;
+        if (bd > 8) {
+          for (let s = 2; s < bd - 2; s += 1.6) {
+            const sx = P.x + (BOAT.x - P.x) / bd * s, sz = P.z + (BOAT.z - P.z) / bd * s;
+            if (waterDepthAt(sx, sz) > 0.62) { crossing = true; break; }
+          }
+        }
+        if (crossing) {
+          outer: for (let rr = 3; rr <= 12; rr += 0.7) {
+            for (let ii = 0; ii < 24; ii++) {
+              const aa = ii * (TAU / 24);
+              const fx = P.x + Math.sin(aa) * rr, fz = P.z + Math.cos(aa) * rr;
+              if (worldSolidAt(fx, fz)) continue;
+              if (waterDepthAt(fx, fz) < 0.9) continue;
+              BOAT.x = fx; BOAT.z = fz; BOAT.spd = 0;
+              storeSave();
+              break outer;
+            }
+          }
+        }
+      }
     }
   }
 }

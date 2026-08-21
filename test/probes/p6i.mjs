@@ -478,7 +478,9 @@ async function suiteWorld() {
       await api.eval('__fm.moPaddleVis === true'));
     /* the compass follows paths: q19 stages via the shore road, then the
        next wheel; q18 points down the road to the anchorage */
-    await api.eval('__fmDebug.warp(95, 34); SAVE.mouthOpen = false; SAVE.sluiceG = 0; 0');
+    /* the refit beat above now advances to q20 (the banner fix) — these
+       checks are ABOUT q19, so restore it with the state they assume */
+    await api.eval('__fmDebug.warp(95, 34); SAVE.mouthOpen = false; SAVE.sluiceG = 0; setQuest(19); 0');
     const c19w = await api.eval('(function(){ const o = objectivePoint(); return o ? [Math.round(o.x), Math.round(o.z)] : null; })()');
     gate('world: q19 compass from the bay follows the shore road east (never a beeline)',
       c19w && c19w[0] < 160 && Math.abs(c19w[1] - 36) < 8, JSON.stringify(c19w));

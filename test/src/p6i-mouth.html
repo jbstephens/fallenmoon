@@ -1580,6 +1580,10 @@ function moRefitDone() {
     SAVE.swingKeel = true; SAVE.paddleWheel = true;
     storeSave();
   }
+  /* the refit closes the mouth chapter: the banner must stop reading a
+     finished order (it confused the playtest twice) — q20's pointer
+     already stages the pole leg for !poleFound */
+  if (SAVE && QUEST.q === 19 && SAVE.mouthOpen) setQuest(20);
   if (moPaddleGrp) moPaddleGrp.visible = moPaddleFit();
   showCaption('Swing keel and stern wheel. HOLD ○ — she is fast now.', 4200);
 }
