@@ -1204,3 +1204,78 @@ Backlog acknowledged, deliberately deferred (do NOT hand-fix these; they
 await their rule): unifying the three boat stacks; collapsing the Cinder
 Pass staggered handoff band (x=98/100/110) and the harbour-gap band
 (−110/−104/−96); re-carving the river bed under the authored surface.
+
+## PHASE 5 — THE FULL MIRROR (decided 8/20, John: "All as one arc. Build it tonight!")
+
+ONE ARC: the night market + the river ascent. Salt becomes currency (the
+standing decision — resolved YES; a market needs something to spend).
+Upstream is SKIFF SKILL plus one VISIBLE upgrade (the keel→double-sail
+law): THE FERRY POLE, carried on the skiff in plain sight.
+
+THE ARC (quests 18→22):
+1. q18 LIGHTS ON THE WATER — at dusk, lanterns appear off the bay's east
+   shallows: the night market flotilla has come back (it only sails when
+   there is moon enough to steer by — four phases is enough). The LANTERN
+   TRADER cannot come in: "the river took our berth when it died; the
+   mouth is stone now." Their berth is the old ferry landing, upriver.
+2. q19 OPEN THE RIVER'S MOUTH — at the pass camp the Silverrun dies 5.3m
+   above the sea, 170m short. The old sluice stands there: THREE GATES
+   opened IN TIME with the river's surge pulses — the water itself
+   teaches the rhythm (listen: the surge swells, hits the gate, the gate
+   gives ON the surge). Puzzle escalation BY KIND: bell = match a tone;
+   organ = tune a chord; sluice = keep time with the river. No text.
+   Kid-fair: surge windows ≥1.2s, audible + visible (white swell line),
+   a missed beat just waits for the next surge.
+3. THE RIVER FALLS (cinematic): the mouth opens and the Silverrun
+   thunders down new rapids into the bay. The water CONNECTS — terrain
+   carved, the bay's east shallows now hold the rapids' mouth pool.
+3b. THE SWING-KEEL REFIT (John: "also boat refit"): in thanks for the
+   opened mouth, the trader's shipwright refits the sailboat — the
+   phase-3 keel gains a PIVOT. In shallows it visibly swings up along
+   the hull, she rides higher, and her draft halves: the east bay
+   shallows and the river's LOWER REACH (mouth pool up to the first
+   ford) become sailable. Refit cine at the trader's boat (the family
+   loved the keel cine — same beat, same visible-upgrade law: you SEE
+   the keel fold on every shallow crossing). Save flag: swingKeel.
+   The old "Shallows" caption keeps firing only where even she can't go.
+4. q20 LIGHT THE WAY UP THE SILVERRUN — the trader gives THE FERRY POLE
+   (found item beat at their boat; visible on the skiff; ✕ swings it
+   aboard). THE ASCENT: current pushes down; EDDIES (behind boulders,
+   inside bends) are glassy-calm — read the water; ride eddy to eddy;
+   on the surge-slack (the same rhythm the sluice taught) pole up the
+   white chutes. Light the BRAZIER at each eddy pool; the flotilla
+   follows your lights (escort by lantern, not by babysitting — they
+   advance when the next brazier is lit, staged, never stuck).
+   Hostiles: RIVER SNAPPERS on eddy boulders — 2-hit, lunge at the
+   skiff, pole-whack answers; telegraph ≥0.9s; they drop salt.
+5. q21 THE NIGHT MARKET — nightfall as the flotilla berths at the ferry
+   landing. The market opens: lantern strings, 4 stalls, nocturnal life
+   wakes (fireflies, moths at the braziers, night-birds — spectacle,
+   not combat; the market is a safe haven). SALT SPENDS: a heart
+   container (~60), the SPYGLASS (~25, aim-and-gaze anywhere), skiff
+   pennant colors (5), fireworks (3/launch, fired from the skiff).
+   The LANTERN CEREMONY: the flotilla's ancient stern-lantern is opened
+   — it has carried THE FIFTH SLIVER for generations, waiting for the
+   wheel to turn again. It is given, not won.
+6. q22 carry home: the NIGHT RUN — downriver by lantern-light, fast and
+   joyful (the reward lap), to the Moonwheel; sky step 5; 5/8 PHASES
+   RESTORED; TBC card. After the arc, dusk brings the market lights at
+   the landing every night — the world stays alive.
+
+CINEMATIC BEATS (the loved list grows): lanterns-at-dusk arrival; the
+river falls; the lantern ceremony; the wheel. All obey Rule 5 (film the
+rendered world, depart/return from the player's shot, always skippable).
+
+WORLD RULES obligations: new rapids water consults __HULLS; the sluice
+gates and the market entrance register in __PORTALS; new terrain owners
+register in __WORLD_REG; door plugs follow visible positions; the
+compass follows paths (extend the spine: bay mouth ↔ rapids ↔ pass camp
+↔ fords ↔ ferry landing). 2P: P2 rides the skiff and pole-whacks;
+drop-in preserved. Budgets: the river run and the lit market must hold
+≤80 calls on the Pi in LOWFX — lanterns are baked emissives, never
+lights. The pre-existing skiff hotspot (92 calls at station 355) must be
+FIXED as part of the ascent work, not inherited.
+
+Save: mouthOpen, swingKeel, poleFound, braziers[], marketOpen, sliver5, sky 5,
+tbc5Seen, pennant, spyglass, fireworks, marketHeart; forward-derivation
+per p2-core pattern; flags apply LIVE at set-site.
