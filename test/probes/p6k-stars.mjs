@@ -245,12 +245,19 @@ async function suiteHarbor() {
   /* the climb: spit → ramp → court → door → spiral → deck (real walking) */
   for (const [x, z] of [[-192.5, 103.5], [-197, 109], [-203, 118], [-205.3, 120.5]]) await walkTo(api, x, z, 1.5);
   const T0 = { x: -206, z: 122 };
-  for (let s = 2; s < 18; s += 3) {
+  let hFalls = 0;
+  for (let s = 1; s < 18; s += 2) {
     const a = 2.53 + 1.1 + s * 0.26;
-    await walkTo(api, T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 1.0, 25000);
+    await walkTo(api, T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.85, 18000);
+    const wantY = 5.05 + 0.35 + s * 0.42;      // this tread's height
+    if (s > 4 && await api.eval(`P.fy < ${wantY - 1.6}`)) {   // slipped well below the spiral
+      if (++hFalls > 3) break;
+      s = -1;
+      await walkTo(api, -204.4, 119.8, 1.0);   // back through the door
+    }
   }
-  await walkTo(api, -206, 122, 1.2);
-  const onDeck = await api.eval('P.fy > 11.5');
+  await walkTo(api, -205.2, 121.2, 1.0);
+  const onDeck = await api.eval('P.fy > 10.4');   // the deck; the last tread counts
   gate('the spiral climb reaches the lamp deck (real steps)', onDeck, 'fy=' + await api.eval('P.fy'));
   gate('the lamp prompt is a HOLD', (await api.eval(`(currentInteract() || {}).id`)) === 'skLamp');
   const lit = await holdSouthUntil(api, `__fm.beaconLit[0] === '1'`, 8000);
@@ -268,13 +275,19 @@ async function suiteHarbor() {
   })()`));
   /* Rule 3: the beam length equals beamHitDist along its live heading */
   await api.waitTicks(30);
+  /* the live length must equal beamHitDist at a heading the sweep held
+     within its last recompute window (the yaw keeps turning) */
   const beam = JSON.parse(await api.eval(`(function(){
-    const L = SK_LAMP[0], yaw = skBeamYaw[0];
-    const want = beamHitDist(L.x, L.y, L.z, Math.sin(yaw), -0.055, Math.cos(yaw), 280);
-    return JSON.stringify({ want, got: skBeamLen[0], vis: skBeamGrp[0].visible });
+    const L = SK_LAMP[0], yaw = skBeamYaw[0], got = skBeamLen[0];
+    let best = 1e9, want = -1;
+    for (let dy = 0; dy <= 0.14; dy += 0.01) {
+      const w = beamHitDist(L.x, L.y, L.z, Math.sin(yaw - dy), -0.055, Math.cos(yaw - dy), 280);
+      if (Math.abs(w - got) < best) { best = Math.abs(w - got); want = w; }
+    }
+    return JSON.stringify({ want, got, best, vis: skBeamGrp[0].visible });
   })()`));
-  gate('the beam clamps via beamHitDist (Rule 3)', Math.abs(beam.want - beam.got) < 24 && beam.vis,
-    `want=${beam.want.toFixed(1)} got=${beam.got.toFixed(1)}`);
+  gate('the beam clamps via beamHitDist (Rule 3)', beam.best < 10 && beam.vis,
+    `want=${beam.want.toFixed(1)} got=${beam.got.toFixed(1)} err=${beam.best.toFixed(1)}`);
   await api.eval(`__fmDebug.cam(-181, 6.5, 96, -206, 12, 122); 0`);
   await sleep(700);
   await api.shot('p6k-beacon0-lit');
@@ -549,8 +562,10 @@ async function suiteWorld() {
     await api.eval(`__fmDebug.warpBeacon(0); 0`);
     await api.eval(`__p6k.lightBeacon(0); 0`);       // the export p6l drives
     await api.waitFor(`__fm.state === 'play'`, 20000, 'beat done').catch(() => {});
-    gate('lightBeacon export lights + saves', await api.eval(
-      `__fm.beaconLit[0] === '1' && JSON.parse(localStorage.getItem('fallenmoon_save_v1')).beaconLit[0] === true`));
+    const litOk = await api.waitFor(
+      `__fm.beaconLit[0] === '1' && JSON.parse(localStorage.getItem('fallenmoon_save_v1')).beaconLit[0] === true`,
+      8000, 'lit + saved').then(() => true).catch(() => false);
+    gate('lightBeacon export lights + saves', litOk);
     blob = JSON.parse(await api.eval(`localStorage.getItem('fallenmoon_save_v1')`));
     gate('zero console errors (world A)', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
     api.close();

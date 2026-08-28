@@ -566,12 +566,14 @@ const SK_DECK = [];               // per-islet deck info for plat colliders
       const deckY = y0 + 7.44;
       latheW(md, [[0.2, 0], [3.15, 0]], { seg: 12, x: T.x, y: deckY, z: T.z, flat: true, col: C_SKSTONE2, cols: [C_SKSTONE2] });
       skRing(md, T, deckY, (2.35 + 3.15) / 2, 0.34, 0.8, 1, T.doorAng + Math.PI, 0.4, 1.0, 9);
-      /* interior spiral treads (rendered; the colliders mirror these) */
+      /* interior spiral treads around a NEWEL — the column makes the climb
+         a corridor: drum wall outside, stone post inside, nowhere to slip */
+      boxW(md, { x: T.x, y: y0, z: T.z, w: 0.5, d: 0.5, h: 7.5, tw: 0.42, td: 0.42, col: C_SKSTONE3, colB: C_SKSTONE3 });
       for (let s = 0; s < 18; s++) {
         const a = T.doorAng + 1.1 + s * 0.26;
         const ty = y0 + 0.35 + s * 0.42;
         boxW(md, { x: T.x + Math.sin(a) * 1.55, y: ty - 0.14, z: T.z + Math.cos(a) * 1.55,
-          w: 0.62, d: 0.5, h: 0.16, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
+          w: 0.72, d: 0.55, h: 0.16, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
       }
       skLampCage(md, T.x, deckY + 0.86, T.z, 1.25);
       boxW(md, { x: T.x, y: deckY, z: T.z, w: 0.3, d: 0.3, h: 0.9, col: C_SKSTONE3 });
@@ -731,9 +733,10 @@ const SK_DECK = [];               // per-islet deck info for plat colliders
 const skPlatColls = [];
 (function skBuildClimbColls() {
   const T0 = SK_B[0].tower, gy0 = skGroundAt(T0.x, T0.z) - 0.3;
+  addColl(T0.x, T0.z, 0.62);                      // the newel post (full height)
   for (let s = 0; s < 18; s++) {
     const a = T0.doorAng + 1.1 + s * 0.26;
-    const c = addColl(T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.6, gy0 + 0.35 + s * 0.42);
+    const c = addColl(T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.8, gy0 + 0.35 + s * 0.42);
     c.plat = true;
     skPlatColls.push(c);
   }
@@ -1573,7 +1576,7 @@ function skLampNearIdx() {
   return -1;
 }
 /* the beams: one clamped cone each — length ALWAYS from beamHitDist */
-const skBeamGrp = [], skBeamLen = [0, 0, 0, 0], skBeamYaw = [0.6, 2.4, 1.4, 2.9];
+const skBeamGrp = [], skBeamLen = [0, 0, 0, 0], skBeamYaw = [0.6, 2.4, 1.4, 2.9], skBeamCd = [0, 1, 2, 3];
 (function skBuildBeams() {
   for (let i = 0; i < 4; i++) {
     const grp = new THREE.Group();
@@ -1605,7 +1608,11 @@ function skUpdateBeam(i, dtv) {
   const grp = skBeamGrp[i];
   skBeamYaw[i] += dtv * 0.16;
   const yaw = skBeamYaw[i];
-  if ((simTick + i * 3) % 12 === 0) {
+  /* a frame COUNTDOWN, never a simTick modulo: under turbo the frame
+     samples simTick in strides of N and a misaligned phase would skip
+     the recompute forever (the beam froze at its bootstrap length) */
+  if (--skBeamCd[i] <= 0) {
+    skBeamCd[i] = 10;
     const L = SK_LAMP[i];
     skBeamLen[i] = beamHitDist(L.x, L.y, L.z, Math.sin(yaw), -0.055, Math.cos(yaw), 280);
   }
