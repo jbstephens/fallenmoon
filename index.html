@@ -31273,12 +31273,15 @@ worldSolidAt = function (x, z) {
 (function skRingColls() {
   for (const [bi, r0, r1, dAng, dHalf] of SK_RINGS) {
     const T = SK_B[bi].tower;
-    const rm = (r0 + r1) / 2, th = (r1 - r0) / 2;
-    const n = Math.max(10, Math.round(rm * 4));
+    /* studs sit a hair OUTSIDE the wall's midline with a tight radius, so
+       they never pinch the drowned spiral against its own balustrade —
+       the stud band must stay clear of the treads' outer edge */
+    const rm = (r0 + r1) / 2 + 0.3, th = (r1 - r0) / 2;
+    const n = Math.max(12, Math.round(rm * 4.2));
     for (let k = 0; k < n; k++) {
       const a = k / n * TAU;
       if (skAngDiff(a, dAng) < dHalf + 0.55 / rm) continue;
-      addColl(T.x + Math.sin(a) * rm, T.z + Math.cos(a) * rm, th + 0.5);
+      addColl(T.x + Math.sin(a) * rm, T.z + Math.cos(a) * rm, th + 0.2);
     }
   }
 })();
@@ -31373,12 +31376,14 @@ const SK_DECK = [];               // per-islet deck info for plat colliders
       const deckY = y0 + 7.44;
       latheW(md, [[0.2, 0], [3.15, 0]], { seg: 12, x: T.x, y: deckY, z: T.z, flat: true, col: C_SKSTONE2, cols: [C_SKSTONE2] });
       skRing(md, T, deckY, (2.35 + 3.15) / 2, 0.34, 0.8, 1, T.doorAng + Math.PI, 0.4, 1.0, 9);
-      /* interior spiral treads (rendered; the colliders mirror these) */
+      /* interior spiral treads around a NEWEL — the column makes the climb
+         a corridor: drum wall outside, stone post inside, nowhere to slip */
+      boxW(md, { x: T.x, y: y0, z: T.z, w: 0.5, d: 0.5, h: 7.5, tw: 0.42, td: 0.42, col: C_SKSTONE3, colB: C_SKSTONE3 });
       for (let s = 0; s < 18; s++) {
         const a = T.doorAng + 1.1 + s * 0.26;
         const ty = y0 + 0.35 + s * 0.42;
         boxW(md, { x: T.x + Math.sin(a) * 1.55, y: ty - 0.14, z: T.z + Math.cos(a) * 1.55,
-          w: 0.62, d: 0.5, h: 0.16, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
+          w: 0.72, d: 0.55, h: 0.16, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
       }
       skLampCage(md, T.x, deckY + 0.86, T.z, 1.25);
       boxW(md, { x: T.x, y: deckY, z: T.z, w: 0.3, d: 0.3, h: 0.9, col: C_SKSTONE3 });
@@ -31451,19 +31456,57 @@ const SK_DECK = [];               // per-islet deck info for plat colliders
           w: 0.9, d: 0.68, h: 0.18, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
       }
       /* the snappers' corbels: wall niches BESIDE the stair, never on it */
-      for (const sc of [8, 16]) {
+      for (const sc of [2, 5]) {
         const a = T.doorAng + 2.5 + sc * 0.2;
         const ty = 0.05 + sc * 0.325;
         const off = (ty - y0);
         boxW(md, { x: T.x + off * leanX * 0.55 + Math.sin(a) * 5.0, y: ty + 0.02, z: T.z + off * leanZ * 0.55 + Math.cos(a) * 5.0,
           w: 0.55, d: 0.5, h: 0.3, ry: a, col: C_SKSTONE3, colB: C_SKSTONE3 });
       }
+      /* the broken balustrade: stub posts on the well side — the rail that
+         keeps a seven-year-old (and a bot) out of the drop */
+      for (let s = 0; s < 27; s += 2) {
+        const a = T.doorAng + 2.5 + s * 0.2;
+        const ty = 0.05 + s * 0.325;
+        const off = (ty - y0);
+        boxW(md, { x: T.x + off * leanX * 0.55 + Math.sin(a) * 2.95, y: ty - 0.05, z: T.z + off * leanZ * 0.55 + Math.cos(a) * 2.95,
+          w: 0.18, d: 0.18, h: 1.3 + hash2(s, 51) * 0.12, ry: a, col: C_SKSTONE3, colB: C_SKSTONE3 });
+      }
+      /* and the surviving OUTER rail where the spiral crosses over the
+         flooded mouth — the wall opens there, the rail does not */
+      for (let s = 15; s < 24; s++) {
+        const a = ((T.doorAng + 2.5 + s * 0.2) % TAU + TAU) % TAU;
+        if (skAngDiff(a, T.doorAng) > 0.7) continue;
+        const ty = 0.05 + s * 0.325;
+        const off = (ty - y0);
+        boxW(md, { x: T.x + off * leanX * 0.55 + Math.sin(a) * 5.0, y: ty - 0.05, z: T.z + off * leanZ * 0.55 + Math.cos(a) * 5.0,
+          w: 0.2, d: 0.2, h: 1.35, ry: a, col: C_SKSTONE3, colB: C_SKSTONE3 });
+      }
       /* the stair-base landing beside the mouth (punt hop-off) */
       boxW(md, { x: T.x + Math.sin(T.doorAng + 2.2) * 3.9, y: -0.15, z: T.z + Math.cos(T.doorAng + 2.2) * 3.9,
         w: 1.5, d: 1.5, h: 0.22, ry: T.doorAng + 2.2, col: C_SKSTONE2, colB: C_SKSTONE3 });
-      /* the tilted lamp floor + cage: the room leans with its tower */
+      /* the tilted lamp floor + cage: the room leans with its tower — the
+         floor is a ring of wedges with a STAIRWELL gap where the spiral
+         arrives (a full slab was a ceiling over the whole climb) */
       const fy = 8.9, foffX = (fy - y0) * leanX * 0.55, foffZ = (fy - y0) * leanZ * 0.55;
-      boxW(md, { x: T.x + foffX, y: fy - 0.2, z: T.z + foffZ, w: 3.6, d: 3.6, h: 0.24, rx: 0.07, rz: 0.05, col: C_SKSTONE2, colB: C_SKSTONE3 });
+      const stairHeadA = ((T.doorAng + 2.5 + 26 * 0.2) % TAU + TAU) % TAU;   // ≈2.21
+      /* the floor: a complete inner disc (the room), and an outer skirt of
+         wedges with ONE missing sector — the hole the spiral rises through */
+      latheW(md, [[0.2, 0], [3.05, 0]], { seg: 12, x: T.x + foffX, y: fy - 0.06, z: T.z + foffZ, flat: true, col: C_SKSTONE2, cols: [C_SKSTONE2] });
+      boxW(md, { x: T.x + foffX, y: fy - 0.22, z: T.z + foffZ, w: 2.2, d: 2.2, h: 0.18, rx: 0.04, rz: 0.03, col: C_SKSTONE3, colB: C_SKSTONE3 });
+      for (let w = 0; w < 12; w++) {
+        const a = w / 12 * TAU + 0.13;
+        if (skAngDiff(a, stairHeadA) < 0.72) continue;
+        boxW(md, { x: T.x + foffX + Math.sin(a) * 3.9, y: fy - 0.18 + Math.sin(a) * 0.14, z: T.z + foffZ + Math.cos(a) * 3.9,
+          w: 1.15, d: 1.05, h: 0.22, ry: a, rx: 0.04, col: C_SKSTONE2, colB: C_SKSTONE3 });
+      }
+      /* the head's threshold stones: two worn slabs stepping the last
+         treads up onto the room floor */
+      for (const [da, rr, ty2] of [[-0.21, 3.5, 8.24], [0.02, 3.45, 8.5]]) {
+        const a = stairHeadA + da;
+        boxW(md, { x: T.x + foffX + Math.sin(a) * rr, y: ty2, z: T.z + foffZ + Math.cos(a) * rr,
+          w: 0.85, d: 0.8, h: 0.14, ry: a, col: C_SKSTONE, colB: C_SKSTONE3 });
+      }
       skLampCage(md, T.x + foffX, fy + 0.14, T.z + foffZ, 1.3);
       SK_LAMP.push({ x: T.x + foffX, y: fy + 0.8, z: T.z + foffZ });
       SK_DECK.push({ x: T.x + foffX, z: T.z + foffZ, y: fy, r: 3.3 });
@@ -31500,9 +31543,10 @@ const SK_DECK = [];               // per-islet deck info for plat colliders
 const skPlatColls = [];
 (function skBuildClimbColls() {
   const T0 = SK_B[0].tower, gy0 = skGroundAt(T0.x, T0.z) - 0.3;
+  addColl(T0.x, T0.z, 0.62);                      // the newel post (full height)
   for (let s = 0; s < 18; s++) {
     const a = T0.doorAng + 1.1 + s * 0.26;
-    const c = addColl(T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.6, gy0 + 0.35 + s * 0.42);
+    const c = addColl(T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.8, gy0 + 0.35 + s * 0.42);
     c.plat = true;
     skPlatColls.push(c);
   }
@@ -31520,6 +31564,15 @@ const skPlatColls = [];
     const c = addColl(T2.x + off * 0.14 + Math.sin(a) * 4.0, T2.z + off * 0.1 + Math.cos(a) * 4.0, 0.95, ty);
     c.plat = true;
     skPlatColls.push(c);
+    if ((s % 2) === 0) {
+      /* the balustrade: a WALL on the well side at this tread's height */
+      addColl(T2.x + off * 0.14 + Math.sin(a) * 2.95, T2.z + off * 0.1 + Math.cos(a) * 2.95, 0.42, ty + 1.35);
+    }
+    const aN = ((a % TAU) + TAU) % TAU;
+    if (skAngDiff(aN, T2.doorAng) < 0.7) {
+      /* the outer rail over the mouth: the one stretch with no wall */
+      addColl(T2.x + off * 0.14 + Math.sin(a) * 5.0, T2.z + off * 0.1 + Math.cos(a) * 5.0, 0.48, ty + 1.35);
+    }
   }
   {
     const c = addColl(T2.x + Math.sin(T2.doorAng + 2.2) * 3.9, T2.z + Math.cos(T2.doorAng + 2.2) * 3.9, 1.5, 0.07);
@@ -31527,10 +31580,28 @@ const skPlatColls = [];
     skPlatColls.push(c);
   }
   const D2 = SK_DECK[2];
-  for (const [ox, oz] of [[0, 0], [1.6, 1.0], [-1.6, -1.0], [1.0, -1.5], [-1.0, 1.5]]) {
-    const c = addColl(D2.x + ox, D2.z + oz, 1.4, D2.y + (ox * 0.07 + oz * 0.05));
-    c.plat = true;
-    skPlatColls.push(c);
+  {
+    /* the lamp floor: a complete inner room disc, an outer skirt with one
+       open sector over the spiral's head — the last tread steps INWARD */
+    const headA = ((T2.doorAng + 2.5 + 26 * 0.2) % TAU + TAU) % TAU;
+    const cc = addColl(D2.x, D2.z, 1.7, D2.y);
+    cc.plat = true; skPlatColls.push(cc);
+    for (let w = 0; w < 10; w++) {
+      const a = w / 10 * TAU;
+      const c = addColl(D2.x + Math.sin(a) * 2.2, D2.z + Math.cos(a) * 2.2, 1.3, D2.y + Math.sin(a) * 0.1);
+      c.plat = true; skPlatColls.push(c);
+    }
+    for (let w = 0; w < 12; w++) {
+      const a = w / 12 * TAU + 0.13;
+      if (skAngDiff(a, headA) < 0.72) continue;
+      const c = addColl(D2.x + Math.sin(a) * 3.9, D2.z + Math.cos(a) * 3.9, 1.1, D2.y + Math.sin(a) * 0.14);
+      c.plat = true; skPlatColls.push(c);
+    }
+    for (const [da, rr, ty2] of [[-0.21, 3.5, 8.38], [0.02, 3.45, 8.64]]) {
+      const a = headA + da;
+      const c = addColl(D2.x + Math.sin(a) * rr, D2.z + Math.cos(a) * rr, 0.9, ty2);
+      c.plat = true; skPlatColls.push(c);
+    }
   }
 })();
 
@@ -31541,6 +31612,19 @@ ISLE_ANCHORS.push(
   { x: -902, z: 301, sx: -902, sz: 307, id: 'reefstar' },
   { x: -1241, z: 249, sx: -1236, sz: 252, id: 'drownedstar' },
   { x: -2285, z: -990, sx: -2288, sz: -993, id: 'farstar' },
+);
+
+/* ── shade: every charted isle casts it, and so do these. The DROWNED
+   TOWER'S whole footprint is one shade circle — its hall and spiral are
+   ENCLOSED, but inShadeAt's isle model is 2D circles, and an unregistered
+   interior reads as open sun: a midday punt-in fainted the player on the
+   stair and woke them outside at the anchor (the probe caught it; a kid
+   would hit it every noon). Each open tower casts a lee at its base. ── */
+ISLE_SHADE.push(
+  { x: -1257.5, z: 228.5, r: 9.5 },            /* drowned tower: hall + full spiral */
+  { x: -196, z: 106, r: 4.5 },                 /* harbor star tower lee */
+  { x: -902, z: 315, r: 4.5 },                 /* reef star stack lee */
+  { x: -2294, z: -1002, r: 5.0 },              /* far star tower lee */
 );
 
 /* ── the swell yields to the islets: shoal the amp (and pull the color
@@ -31664,7 +31748,13 @@ function skPuntFooting() {
       }
       if (blocked) continue;
       const sy = supportYAt(px, pz, SK_WL + 2.0);
-      if (sy > SK_WL - 0.3 && sy < SK_WL + 2.0) return { x: px, z: pz, y: sy };
+      /* strictly above the DUNK line (WL+0.35): p6c dunks any standing
+         fy below it wherever terrain depth > 0.8 — and the whole drowned
+         hall is deep terrain. A footing below that line is a footing the
+         tide law re-dunks the instant you stand on it (the probe caught
+         the full cascade: step off → splash → wake on the spit outside).
+         Margin: only offer step-off onto ground a real step ABOVE water. */
+      if (sy > SK_WL + 0.4 && sy < SK_WL + 2.0) return { x: px, z: pz, y: sy };
     }
   }
   return null;
@@ -31687,6 +31777,11 @@ function skLeavePunt() {
   P.skPunting = false;
   P.x = s.x; P.z = s.z; P.fy = s.y; P.air = false; P.jvy = 0;
   P.vx = 0; P.vz = 0; P.st = 'idle';
+  /* the landing IS dry ground from this instant: record it in BOTH dunk
+     recorders so a splash a step later wakes you here, never back on the
+     spit outside (step off the punt, wake where you stepped — the law). */
+  skLastDry[0] = s.x; skLastDry[1] = s.z; skLastDry[2] = 1;
+  if (typeof lastDry !== 'undefined') { lastDry[0] = s.x; lastDry[1] = s.z; }
   skPuntColl.off = false;
   skPuntColl.x = SK_PUNT.x; skPuntColl.z = SK_PUNT.z;
   SFX.splashSm ? SFX.splashSm() : SFX.splash();
@@ -32057,7 +32152,7 @@ window.__skSnapLog = [];
   const spots = [
     [-1237, 254.5, skGroundAt(-1237, 254.5) + 1.15],                 // the spit boulder
   ];
-  for (const s of [8, 16]) {                                          // the two wall corbels
+  for (const s of [2, 5]) {                                           // the two wall corbels, at the stair's FOOT
     const a = T.doorAng + 2.5 + s * 0.2;
     const ty = 0.05 + s * 0.325;
     const off = (ty - y02) * 0.55;
@@ -32143,7 +32238,12 @@ function skTickSnapper(sn) {
         rumble({ duration: 160, strong: 0.4, weak: 0.4 });
         burst(psSpray, SK_PUNT.x, SK_WL + 0.3, SK_PUNT.z, 10, 1.6, 1.2, 0.5);
       } else {
-        hurtPlayer(1, sn.x, sn.z, sn.c.root);
+        /* the bite staggers you INTO the wall, never down the well: on a
+           spiral over open water the knockback direction is the whole
+           difference between a scare and a soaking (kid-fair) */
+        const T = SK_B[2].tower;
+        const inTower = Math.hypot(P.x - T.x, P.z - T.z) < 6.4;
+        hurtPlayer(1, inTower ? T.x : sn.x, inTower ? T.z : sn.z, sn.c.root);
       }
     }
     if (sn.t > 0.55) { sn.st = 'return'; sn.t = 0; }
@@ -32310,7 +32410,7 @@ function skLampNearIdx() {
   return -1;
 }
 /* the beams: one clamped cone each — length ALWAYS from beamHitDist */
-const skBeamGrp = [], skBeamLen = [0, 0, 0, 0], skBeamYaw = [0.6, 2.4, 1.4, 2.9];
+const skBeamGrp = [], skBeamLen = [0, 0, 0, 0], skBeamYaw = [0.6, 2.4, 1.4, 2.9], skBeamCd = [0, 1, 2, 3];
 (function skBuildBeams() {
   for (let i = 0; i < 4; i++) {
     const grp = new THREE.Group();
@@ -32342,7 +32442,11 @@ function skUpdateBeam(i, dtv) {
   const grp = skBeamGrp[i];
   skBeamYaw[i] += dtv * 0.16;
   const yaw = skBeamYaw[i];
-  if ((simTick + i * 3) % 12 === 0) {
+  /* a frame COUNTDOWN, never a simTick modulo: under turbo the frame
+     samples simTick in strides of N and a misaligned phase would skip
+     the recompute forever (the beam froze at its bootstrap length) */
+  if (--skBeamCd[i] <= 0) {
+    skBeamCd[i] = 10;
     const L = SK_LAMP[i];
     skBeamLen[i] = beamHitDist(L.x, L.y, L.z, Math.sin(yaw), -0.055, Math.cos(yaw), 280);
   }
@@ -32470,7 +32574,14 @@ currentInteract = function () {
   if (base) return base;
   if (!P.sailing && !P.skiffing &&
       Math.hypot(P.x - SK_PUNT.x, P.z - SK_PUNT.z) < 3.6 && skIsleIdx(P.x, P.z) === 2) {
-    return { id: 'skPuntOn', label: '✕ TAKE THE PUNT' };
+    /* nobody boards a boat mid-bite: while a snapper is on you, ✕ stays
+       the sword (the prompt returns the moment the pocket calms) */
+    let aggro = false;
+    for (const sn of SK_SNAPS) {
+      if (sn.gone || sn.st === 'bask' || sn.st === 'leave') continue;
+      if (Math.hypot(sn.x - P.x, sn.z - P.z) < 9) { aggro = true; break; }
+    }
+    if (!aggro) return { id: 'skPuntOn', label: '✕ TAKE THE PUNT' };
   }
   return null;
 };
@@ -32484,6 +32595,7 @@ doInteract = function (ctx) {
 
 /* ── the sim ── */
 let skSaidTilt = false;
+const skLastDry = [0, 0, 0];
 const _skPrevTickPlayer = tickPlayer;
 tickPlayer = function () {
   if (P.skPunting) {
@@ -32502,6 +32614,32 @@ tickPlayer = function () {
   const dB2 = Math.hypot(P.x - SK_B[2].x, P.z - SK_B[2].z);
   if (dB2 < 300) for (const sn of SK_SNAPS) skTickSnapper(sn);
   skTickLampHold();
+  /* the dunk-bounce law, kept honest on the islets: p6c's tide recorder
+     trusts any fy above the waterline — including MID-AIR over the
+     drowned tower's well — so a stair fall could bounce you to a spot
+     with no footing and cascade to the far spit. Here the last VALIDATED
+     standing spot wins: fall from the spiral, wake at the spiral. */
+  if (!P.sailing && !P.skPunting && skIsleIdx(P.x, P.z) >= 0) {
+    const sup2 = supportYAt(P.x, P.z, P.fy + 0.25);
+    if (!P.air && sup2 > SK_WL - 0.25 && P.fy >= sup2 - 0.06) {
+      skLastDry[0] = P.x; skLastDry[1] = P.z; skLastDry[2] = 1;
+    } else if (skLastDry[2] && typeof lastDry !== 'undefined') {
+      lastDry[0] = skLastDry[0]; lastDry[1] = skLastDry[1];
+    }
+  }
+  /* THE HALL'S OWN DUNK MERCY. Inside the drowned tower the calming wrap
+     zeroes waterDepthAt — which silently disables p6c's dunk-bounce, so a
+     fall off the spiral left a kid SWIMMING under the stair with no rescue
+     (the probe caught it; the comment above always promised otherwise).
+     The splash lands you at your last dry stair footing: fall from the
+     spiral, wake at the spiral. */
+  if (!P.sailing && !P.skPunting && !P.air && skLastDry[2] &&
+      skIsleIdx(P.x, P.z) === 2 && P.fy < SK_WL - 0.15) {
+    SFX.splash();
+    P.x = skLastDry[0]; P.z = skLastDry[1];
+    P.fy = supportYAt(P.x, P.z, P.fy + 3); P.air = false; P.jvy = 0;
+    P.vx = 0; P.vz = 0;
+  }
   /* forward seam (MIRROR-6): the cure IS the far lamp's lighting — when
      the moth unfurls, the lamp room floods with light off its own wings.
      p6l sets mothDone; the beacon is p6k's, so the flame is set here,
