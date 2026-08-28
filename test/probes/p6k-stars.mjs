@@ -322,10 +322,32 @@ async function suiteReef() {
   gate('hold ✕ lights THE REEF STAR', lit, 'beacons=' + await api.eval('__fm.beaconLit'));
   await api.waitFor(`__fm.state === 'play'`, 15000, 'beat done');
   await api.eval(`for (const g of GULLS) if (g.night) g.cd = 0; 0`);
-  /* gulls answer the sword: the kid mash pops at least one diving pair */
-  const popped = await kidClearPocket(api,
-    `GULLS.filter(g => g.night && !g.dead).slice(0, 2).map(g => ({x: g.x, z: g.z}))`, 100000);
-  gate('night gulls fall to real slashes', popped || await api.eval('GULLS.filter(g => g.night && g.dead).length >= 1'));
+  /* gulls answer the sword: stand in the pocket, let the pair dive, and
+     mash the window (the dive comes to the kid — that is the design) */
+  const t0g = Date.now();
+  let popped = false;
+  while (Date.now() - t0g < 120000) {
+    const st = JSON.parse(await api.eval(`(function(){
+      let best = null, bd = 1e9, dead = 0;
+      for (const g of GULLS) {
+        if (!g.night) continue;
+        if (g.dead) { dead++; continue; }
+        const d = Math.hypot(g.x - P.x, g.z - P.z);
+        if (d < bd) { bd = d; best = g; }
+      }
+      return JSON.stringify({ dead, d: bd, x: best ? best.x : 0, z: best ? best.z : 0, st: best ? best.st : '-' });
+    })()`));
+    if (st.dead >= 1) { popped = true; break; }
+    if (st.d > 7 && st.st === 'wheel') {
+      await api.eval(`__fmBot.tol=2.2; __fmBot.done=false; __fmBot.target=[${st.x},${st.z}]`);
+      await sleep(500);
+      await api.eval('__fmBot.target=null; __fakePad.axes(0,0)');
+    } else {
+      /* the burst: four quick cuts through the dive window */
+      for (let b = 0; b < 4; b++) { await api.eval('__fakePad.press(0)'); await sleep(120); await api.eval('__fakePad.press()'); await sleep(110); }
+    }
+  }
+  gate('night gulls fall to real slashes', popped);
   await api.eval(`__fmDebug.cam(-880, 5.5, 296, -902, 7, 318); 0`);
   await sleep(700);
   await api.shot('p6k-beacon1-lit');
