@@ -1057,7 +1057,7 @@ let mlChart = null, mlChartMarks = [];
   const md = MD();
   pushQuad(md, [-0.32, -0.22, 0], [0.32, -0.22, 0], [0.32, 0.22, 0], [-0.32, 0.22, 0], [0.86, 0.8, 0.66]);
   for (let i = 0; i < 8; i++) {
-    const x = -0.24 + hash2(i, 3) * 0.24, y = -0.14 + hash2(i, 7) * 0.14;
+    const x = (hash2(i, 3) * 0.5) * 0.5, y = (hash2(i, 7) * 0.5) * 0.32;
     box(md, { x, y, z: 0.006, w: 0.014, d: 0.006, h: 0.014, col: [0.3, 0.32, 0.4] });
   }
   const m = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: false }), false);
@@ -1066,10 +1066,11 @@ let mlChart = null, mlChartMarks = [];
   mlChartMarks = [];
   for (let i = 0; i < 4; i++) {
     const mdM = MD();
-    lathe(mdM, [[0, 0.012], [0.045, 0.011]], { seg: 6, col: [1.0, 0.85, 0.4] });
+    lathe(mdM, [[0, 0.012], [0.045, 0.011]], { seg: 10, col: [0.95, 0.75, 0.28] });
+    lathe(mdM, [[0, 0.013], [0.018, 0.0125]], { seg: 8, col: [0.5, 0.36, 0.12] });
     const mk = mdMesh(mdM, new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.95,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      vertexColors: true, transparent: true, opacity: 0.95, fog: false,
+      depthWrite: false, side: THREE.DoubleSide,
     }), false);
     mk.frustumCulled = false;
     mk.rotation.x = Math.PI / 2;
@@ -1078,6 +1079,7 @@ let mlChart = null, mlChartMarks = [];
     g.add(mk);
     mlChartMarks.push(mk);
   }
+  g.scale.setScalar(0.72);
   g.visible = false;
   scene.add(g);
   mlChart = g;
@@ -1106,20 +1108,34 @@ let mlConstel = null, mlConstelGap = null;
       md2.c.push(cc[0], cc[1], cc[2]);
     }
   };
-  for (const [ax, ay] of pts) put(md, ax, ay, 3.2, [0.9, 0.94, 1.0]);
-  const star = mdMesh(md, new THREE.MeshBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 0.0, fog: false,
+  for (const [ax, ay] of pts) put(md, ax, ay, 5.2, [1.0, 1.0, 1.0]);
+  const suv = [];
+  for (let i = 0; i < pts.length; i++) for (const k of [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]]) suv.push(k[0], k[1]);
+  const sGeo = new THREE.BufferGeometry();
+  sGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(md.p), 3));
+  sGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(md.c), 3));
+  sGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(suv), 2));
+  const star = new THREE.Mesh(sGeo, new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true, opacity: 0.0, fog: false,
     blending: THREE.AdditiveBlending, depthWrite: false,
-  }), false);
+  }));
   star.frustumCulled = false;
   g.add(star);
   g.userData.starMat = star.material;
   const mdG = MD();
-  put(mdG, gap[0], gap[1], 7.5, [0.55, 0.66, 0.9]);
-  mlConstelGap = mdMesh(mdG, new THREE.MeshBasicMaterial({
-    vertexColors: true, transparent: true, opacity: 0.0, fog: false,
+  put(mdG, gap[0], gap[1], 10.5, [0.6, 0.72, 1.0]);
+  const guv = [];
+  for (let k = 0; k < 6; k++) guv.push([[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]][k][0], [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]][k][1]);
+  mdG.uv = guv;
+  const gGeo = new THREE.BufferGeometry();
+  gGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(mdG.p), 3));
+  gGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(mdG.c), 3));
+  gGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(guv), 2));
+  mlConstelGap = new THREE.Mesh(gGeo, new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true, opacity: 0.0, fog: false,
     blending: THREE.AdditiveBlending, depthWrite: false,
-  }), false);
+  }));
+  mlConstelGap.frustumCulled = false;
   mlConstelGap.frustumCulled = false;
   g.add(mlConstelGap);
   g.visible = false;
@@ -1144,6 +1160,7 @@ const ML_CINE = { p0: [0, 0, 0], l0: [0, 0, 0] };
 function mlCineFrom() {
   ML_CINE.p0 = [camera.position.x, camera.position.y, camera.position.z];
   ML_CINE.l0 = [P.x, groundH(P.x, P.z) + 1.2, P.z];
+  ML_CINE.pearlBaseY0 = pearl.baseY;
 }
 function mlLerpCam(t0, t1, t, a, b) {
   const k = smoothstep(clamp((t - t0) / (t1 - t0), 0, 1));
@@ -1166,6 +1183,7 @@ function mlFinishReveal() {
     SAVE.starsSeen = true; storeSave();
   }
   const pr = pearl.char.root;
+  if (typeof ML_CINE.pearlBaseY0 === 'number') pearl.baseY = ML_CINE.pearlBaseY0;
   pr.position.set(pearl.x, pearl.baseY, pearl.z);
   pr.rotation.y = pearl.home;
   mlChart.visible = false;
@@ -1193,11 +1211,12 @@ function mlTickReveal(t) {
     /* HER SPRINT OPENS IT: she tears along the quay to find you */
     const k = smoothstep(clamp((t - 0.3) / 2.5, 0, 1));
     const px = lerp(from[0], arrive[0], k), pz = lerp(from[1], arrive[1], k);
-    pr.position.set(px, groundH(px, pz) + Math.abs(Math.sin(t * 9)) * 0.1, pz);
+    pearl.baseY = groundH(px, pz) + Math.abs(Math.sin(t * 9)) * 0.1;
+    pr.position.set(px, pearl.baseY, pz);
     pr.rotation.y = Math.atan2(P.x - px, P.z - pz);
     pr.rotation.x = 0.16 * (1 - k);
     if ((simTick % 8) === 0) burst(psDust, px, groundH(px, pz) + 0.1, pz, 3, 0.8, 0.4, 0.3);
-    const vantage = [P.x - 3.2, gy + 1.9, P.z + 4.4, P.x + 6, gy + 1.2, P.z + 5];
+    const vantage = [P.x - 3.4, gy + 1.8, P.z - 2.6, (P.x + px) / 2, gy + 1.1, (P.z + pz) / 2];
     mlLerpCam(0.0, 1.2, t, A, vantage);
     if (CINE.step === 0 && t > 1.9) {
       CINE.step = 1;
@@ -1205,30 +1224,45 @@ function mlTickReveal(t) {
       floatEl.classList.add('on');
     }
   } else if (t < 5.2) {
-    /* the chart: her chalk stars — and four marks that are NOT stars */
+    /* the chart: her chalk stars — and four marks that are NOT stars.
+       She stands the ridge, chart up; the camera reads it over her arm */
     if (CINE.step === 1) {
       CINE.step = 2;
       floatEl.classList.remove('on');
       pr.position.set(ML_ROOF.x, roofY, ML_ROOF.z - 0.4);
-      pr.rotation.set(0, Math.PI + 0.5, 0);
+      pearl.baseY = roofY;                 // the NPC pass owns her Y — move its anchor
+      pr.rotation.set(0, Math.PI * 0.82, 0);          // faces south-east, up the shot
       mlChart.visible = true;
       SFX.page();
     }
-    mlChart.position.set(ML_ROOF.x - Math.sin(pr.rotation.y) * 0.42, roofY + 1.15, ML_ROOF.z - 0.4 - Math.cos(pr.rotation.y) * 0.42);
-    mlChart.rotation.y = pr.rotation.y + Math.PI;
+    const py2 = pr.rotation.y;
+    /* the chart rests at her chest, tilted up into the high shot — her
+       head clears its top edge, so the reader and the girl share frame */
+    mlChart.position.set(ML_ROOF.x - Math.sin(py2) * 0.4 + Math.cos(py2) * 0.26, roofY + 1.02,
+      ML_ROOF.z - 0.4 - Math.cos(py2) * 0.4 - Math.sin(py2) * 0.26);
+    mlChart.rotation.y = py2;
+    mlChart.rotation.x = -0.3;
     const k = smoothstep(clamp((t - 3.1) / 0.9, 0, 1));
-    cineCam(ML_ROOF.x - Math.sin(pr.rotation.y) * (2.2 - k * 1.0), roofY + 1.5 - k * 0.15, ML_ROOF.z - 0.4 - Math.cos(pr.rotation.y) * (2.2 - k * 1.0),
-      mlChart.position.x, mlChart.position.y, mlChart.position.z);
+    /* eye-level three-quarter: the girl and her chart share the frame */
+    cineCam(ML_ROOF.x - Math.sin(py2) * lerp(2.6, 2.1, k) + 0.85, roofY + 1.62,
+      ML_ROOF.z - 0.4 - Math.cos(py2) * lerp(2.6, 2.1, k) - 0.5,
+      mlChart.position.x - 0.12, mlChart.position.y + 0.16, mlChart.position.z);
     const mi = Math.floor((t - 3.4) / 0.42);
     for (let i = 0; i < 4; i++) {
-      if (i <= mi && !mlChartMarks[i].visible) { mlChartMarks[i].visible = true; SFX.chime(0.8 + i * 0.2); }
+      if (i <= mi && !mlChartMarks[i].visible) {
+        mlChartMarks[i].visible = true;
+        SFX.chime(0.8 + i * 0.2);
+        const wp = new THREE.Vector3();
+        mlChartMarks[i].getWorldPosition(wp);
+        burst(psSparkle, wp.x, wp.y, wp.z, 5, 0.25, 0.2, 0.5);
+      }
     }
   } else if (t < 8.6) {
     /* up over the roofline: the constellation rises INCOMPLETE */
     mlConstel.visible = true;
     const k = smoothstep(clamp((t - 5.2) / 1.4, 0, 1));
-    mlConstel.userData.starMat.opacity = k * 0.95;
-    mlConstelGap.material.opacity = (0.25 + Math.sin(t * 5) * 0.15) * k;
+    mlConstel.userData.starMat.opacity = k;
+    mlConstelGap.material.opacity = (0.42 + Math.sin(t * 5) * 0.2) * k;
     cineCam(ML_ROOF.x + 4.5, lerp(roofY + 1.4, roofY + 2.6, k), ML_ROOF.z + 3.5,
       lerp(mlChart.position.x, ML_ROOF.x - 60, k), lerp(mlChart.position.y, roofY + 46, k), lerp(mlChart.position.z, ML_ROOF.z - 4, k));
     if (CINE.step === 2 && t > 6.4) {
@@ -1260,6 +1294,7 @@ function mlTickReveal(t) {
         floatEl.classList.add('on');
       }
       pr.position.set(arrive[0], groundH(arrive[0], arrive[1]), arrive[1]);
+      pearl.baseY = groundH(arrive[0], arrive[1]);
       pr.rotation.set(0, Math.atan2(P.x - arrive[0], P.z - arrive[1]), 0);
       mlChart.visible = false;
     }
@@ -1343,20 +1378,30 @@ function mlTickCure(t) {
     }
     cineCam(M.x + 3.4, py + 1.1 + k * 0.9, M.z + 3.0, M.x, M.y + 0.6, M.z);
   } else if (t < 9.4) {
-    /* it lifts the Lantern down to you with its forelegs */
+    /* it lifts the Lantern down to you with its forelegs — the moth
+       eases back and UP so the little light's crossing reads clean */
     const k = smoothstep(clamp((t - 6.8) / 2.0, 0, 1));
     const wy = groundH(P.x, P.z) + 1.3;
+    M.wingK = 0.85;
+    M.x += (ML_C.x - M.x) * Math.min(1, DT * 2);
+    M.z += (ML_C.z - 1.6 - M.z) * Math.min(1, DT * 2);
+    M.y += (ML_FLOOR_Y + 2.6 - M.y) * Math.min(1, DT * 2);
     mlRelic.position.set(
       lerp(ML_C.x, P.x, k),
-      lerp(ML_FLOOR_Y + 1.95, wy, k) + Math.sin(k * Math.PI) * 0.9,
+      lerp(ML_FLOOR_Y + 2.1, wy, k) + Math.sin(k * Math.PI) * 0.7,
       lerp(ML_C.z, P.z, k));
     mlRelic.visible = true;
     if (CINE.step === 2 && t > 7.0) { CINE.step = 3; SFX.chime(1.5); }
     if (CINE.step === 3 && k >= 1) { CINE.step = 4; mlGrantLantern(); }
-    cineCam(P.x + 2.2, ML_FLOOR_Y + 1.6, P.z + 2.6, lerp(M.x, P.x, k), lerp(M.y, wy, k), lerp(M.z, P.z, k));
+    /* a low three-quarter: Wick, the descending lantern, the moth above */
+    cineCam(P.x + 3.2, ML_FLOOR_Y + 1.5, P.z + 3.6,
+      mlRelic.position.x, mlRelic.position.y + 0.1, mlRelic.position.z);
   } else if (t < 11.4) {
     mlGrantLantern();
-    /* it takes the cap as a roost — the tower has a keeper again */
+    /* the lantern settles into his hand (the carry idiom), the moth
+       takes the cap as a roost — the tower has a keeper again */
+    mlRelic.scale.setScalar(1.1);
+    mlRelic.position.set(P.x - Math.sin(P.heading) * 0.32, groundH(P.x, P.z) + 1.05, P.z - Math.cos(P.heading) * 0.32);
     const k = smoothstep(clamp((t - 9.4) / 1.6, 0, 1));
     M.x = lerp(M.x, ML_C.x, k); M.z = lerp(M.z, ML_C.z - 3.2, k);
     M.y = lerp(M.y, ML_FLOOR_Y + 4.6, k);
@@ -1450,6 +1495,8 @@ function mlTickWheel6(t) {
       CINE.step = 5;
       if (SAVE) { SAVE.ph = 6; SAVE.sky = 6; storeSave(); }
       if (typeof nmMoonLitPh !== 'undefined') nmMoonLitPh = -1;
+      /* every constellation completes AT ONCE — p6k repaints from sky=6 */
+      try { if (typeof skPaintSky === 'function') skPaintSky(); } catch (e) {}
       SFX.night();
     }
     if (typeof nmStarMat !== 'undefined' && nmStarMat) {
@@ -1701,13 +1748,19 @@ function mlSeaChain(uptoIdx) {
   return pts;
 }
 function mlChainNext(pts, finalPt) {
+  /* the road only ever points FORWARD: the first unreached mark that
+     genuinely advances toward the goal (nearest-point staging pointed a
+     half-lit road backward at the first beacon — the compass probe
+     caught it) */
   const chain = pts.concat([finalPt]);
-  let ni = 0, nd = 1e9;
-  for (let i = 0; i < chain.length; i++) {
-    const d = Math.hypot(P.x - chain[i].x, P.z - chain[i].z);
-    if (d < nd) { nd = d; ni = i; }
+  const px = P.sailing ? BOAT.x : P.x, pz = P.sailing ? BOAT.z : P.z;
+  const dF = (x, z) => Math.hypot(x - finalPt.x, z - finalPt.z);
+  const mine = dF(px, pz);
+  for (const c of chain) {
+    if (Math.hypot(px - c.x, pz - c.z) < 26) continue;    // reached: move on
+    if (dF(c.x, c.z) < mine - 8) return c;                // it advances the road
   }
-  return chain[Math.min(ni + (nd < 24 ? 1 : 0), chain.length - 1)];
+  return finalPt;
 }
 function mlBoatPoint() {
   if (P.sailing) return null;
@@ -1812,7 +1865,7 @@ cullChunks = function (ccx, ccz) {
     /* the flap: sim decides wingK targets; the render breathes them */
     M.wingT += dtv * (M.st === 'hover' || M.st === 'wake' ? 5.2 : M.st === 'gust' || M.st === 'dive' ? 11 : 2.6);
     const flap = Math.sin(M.wingT) * (M.st === 'low' || M.st === 'tired' || M.st === 'stoop' || M.st === 'roost' ? 0.06 : 0.5);
-    const spread = clamp(M.wingK, 0.05, 1.4);
+    const spread = clamp(M.wingK, 0.05, 1.22);
     c.parts.wingR.rotation.z = -(1.35 - spread) - flap * spread * 0.55;
     c.parts.wingL.rotation.z = (1.35 - spread) + flap * spread * 0.55;
     c.parts.bodyN.rotation.x = (M.st === 'dive') ? 0.5 : Math.sin(M.wingT * 0.5) * 0.05;
