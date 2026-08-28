@@ -5819,6 +5819,12 @@ const PORTAL_SIDES = {
   /* the night market's gate (p6j): A the downstream shore path, B inside
      the stall row — both on the dry bank */
   'market-gate': [1367.3, 591.3, 1350.2, 584.8, 2.4, 2.4],
+  /* the four beacon thresholds (p6k): A outside on the approach, B inside
+     the shell — every islet keeps dry footing on both sides */
+  'harbor-star-door': [-202.8, 117.5, -206.6, 122.8, 2.2, 1.7],
+  'reef-star-arch': [-902, 306.2, -901.4, 312.2, 2.0, 2.0],
+  'drowned-star-mouth': [-1239.5, 250.0, -1259.0, 226.3, 2.4, 1.8],
+  'far-star-door': [-2300.3, -1007.4, -2306.8, -1014.9, 2.2, 1.8],
 };
 /* worlds for the two portal states: openNow reads intent (the SAVE), the
    chain answers from derived plugs — both must agree in BOTH states */
