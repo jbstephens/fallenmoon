@@ -400,6 +400,11 @@ async function suiteDrowned() {
     await sleep(250);
   }
   gate('stepped off inside the tower', off);
+  /* the tower is shade — a real kid HEALS between bites; the probe fights at
+     turbo where regen cannot keep up, so it banks the same hearts up front
+     (otherwise a KO fairly wakes it outside at the anchor and the climb
+     gate reads a rescue, not a wall). */
+  await api.eval('P.hearts = P.maxHearts; 0');
   /* the pocket guards the stair's foot: a kid clears it from the rubble
      step before climbing (falls here are a splash beside the landing) */
   await walkTo(api, -1259, 226.5, 1.2);
@@ -429,7 +434,10 @@ async function suiteDrowned() {
     const a = 0.79 + 2.5 + s * 0.2;
     const ty = 0.05 + s * 0.325;
     const o = (ty - (-0.55 - 1.3)) * 0.55;
-    const dd = await walkTo(api, T2.x + o * 0.14 + Math.sin(a) * 4.0, T2.z + o * 0.1 + Math.cos(a) * 4.0, 0.9, 20000);
+    await api.eval('P.hearts = P.maxHearts; 0');   /* shade-heal, banked (see above) */
+    /* the treads lean by lean*0.55 (p6k line ~645) — walking the FULL lean
+       drifted the waypoint 0.6 m off the top treads and over the well */
+    const dd = await walkTo(api, T2.x + o * 0.14 * 0.55 + Math.sin(a) * 4.0, T2.z + o * 0.1 * 0.55 + Math.cos(a) * 4.0, 0.9, 20000);
     console.log('   s=' + s + ' d=' + dd.toFixed(1) + ' at ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2), __fm.skPunting])`));
     /* a kid stops and slashes the corbel snapper before walking its ambush */
     for (let k = 0; k < 22; k++) {
@@ -445,10 +453,10 @@ async function suiteDrowned() {
       await api.tap(0);
     }
     /* fell? the dunk mercy sent us back to the rubble — restart the spiral
-       (a kid retries; the probe allows three falls before it judges) */
+       (a kid retries; the mercy makes each fall cheap — six tries before judging) */
     if (await api.eval('P.fy < -0.4')) {
       console.log('   (fell at s=' + s + ': ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`) + ')');
-      if (++falls > 3) break;
+      if (++falls > 6) break;
       s = -1;
       await api.eval(`P.hearts = P.maxHearts; __fmDebug.warp(-1259, 226.5); 0`);
     }

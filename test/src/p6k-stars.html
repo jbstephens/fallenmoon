@@ -804,6 +804,19 @@ ISLE_ANCHORS.push(
   { x: -2285, z: -990, sx: -2288, sz: -993, id: 'farstar' },
 );
 
+/* ── shade: every charted isle casts it, and so do these. The DROWNED
+   TOWER'S whole footprint is one shade circle — its hall and spiral are
+   ENCLOSED, but inShadeAt's isle model is 2D circles, and an unregistered
+   interior reads as open sun: a midday punt-in fainted the player on the
+   stair and woke them outside at the anchor (the probe caught it; a kid
+   would hit it every noon). Each open tower casts a lee at its base. ── */
+ISLE_SHADE.push(
+  { x: -1257.5, z: 228.5, r: 9.5 },            /* drowned tower: hall + full spiral */
+  { x: -196, z: 106, r: 4.5 },                 /* harbor star tower lee */
+  { x: -902, z: 315, r: 4.5 },                 /* reef star stack lee */
+  { x: -2294, z: -1002, r: 5.0 },              /* far star tower lee */
+);
+
 /* ── the swell yields to the islets: shoal the amp (and pull the color
    band in) around each footprint, calm inside the drowned hall — the
    same law every charted isle already obeys ── */
@@ -925,7 +938,13 @@ function skPuntFooting() {
       }
       if (blocked) continue;
       const sy = supportYAt(px, pz, SK_WL + 2.0);
-      if (sy > SK_WL - 0.3 && sy < SK_WL + 2.0) return { x: px, z: pz, y: sy };
+      /* strictly above the DUNK line (WL+0.35): p6c dunks any standing
+         fy below it wherever terrain depth > 0.8 — and the whole drowned
+         hall is deep terrain. A footing below that line is a footing the
+         tide law re-dunks the instant you stand on it (the probe caught
+         the full cascade: step off → splash → wake on the spit outside).
+         Margin: only offer step-off onto ground a real step ABOVE water. */
+      if (sy > SK_WL + 0.4 && sy < SK_WL + 2.0) return { x: px, z: pz, y: sy };
     }
   }
   return null;
@@ -948,6 +967,11 @@ function skLeavePunt() {
   P.skPunting = false;
   P.x = s.x; P.z = s.z; P.fy = s.y; P.air = false; P.jvy = 0;
   P.vx = 0; P.vz = 0; P.st = 'idle';
+  /* the landing IS dry ground from this instant: record it in BOTH dunk
+     recorders so a splash a step later wakes you here, never back on the
+     spit outside (step off the punt, wake where you stepped — the law). */
+  skLastDry[0] = s.x; skLastDry[1] = s.z; skLastDry[2] = 1;
+  if (typeof lastDry !== 'undefined') { lastDry[0] = s.x; lastDry[1] = s.z; }
   skPuntColl.off = false;
   skPuntColl.x = SK_PUNT.x; skPuntColl.z = SK_PUNT.z;
   SFX.splashSm ? SFX.splashSm() : SFX.splash();
@@ -1792,6 +1816,19 @@ tickPlayer = function () {
     } else if (skLastDry[2] && typeof lastDry !== 'undefined') {
       lastDry[0] = skLastDry[0]; lastDry[1] = skLastDry[1];
     }
+  }
+  /* THE HALL'S OWN DUNK MERCY. Inside the drowned tower the calming wrap
+     zeroes waterDepthAt — which silently disables p6c's dunk-bounce, so a
+     fall off the spiral left a kid SWIMMING under the stair with no rescue
+     (the probe caught it; the comment above always promised otherwise).
+     The splash lands you at your last dry stair footing: fall from the
+     spiral, wake at the spiral. */
+  if (!P.sailing && !P.skPunting && !P.air && skLastDry[2] &&
+      skIsleIdx(P.x, P.z) === 2 && P.fy < SK_WL - 0.15) {
+    SFX.splash();
+    P.x = skLastDry[0]; P.z = skLastDry[1];
+    P.fy = supportYAt(P.x, P.z, P.fy + 3); P.air = false; P.jvy = 0;
+    P.vx = 0; P.vz = 0;
   }
   /* forward seam (MIRROR-6): the cure IS the far lamp's lighting — when
      the moth unfurls, the lamp room floods with light off its own wings.
