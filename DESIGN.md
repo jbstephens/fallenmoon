@@ -1287,3 +1287,145 @@ FIXED as part of the ascent work, not inherited.
 Save: mouthOpen, swingKeel, paddleWheel, poleFound, braziers[], marketOpen, sliver5, sky 5,
 tbc5Seen, pennant, spyglass, fireworks, marketHeart; forward-derivation
 per p2-core pattern; flags apply LIVE at set-site.
+
+## PHASE 6 — THE WANING LANTERN (locked 2026-08-27 overnight; John: "build
+as much of the rest of the game as you can tonight" — full delegation, the
+phase-3 precedent. Design honors every standing law: puzzles escalate BY
+KIND, upgrades are VISIBLE, substantial beats get cinematics, TBC card
+non-negotiable, nothing dies, kid-fair timing, THE WORLD RULES.)
+
+ONE ARC: the stars return — and the coast's dead beacons are their anchors.
+Sailing at dusk becomes sailing by STARLIGHT: the first true night-sea of
+the game, a deliberate foretaste of phase 8.
+
+THE PREMISE: with five phases home, the dusk sky finally deepens enough to
+hold stars — and they are coming back WRONG: constellations rise
+incomplete, missing their brightest anchor points. PEARL has known why all
+along (her chalk stars, her chart that gained a real star at every payoff —
+seeded in v4.5, paying off now): the missing anchors are not in the sky.
+They are the DARK BEACONS — the old harbor-star towers on the far
+headlands and outer isles, dead for a year. This world's sky and ground
+light each other. Light the coast, finish the sky.
+
+THE ARC (quests 23→27):
+1. q23 THE CHALK WAS RIGHT — at dusk Pearl runs to find you (her sprint
+   is the cine's opening shot): the sky is FILLING. On the harbor roof
+   with her chart: a constellation rises in frame… incomplete (authored
+   ≤12s beat, skippable). She marks the four dark beacons on your map.
+   KID-PROOFING: if the spyglass (market, 25 salt) is unowned, Pearl
+   presses her grandmother's brass one into your hands here — the arc
+   never soft-locks behind a shop. (If owned, hers is "better glass for
+   star-work" — same item id, upgraded description.)
+2. q23b THE STAR LANTERN (the visible upgrade, keel→sail→paddlewheel→
+   MASTHEAD): the night-market tinker mounts a silver STAR LANTERN at
+   the masthead — the boat's build visibly completes upward. At dusk it
+   burns cold-silver. Its light is the navigation verb's anchor (below).
+3. q24 THE STAR ROAD (the puzzle — NEW KIND: bell=match a tone, organ=
+   tune a chord, sluice=keep time, now NAVIGATE BY THE SKY): hold △ to
+   raise the spyglass at the dusk sky; sweeping across the incomplete
+   constellation makes it GLEAM and lay a brief silver glitter-lane on
+   the water — the line from its missing anchor star down to the sea
+   points AT the dark beacon. Sail the lane before it fades (generous:
+   ~20s, and re-sighting is free and unlimited — a missed lane just
+   means look again; no fail state, no text; the star lantern hums
+   brighter as your heading trues). Four beacons, four constellations,
+   four sights — each further out into darker water.
+4. THE FOUR DARK BEACONS — each a small landfall with its own pocket
+   (slash-pockets per the boys' standing ask; salt drops throughout):
+   - THE HARBOR STAR (nearest headland): MOTH-WISPS cluster the dead
+     tower (2-hit, dive at your lantern, fizz into silver mist) — clear
+     the swarm, climb, hold ✕ at the lamp = the beacon LIGHTS (its beam
+     obeys beamHitDist, RULE 3) and its constellation COMPLETES in frame
+     overhead (the repeatable mini-payoff; sky gains its stars one
+     anchor at a time).
+   - THE REEF STAR (a wave-washed rock): NIGHT GULLS wheel it in pairs;
+     the climb is timed between big-set washes (phase-3 sea language
+     reused — telegraphed swells, cost is a knockdown, never hearts).
+   - THE DROWNED STAR (a half-sunk tower leaning out of the shallows):
+     enter by skiff through the flooded ground floor (swing-keel water;
+     ferry-pole verb inside), SNAPPERS on the stair boulders; the lamp
+     room is tilted — the world's one one-liner: "The lamp still turns.
+     The floor gave up first."
+   - THE FAR STAR (the outermost islet, past the Hourless Isles — the
+     longest dark-water sail of the game so far): its tower is PERFECT,
+     lit-ready, silent… and its lamp room is already occupied (the
+     guardian's lair — q25 begins the moment you step in).
+5. q25 THE LANTERN MOTH — the guardian WEARS the phase (crab, wyrm,
+   tortoise, stag, and now): a great moth of ash-grey dusk, wings
+   wrapped around THE WANING LANTERN like a cocoon around a flame. It
+   has kept the relic's last warmth alive the only way it could — by
+   sleeping wrapped around it — and it defends the dark because waking
+   means letting go. Lamp-room arena, vertical (the jump verb's boss).
+   - P1: telegraphed wing-gusts (≥0.9s windup, visible silver ripple)
+     shove toward the rail — jump or plant; dive swoops answer to the
+     sword; body chips always land (law).
+   - P2: it DOUSES the room — waves of true dark cross the floor; the
+     STAR LANTERN's silver pool around the player is the safe ground
+     (shade-heal inverted: this time YOUR light is the shelter). Stand
+     the dark waves out inside your own lantern-light, strike between.
+   - P3: moth-spiral — a wheeling ribbon of small moths crosses the
+     arena in a visible line; jump it (the stampede lesson's night
+     cousin), the great moth tires after each pass = the window.
+   HP ~84, notch bar (convention), kid-bot-wins gate WITH the chasing
+   bot, cold-7-year-old timing on every telegraph. Nothing dies: cured,
+   the ash blows off silver-blue, it unfurls — the lamp room floods
+   with light off its own wings — and it lifts the Waning Lantern down
+   to you with its forelegs. It keeps the tower as its roost.
+6. q26 carry home under a finished sky: THE ALL-BEACONS NIGHT RUN —
+   sail home with every beacon burning, the completed constellations
+   overhead, the four beams sweeping the sea lanes (all beamHitDist).
+   Slot the Lantern: SKY STEP 6 — the sky FILLS in frame (every
+   constellation completes at once, the deepest dusk yet, the whole
+   star-field the family will sail phase 8 under is now real), and the
+   coast lights PERMANENTLY: every beacon burns every dusk, forever —
+   the world-change you can see from anywhere on the water.
+7. q27 6/8 PHASES RESTORED — TBC card 6/8, teasing OLD BONE: over the
+   far southern water, a dull red horizon-glow the stars refuse to
+   touch… and tonight, for the first time, it flickers — as if cooling.
+
+CINEMATIC BEATS (the loved list grows): Pearl's rooftop reveal; each
+beacon's constellation completing (short, repeatable, diegetic); the
+moth unfurling; the all-beacons payoff at the wheel. All Rule 5.
+
+WORLD RULES obligations: every islet registers __WORLD_REG; every lamp
+room door + the drowned tower's flooded mouth register __PORTALS (frames,
+gradients, both-sides screenshots); all four beams + the masthead lantern
+glow clamp via beamHitDist; night sea consults __HULLS (the drowned tower
+interior water included); cines film the rendered world; EVERY quest
+state — including each done-but-next-not-begun seam — has an explicit
+compass answer (MIRROR-4 law), and every advance carries the forward-
+derivation line (MIRROR-6 law): lit beacons derive q24 progress, mothDone
+derives q26, sky>=6 derives q27.
+
+KID-PROOFING: dark water is never punishing — falling in dunks and
+bounces per the standing dunk laws (boat never orphaned, MIRROR-5);
+re-sighting the star road is free forever; a dark beacon is findable
+without the spyglass by sailing at its silhouette (the lanes are the
+fast way, not the only way); the moth fight has no fall-off-the-tower
+fail (rail catches, dunk at worst).
+
+2P: P2 slashes wisps/gulls, poles in the drowned tower, and in the moth
+fight P2's own lantern-pool is valid safe ground (two pools = the co-op
+edge, drop-in preserved).
+
+BUDGETS: the filled star-field is ONE baked point-sprite geometry (stars
+are never lights; constellations brighten by vertex color, complete by
+swapping baked sprites); beacon beams are baked cones clamped live; the
+all-beacons vista and the lamp-room fight hold ≤80 calls on the Pi in
+LOWFX. The four-beacon coast at dusk is the new standing perf vista —
+budget it like the lit market (77/80 law).
+
+SAVE (additive, live-at-set-site): starsSeen, starLantern, spyglass
+(existing), beaconLit[4], mothDone, lantern6, sky 6, tbc6Seen, plus
+skiff/boat position conventions unchanged. Forward derivation per
+p2-core pattern. Quests 23–27 wired into the compass path-spine (bay ↔
+headlands ↔ outer isles ↔ far star), staged via doors/water-mouths where
+walled (WINDHOME-3 law).
+
+PARTS: p6k-stars.html (sky/star-field system, constellations, spyglass
+sighting + glitter lanes, star lantern, the four beacon islets, wisps/
+gulls pockets, beacon lighting + mini-payoffs) and p6l-moth.html (the
+Far Star tower + lamp-room arena, the LANTERN MOTH fight, the cures/
+cinematics, quest 23–27 flow + compass answers + forward derivations,
+TBC 6/8, market tinker + Pearl beats). Insert both before p7-flow in
+build.sh. Interfaces pinned in the build brief.
