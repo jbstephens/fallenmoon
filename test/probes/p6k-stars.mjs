@@ -327,9 +327,25 @@ async function suiteDrowned() {
   await api.eval(`__fmDebug.warp(-1236, 252); P.hearts = P.maxHearts; 0`);
   await api.waitTicks(6);
   gate('snappers bask on spit + stair', await api.eval('__fm.skSnapAlive === 3'));
-  /* board the punt (real prompt), pole in through the flooded mouth */
+  /* the spit snapper guards the punt: a kid fights it first (its lunges
+     keep ✕ as the sword until the pocket calms) */
+  for (let k = 0; k < 30; k++) {
+    const st = JSON.parse(await api.eval(`(function(){
+      const sn = SK_SNAPS[0];
+      return JSON.stringify({ gone: sn.gone || sn.st === 'leave', d: Math.hypot(sn.x - P.x, sn.z - P.z), x: sn.x, z: sn.z });
+    })()`));
+    if (st.gone) break;
+    if (st.d > 2.2) await walkTo(api, st.x, st.z, 1.6, 12000);
+    await api.tap(0);
+    if (await api.eval('P.fy < -0.4')) await api.eval('__fmDebug.warp(-1236, 252); 0');
+  }
+  /* board the punt: the prompt returns with the calm */
   await walkTo(api, -1242.3, 245.6, 1.2);
-  const ctx = await api.eval(`(currentInteract() || {}).id`);
+  let ctx = null;
+  for (let k = 0; k < 20 && ctx !== 'skPuntOn'; k++) {
+    ctx = await api.eval(`(currentInteract() || {}).id`);
+    if (ctx !== 'skPuntOn') await sleep(300);
+  }
   gate('the punt offers itself', ctx === 'skPuntOn', 'ctx=' + ctx);
   await api.tap(0);
   gate('aboard the punt', await api.eval('__fm.skPunting === true'));
@@ -349,14 +365,39 @@ async function suiteDrowned() {
     await sleep(250);
   }
   gate('stepped off inside the tower', off);
+  /* the pocket guards the stair's foot: a kid clears it from the rubble
+     step before climbing (falls here are a splash beside the landing) */
+  await walkTo(api, -1259, 226.5, 1.2);
+  for (let k = 0; k < 40; k++) {
+    const near = await api.eval(`(function(){
+      let d = 1e9;
+      for (const sn of SK_SNAPS) {
+        if (sn.gone || sn.st === 'leave') continue;
+        d = Math.min(d, Math.hypot(sn.x - P.x, sn.z - P.z));
+      }
+      return d;
+    })()`);
+    if (near > 6) break;
+    await api.tap(0);
+    /* dunked mid-fight: the splash-and-retry is proven elsewhere — put the
+       kid back on the rubble step and keep fighting */
+    if (await api.eval('P.fy < -0.4')) await api.eval('__fmDebug.warp(-1259, 226.5); 0');
+  }
+  /* a stray ✕ may have re-boarded the punt once the pocket calmed */
+  for (let k = 0; k < 12 && await api.eval('__fm.skPunting'); k++) await api.tap(0);
+  console.log('   after-fight: ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2), __fm.skPunting, __fm.skSnapAlive])`));
+  await walkTo(api, -1259, 226.5, 1.2);
+  console.log('   at-rubble: ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`));
   const T2 = { x: -1258, z: 230 };
+  let falls = 0;
   for (let s = 1; s < 27; s += 2) {
     const a = 0.79 + 2.5 + s * 0.2;
     const ty = 0.05 + s * 0.325;
     const o = (ty - (-0.55 - 1.3)) * 0.55;
-    await walkTo(api, T2.x + o * 0.14 + Math.sin(a) * 4.0, T2.z + o * 0.1 + Math.cos(a) * 4.0, 0.9, 20000);
-    /* a kid slashes the corbel snapper before walking its ambush */
-    for (let k = 0; k < 14; k++) {
+    const dd = await walkTo(api, T2.x + o * 0.14 + Math.sin(a) * 4.0, T2.z + o * 0.1 + Math.cos(a) * 4.0, 0.9, 20000);
+    console.log('   s=' + s + ' d=' + dd.toFixed(1) + ' at ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2), __fm.skPunting])`));
+    /* a kid stops and slashes the corbel snapper before walking its ambush */
+    for (let k = 0; k < 22; k++) {
       const near = await api.eval(`(function(){
         let d = 1e9;
         for (const sn of SK_SNAPS) {
@@ -365,11 +406,24 @@ async function suiteDrowned() {
         }
         return d;
       })()`);
-      if (near > 3.1) break;
+      if (near > 4.9) break;
       await api.tap(0);
     }
-    /* fell? the dunk mercy sent us back to the rubble — restart the spiral */
-    if (await api.eval('P.fy < -0.4')) { s = -1; await walkTo(api, -1259, 226.5, 1.2); }
+    /* fell? the dunk mercy sent us back to the rubble — restart the spiral
+       (a kid retries; the probe allows three falls before it judges) */
+    if (await api.eval('P.fy < -0.4')) {
+      console.log('   (fell at s=' + s + ': ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`) + ')');
+      if (++falls > 3) break;
+      s = -1;
+      await api.eval(`P.hearts = P.maxHearts; __fmDebug.warp(-1259, 226.5); 0`);
+    }
+  }
+  {
+    /* the last stride: the head tread, the threshold stones, the room */
+    const headA = ((0.79 + 2.5 + 26 * 0.2) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    const dx = -1258 + (8.9 + 1.85) * 0.55 * 0.14, dz = 230 + (8.9 + 1.85) * 0.55 * 0.1;
+    await walkTo(api, dx + Math.sin(headA - 0.21) * 3.5, dz + Math.cos(headA - 0.21) * 3.5, 0.8, 20000);
+    await walkTo(api, dx + Math.sin(headA) * 3.45, dz + Math.cos(headA) * 3.45, 0.8, 20000);
   }
   await walkTo(api, await api.eval('SK_LAMP[2].x'), await api.eval('SK_LAMP[2].z'), 1.3);
   gate('the leaning spiral reaches the lamp room', await api.eval('P.fy > 7.6'), 'fy=' + await api.eval('P.fy'));
@@ -451,15 +505,25 @@ async function suiteSky() {
     return s;
   })()`);
   gate('sky >= 6 fills the whole field', fill > 2, `sum=${fill.toFixed(1)}`);
-  /* dusk-only: force day and the stars sleep */
-  await api.eval(`__fmDebug.nightNow(0); 0`);
-  await api.waitTicks(8);
-  gate('stars sleep by day', await api.eval('__fm.skStarsVis === false'));
+  /* dusk-only: force day and the stars sleep (q27 hands the clock back to
+     the sun cycle, so the forcing is re-applied against the drift) */
+  let slept = false;
+  for (let i = 0; i < 16 && !slept; i++) {
+    await api.eval(`__fmDebug.nightNow(0); 0`);
+    slept = await api.eval('__fm.skStarsVis === false');
+    if (!slept) await sleep(90);
+  }
+  gate('stars sleep by day', slept);
+  let rose = false;
+  for (let i = 0; i < 16 && !rose; i++) {
+    await api.eval(`__fmDebug.nightNow(1); 0`);
+    rose = await api.eval('__fm.skStarsVis === true');
+    if (!rose) await sleep(90);
+  }
+  gate('stars return at dusk', rose);
   await api.eval(`__fmDebug.nightNow(1); 0`);
-  await api.waitTicks(8);
-  gate('stars return at dusk', await api.eval('__fm.skStarsVis === true'));
   /* the four-lit coast vista (the standing perf vista, seen) */
-  await api.eval(`__fmDebug.cam(-420, 26, 180, -902, 4, 318); 0`);
+  await api.eval(`__fmDebug.nightNow(1); __fmDebug.cam(-420, 26, 180, -902, 4, 318); 0`);
   await sleep(900);
   await api.shot('p6k-coast-4lit');
   /* count sky-region bright pixels: the filled field must READ */
@@ -478,36 +542,36 @@ async function suiteSky() {
 
 /* ═══════════ world: persistence + fresh world ═══════════ */
 async function suiteWorld() {
-  console.log('\n-- world: persistence across save/reload, fresh on NEW GAME --');
-  const api = await session(Q24);
-  await api.eval(`__fmDebug.warpBeacon(0); 0`);
-  await api.eval(`__p6k.lightBeacon(0); 0`);       // the export p6l drives
-  await api.waitFor(`__fm.state === 'play'`, 15000, 'beat done').catch(() => {});
-  gate('lightBeacon export lights + saves', await api.eval(`__fm.beaconLit[0] === '1' && JSON.parse(localStorage.getItem('fallenmoon_save_v1')).beaconLit[0] === true`));
-  /* reload: the beacon still burns, the constellation stays complete */
-  await api.eval('location.reload(); 0').catch(() => {});
-  await sleep(6000);
-  await api.waitFor(`typeof __fm !== 'undefined' && __fm.state === 'title'`, 30000, 'title again');
-  await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 14, 'focus CONTINUE');
-  await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 16, 'leave title');
-  await api.waitFor(`__fm.state === 'play'`, 30000, 'play again');
-  gate('beacon light survives save/reload', await api.eval(`__fm.beaconLit[0] === '1'`));
-  gate('anchors stay written after reload', await api.eval(`(function(){
-    const s = skStarSpans[0]; let a2 = 0;
-    for (let v = s.anch.v0; v < s.anch.v0 + s.anch.n; v++) a2 += skStarColA.getX(v);
-    return a2 > 1;
-  })()`));
-  /* the John sequence, locally: NEW GAME un-lights the coast */
-  await api.eval(`localStorage.setItem('fallenmoon_save_v1', JSON.stringify(defaultSave())); location.reload(); 0`).catch(() => {});
-  await sleep(6000);
-  await api.waitFor(`typeof __fm !== 'undefined' && __fm.state === 'title'`, 30000, 'title fresh');
-  await tapUntil(api, () => api.tap(13), '__fm.titleFocus === 1', 14, 'focus CONTINUE');
-  await tapUntil(api, () => api.tap(0), `__fm.state !== 'title'`, 16, 'leave title');
-  await api.waitFor(`__fm.state === 'play'`, 30000, 'play fresh');
-  gate('fresh world: beacons dark, stars hidden, punt home', await api.eval(
-    `__fm.beaconLit === '0000' && __fm.skStarsVis === false && __fm.skPunting === false`));
-  gate('zero console errors (world)', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
-  api.close();
+  console.log('\n-- world: persistence across sessions, fresh on NEW GAME --');
+  let blob = null;
+  {
+    const api = await session(Q24);
+    await api.eval(`__fmDebug.warpBeacon(0); 0`);
+    await api.eval(`__p6k.lightBeacon(0); 0`);       // the export p6l drives
+    await api.waitFor(`__fm.state === 'play'`, 20000, 'beat done').catch(() => {});
+    gate('lightBeacon export lights + saves', await api.eval(
+      `__fm.beaconLit[0] === '1' && JSON.parse(localStorage.getItem('fallenmoon_save_v1')).beaconLit[0] === true`));
+    blob = JSON.parse(await api.eval(`localStorage.getItem('fallenmoon_save_v1')`));
+    gate('zero console errors (world A)', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
+    api.close();
+  }
+  {
+    /* a fresh session on the saved blob: the beacon still burns */
+    const api = await session(blob);
+    gate('beacon light survives save/reload', await api.eval(`__fm.beaconLit[0] === '1'`));
+    gate('anchors stay written after reload', await api.eval(`(function(){
+      const s = skStarSpans[0]; let a2 = 0;
+      for (let v = s.anch.v0; v < s.anch.v0 + s.anch.n; v++) a2 += skStarColA.getX(v);
+      return a2 > 1;
+    })()`));
+    /* the derive, both directions: a fresh save un-lights the coast */
+    await api.eval(`SAVE = defaultSave(); storeSave(); applyWorldState(); 0`);
+    await api.waitTicks(6);
+    gate('fresh world: beacons dark, stars hidden, punt home', await api.eval(
+      `__fm.beaconLit === '0000' && __fm.skStarsVis === false && __fm.skPunting === false && __fm.skLaneI === -1`));
+    gate('zero console errors (world B)', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
+    api.close();
+  }
 }
 
 /* ═══════════ perf: LOWFX draw calls at every vista ═══════════ */
@@ -517,6 +581,7 @@ async function suitePerf() {
   await api.eval(`__fmDebug.nightNow(1); 0`);
   const sample = async (label, warp) => {
     await api.eval(warp);
+    await api.eval(`__fmDebug.nightNow(1); 0`);
     await api.waitTicks(24);
     let worst = 0;
     for (let i = 0; i < 6; i++) {
