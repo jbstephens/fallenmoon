@@ -85,6 +85,40 @@ Load-bearing facts unique to phase 4:
 - The falls forecourt is a pre-existing 86-92 draw-call hotspot (33 far
   tiles); p6g culls the forest far tier when deep in the hollow.
 
+## Phase 6 at a glance (p6l-moth — the arc/flow part)
+
+`p6l-moth.html`: quests 23–27 (QUEST_TEXT extended by assignment), Pearl's
+rooftop reveal (`mlReveal`, auto-triggers at the quay for q22+tbc5Seen; the
+cine GIVES the spyglass if unowned), the tinker's STAR LANTERN beat at the
+night-market heart stall, THE FAR STAR LAMP ROOM (an off-world capped
+interior in the rooms strip at (330,−360): its floor caps the strip terrain
+via a groundH wrap and registers as ground owner `p6l-lamproom` over
+`rooms-strip`), THE LANTERN MOTH (HP 84, notches 84/56/28; P1 gusts+dives,
+P2 dark waves vs the ANCHORED lantern pool, P3 jumpable moth-spiral +
+tired window; `__mlStLog` records state transitions for sim-tick-exact
+telegraph gates), the cure (`mlCure` — hands the Lantern DOWN, sets
+mothDone+lantern6+q26), the wheel payoff (`mlWheel6` → sky 6 → `mlShowTBC6`)
+and the 6/8 card teasing OLD BONE. Consumes `window.__p6k` (pool, beacons,
+farStarDoor, sighting) through shims with fallbacks. Load-bearing facts:
+- The quest BEACON marker renders at every objectivePoint answer — inside
+  a boss arena return null or the marker reads as a phantom orb (found by
+  raycasting the fight screenshots).
+- The NPC idle pass owns Pearl's root Y (`baseY` + tiptoe bob): a cine
+  that moves her must move `pearl.baseY`, not just the root.
+- `skyGrp` rests while the view is inside the capped lamp room (no sky
+  from inside + a fistful of draw calls back).
+- In the moth fight the safe ground is the fight's own ANCHORED pool
+  (p6k's bearer-following `lanternPoolAt` would make the dark waves
+  unfailable); p6k's pool answers only outside the arena.
+- Sea-road compass staging is FORWARD-ONLY (`mlChainNext`): the first
+  unreached mark that advances toward the goal — nearest-point staging
+  pointed a half-lit road backward.
+- Debug: `warpMothroom() · warpFarStar() · mothInfo() · arcInfo()`.
+- Probes: `test/probes/p6l-moth.mjs` (room/fight/kidbot/cure/checkpoint/
+  saves/perf) and `test/probes/p6-arc.mjs` (the q22→q27 journey gate,
+  forward derivations, per-state compass, phase-5 regression) from the
+  `test/fixtures/phase5-done-save.json` fixture.
+
 Phase 3 line numbers are deliberately omitted: p6d and p6e are ~3,000 lines
 each and shift every rebuild. Grep by symbol instead — the pinned constants
 below are stable.
