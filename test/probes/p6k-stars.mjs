@@ -418,6 +418,7 @@ async function suiteDrowned() {
       return d;
     })()`);
     if (near > 6) break;
+    await api.eval('P.hearts = P.maxHearts; 0');   /* shade-heal, banked (turbo outruns regen; a KO here fairly wakes the bot OUTSIDE at the anchor and torpedoes the climb) */
     await api.tap(0);
     /* dunked mid-fight: the splash-and-retry is proven elsewhere — put the
        kid back on the rubble step and keep fighting */
@@ -430,7 +431,7 @@ async function suiteDrowned() {
   console.log('   at-rubble: ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`));
   const T2 = { x: -1258, z: 230 };
   let falls = 0;
-  for (let s = 1; s < 27; s += 2) {
+  for (let s = 1; s < 27; s += 1) {   /* every tread: chords stay ON the stair */
     const a = 0.79 + 2.5 + s * 0.2;
     const ty = 0.05 + s * 0.325;
     const o = (ty - (-0.55 - 1.3)) * 0.55;
@@ -450,12 +451,26 @@ async function suiteDrowned() {
         return d;
       })()`);
       if (near > 4.9) break;
+      /* the chasing law: a corbel snapper perches 1 m outside a standing
+         slash — step AT it like a kid does, then swing */
+      const snp = JSON.parse(await api.eval(`(function(){
+        let b=null,bd=1e9;
+        for (const sn of SK_SNAPS){ if(sn.gone||sn.st==='leave')continue;
+          const d=Math.hypot(sn.x-P.x,sn.z-P.z); if(d<bd){bd=d;b=sn;} }
+        return JSON.stringify(b?{x:b.x,z:b.z}:null);
+      })()`));
+      if (snp) await walkTo(api, snp.x, snp.z, 1.3, 6000);
+      await api.eval('P.hearts = P.maxHearts; 0');   /* shade-heal, banked */
       await api.tap(0);
+      if (await api.eval('P.fy < -0.7')) break;   /* knocked in: let the fall handler take it */
     }
     /* fell? the dunk mercy sent us back to the rubble — restart the spiral
        (a kid retries; the mercy makes each fall cheap — six tries before judging) */
-    if (await api.eval('P.fy < -0.4')) {
-      console.log('   (fell at s=' + s + ': ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`) + ')');
+    /* EVERY ejection route counts as a fall — a KO/faint wakes the bot dry
+       at the islet ANCHOR (fy 0), which the fy-only check missed: the bot
+       then walked at a wall for 26 waypoints. Anchor = retry, same as wet. */
+    if (await api.eval('P.fy < -0.4 || Math.hypot(P.x - (-1236), P.z - 252) < 4')) {
+      console.log('   (fell/ejected at s=' + s + ': ' + await api.eval(`JSON.stringify([+P.x.toFixed(1), +P.z.toFixed(1), +P.fy.toFixed(2)])`) + ')');
       if (++falls > 6) break;
       s = -1;
       await api.eval(`P.hearts = P.maxHearts; __fmDebug.warp(-1259, 226.5); 0`);
