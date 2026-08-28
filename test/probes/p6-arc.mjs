@@ -233,6 +233,18 @@ if (want('derive')) {
   }
 }
 
+/* ═══ the OWNED-glass variant: Pearl's line changes, nothing double-grants ═══ */
+if (want('derive')) {
+  const api = await session({ ...PHASE5_DONE, spyglass: true, salt: 15 }, '?turbo=6', [], true);
+  await api.waitFor(`__fm.cinId === 'mlReveal'`, 30000, 'reveal (glass owned)');
+  await api.waitFor(`__fm.state === 'play'`, 90000, 'reveal ends');
+  const g = await jget(api, `({q:__fm.quest, glass:SAVE.spyglass, salt:P.salt})`);
+  gate('derive: with the spyglass OWNED the reveal still lands q23, no double grant, salt untouched',
+    g.q === 23 && g.glass === true && g.salt === 15, JSON.stringify(g));
+  gate('derive: zero console errors — owned-glass', api.errs.length === 0, api.errs.slice(0, 2).join(' | '));
+  api.close();
+}
+
 /* ═══ COMPASS: every state answers, and answers sanely ═══ */
 if (want('compass')) {
   console.log('\n═══ the compass, state by state ═══');

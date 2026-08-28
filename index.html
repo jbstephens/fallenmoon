@@ -32635,7 +32635,7 @@ cullChunks = function (ccx, ccz) {
   skPoolMesh.visible = poolOn;
   if (poolOn) {
     const px = P.sailing ? BOAT.x : P.x, pz = P.sailing ? BOAT.z : P.z;
-    const py = P.sailing ? SK_WL + 0.14 : groundH(px, pz) + 0.1;
+    const py = P.sailing ? SK_WL + 0.14 : P.fy + 0.08;   // feet, not groundH: the pool must hold in the off-world arena too
     skPoolMesh.position.set(px, py, pz);
     skPoolMesh.material.opacity = 0.5 + 0.14 * Math.sin(now / 300);
   }
