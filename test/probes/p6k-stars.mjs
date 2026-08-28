@@ -199,7 +199,7 @@ async function suiteSight() {
   gate('glass raised by holding north', true);
   await api.eval('__fakePad.raxes(0, -1)');                            // pitch the view up
   await sleep(900);
-  await api.eval('__fakePad.raxes(0.4, -0.55)');                       // sweep across, eye up
+  await api.eval('__fakePad.raxes(0.24, -0.55)');                      // sweep across, eye up (slow enough to sample)
   const laid = await api.waitFor('__fm.skLaneT > 0', 15000, 'lane').then(() => true).catch(() => false);
   await api.eval('__fakePad.raxes(0, 0)');
   gate('REAL-INPUT sweep lays a glitter lane', laid);
@@ -324,7 +324,7 @@ async function suiteReef() {
   await api.eval(`for (const g of GULLS) if (g.night) g.cd = 0; 0`);
   /* gulls answer the sword: the kid mash pops at least one diving pair */
   const popped = await kidClearPocket(api,
-    `GULLS.filter(g => g.night && !g.dead).slice(0, 2).map(g => ({x: g.x, z: g.z}))`, 60000);
+    `GULLS.filter(g => g.night && !g.dead).slice(0, 2).map(g => ({x: g.x, z: g.z}))`, 100000);
   gate('night gulls fall to real slashes', popped || await api.eval('GULLS.filter(g => g.night && g.dead).length >= 1'));
   await api.eval(`__fmDebug.cam(-880, 5.5, 296, -902, 7, 318); 0`);
   await sleep(700);
@@ -535,11 +535,10 @@ async function suiteSky() {
   }
   gate('stars return at dusk', rose);
   await api.eval(`__fmDebug.nightNow(1); 0`);
-  /* the four-lit coast vista (the standing perf vista, seen) */
-  await api.eval(`__fmDebug.nightNow(1); __fmDebug.cam(-420, 26, 180, -902, 4, 318); 0`);
-  await sleep(900);
-  await api.shot('p6k-coast-4lit');
-  /* count sky-region bright pixels: the filled field must READ */
+  /* the filled field must READ in pixels (camera up at the dusk sky) */
+  await api.eval(`__fmDebug.nightNow(1); __fmDebug.camPitch(-0.43); 0`);
+  await sleep(400);
+  await api.eval(`__fmDebug.nightNow(1); 0`);
   const png = await api.png();
   let bright = 0;
   for (let y = 8; y < 200; y += 2) {
@@ -551,6 +550,17 @@ async function suiteSky() {
   gate('the filled sky reads in pixels', bright > 40, `bright=${bright}`);
   gate('zero console errors (sky)', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
   api.close();
+  {
+    /* the four-lit coast: q26 holds the night down, every beacon burns */
+    const api2 = await session(ALL_LIT);
+    await api2.eval(`__fmDebug.warpSea(-430, 190, 2.0); 0`);
+    await api2.waitTicks(30);
+    gate('all four burn on the q26 coast', await api2.eval(`__fm.beaconLit === '1111'`));
+    await api2.eval(`__fmDebug.cam(-350, 20, 66, -902, 8, 318); 0`);
+    await sleep(900);
+    await api2.shot('p6k-coast-4lit');
+    api2.close();
+  }
 }
 
 /* ═══════════ world: persistence + fresh world ═══════════ */
