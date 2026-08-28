@@ -15,6 +15,7 @@ OUT="$DIR/index.html"
       "$SRC/p6d-sea.html" "$SRC/p6e-isles.html" "$SRC/p6f-lamp.html" \
       "$SRC/p6g-crown.html" "$SRC/p6h-green.html" \
       "$SRC/p6i-mouth.html" "$SRC/p6j-night.html" \
+      "$SRC/p6l-moth.html" \
       "$SRC/p7-flow.html"
 } > "$OUT"
 echo "built $OUT ($(wc -c < "$OUT") bytes)"

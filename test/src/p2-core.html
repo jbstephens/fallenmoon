@@ -557,6 +557,13 @@ function defaultSave() {
     fireworks: 0,             // firework charges aboard the skiff (p6j)
     marketHeart: false,       // the market heart container (p6j)
     tbc5Seen: false,
+    /* PHASE 6 — THE WANING LANTERN */
+    starsSeen: false,         // Pearl's rooftop reveal seen — the star arc is live (p6l)
+    starLantern: false,       // the STAR LANTERN rides the masthead (p6l sets, p6k renders)
+    beaconLit: [false, false, false, false],   // the four dark beacons (p6k sets)
+    mothDone: false,          // the Lantern Moth cured — the Far Star is a roost (p6l)
+    lantern6: false,          // THE WANING LANTERN, handed down by the moth (p6l)
+    tbc6Seen: false,
     tbc2Seen: false, tbc3Seen: false,   // end cards shown once each
     lastPos: null,            // where you ACTUALLY were — what CONTINUE resumes to
     lastShade: [8.2, 7.0],    // the SUNSTRUCK respawn anchor, and only that
@@ -611,6 +618,23 @@ function loadSave() {
     if (out.paddleWheel && out.mouthOpen) qMin = Math.max(qMin, 20);   // the refit closes the mouth chapter, retroactively too
     if (out.marketOpen) qMin = Math.max(qMin, 21);
     if (out.sky >= 5 || out.ph >= 5) qMin = Math.max(qMin, 22);
+    /* phase 6 — the MIRROR-6 law: every advance carries its derivation */
+    if (out.starsSeen) qMin = Math.max(qMin, 23);
+    if (out.starLantern) qMin = Math.max(qMin, 24);
+    {
+      const bl6 = Array.isArray(out.beaconLit) ? out.beaconLit : [];
+      const lit6 = bl6.filter(Boolean).length;
+      if (lit6 > 0) {
+        /* a lit beacon means the star road is being walked: the reveal and
+           the masthead lantern must both stand, or the moth's second phase
+           has no safe ground (the never-soft-lock rule, forward) */
+        out.starsSeen = true; out.starLantern = true;
+        qMin = Math.max(qMin, 24);
+      }
+      if (lit6 >= 4) qMin = Math.max(qMin, 25);
+    }
+    if (out.mothDone) { out.lantern6 = true; qMin = Math.max(qMin, 26); }
+    if (out.sky >= 6 || out.ph >= 6) qMin = Math.max(qMin, 27);
     if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }

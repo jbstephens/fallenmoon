@@ -1,0 +1,755 @@
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   PHASE 6, PART ONE — THE STAR ROAD (p6k-stars)
+
+   Owns: the returning STAR-FIELD (one baked sprite mesh — constellations
+   that rise INCOMPLETE, complete per-beacon, and the whole-sky FILL at
+   sky ≥ 6), the spyglass STAR-SIGHTING verb + the glitter lanes on the
+   water, THE STAR LANTERN at the sailboat's masthead (and its silver
+   pool — the moth fight's safe ground, exported), the FOUR DARK BEACON
+   ISLETS (terrain, towers, climbs, portals, the reef wash, the drowned
+   tower's flooded hall + punt), their hostile pockets (moth-wisps,
+   night gulls, snappers), and BEACON LIGHTING (beamHitDist beams, the
+   repeatable constellation-completing beat).
+
+   Concatenated AFTER p6j-night.html, BEFORE p6l-moth.html. p6l consumes
+   the pinned interface on window.__p6k (lanternPoolAt, lanternPoolR,
+   farStarDoor, beaconPos, sightingActive, laneTarget, lightBeacon) and
+   sets SAVE.starsSeen / SAVE.starLantern; this file only READS those
+   flags and runs whether or not p6l has landed.
+
+   Save flags OWNED here: beaconLit (array[4] of bool) — set live at the
+   lamp, derived both ways via __worldStateHooks. Quest flow, compass
+   answers, cines at Pearl, the tinker and TBC 6/8 are all p6l's.
+   ═══════════════════════════════════════════════════════════════════════ */
+window.__worldStateHooks = window.__worldStateHooks || [];
+window.__telemetryHooks = window.__telemetryHooks || [];
+window.__WORLD_REG = window.__WORLD_REG || [];
+window.__PORTALS = window.__PORTALS || [];
+window.__HULLS = window.__HULLS || [];
+
+/* ── the four beacons: geography, all locked here ──
+   Chosen against the live floor: the moon bowl reaches −246 m as far as
+   (−700, 230), so the reef stack stands east of it on the −64 m bench.
+   Every islet sits inside the sea box (p6d owns the water between). */
+const SK_B = [
+  /* 0 THE HARBOR STAR — the headland knoll off Brightharbor's west cliffs */
+  { id: 'harborstar', x: -203, z: 118, r: 26,
+    tower: { x: -206, z: 122, r: 2.9, h: 8.6, doorAng: 2.53 } },
+  /* 1 THE REEF STAR — a wave-washed stack on the deep bench */
+  { id: 'reefstar', x: -902, z: 318, r: 30,
+    tower: { x: -902, z: 318, r: 1.15, h: 2.2, doorAng: 0 } },
+  /* 2 THE DROWNED STAR — a half-sunk tower leaning out of a shoal bank */
+  { id: 'drownedstar', x: -1252, z: 238, r: 34,
+    tower: { x: -1258, z: 230, r: 5.6, h: 12.0, doorAng: 0.79 } },
+  /* 3 THE FAR STAR — past the Hourless Isles, the longest dark-water sail */
+  { id: 'farstar', x: -2298, z: -1005, r: 40,
+    tower: { x: -2306, z: -1014, r: 4.0, h: 14.0, doorAng: 0.71 } },
+];
+const SK_WL = -0.55;                        // the sea's design waterline (== WL)
+const SK_POOL_R = 3.4;                      // the star lantern's silver pool radius
+
+/* flags read (owned elsewhere): starsSeen + starLantern are p6l's to SET */
+const skStarsSeen = () => !!(SAVE && SAVE.starsSeen);
+const skLanternOn = () => !!(SAVE && SAVE.starLantern);
+const skSky = () => (SAVE ? (SAVE.sky | 0) : 0);
+/* the one flag owned HERE — normalized on every touch, never assumed */
+function skBeaconLit() {
+  if (!SAVE) return [false, false, false, false];
+  if (!Array.isArray(SAVE.beaconLit) || SAVE.beaconLit.length !== 4) {
+    SAVE.beaconLit = [!!(SAVE.beaconLit && SAVE.beaconLit[0]), !!(SAVE.beaconLit && SAVE.beaconLit[1]),
+                      !!(SAVE.beaconLit && SAVE.beaconLit[2]), !!(SAVE.beaconLit && SAVE.beaconLit[3])];
+  }
+  return SAVE.beaconLit;
+}
+const skLitCount = () => skBeaconLit().filter(Boolean).length;
+/* dusk: p6j's clock is the ONE night authority — this file only reads it */
+const skDuskK = () => (typeof nmNightK === 'number' ? nmNightK : (window.__nightK || 0));
+</script>
+<script>
+/* ═══════════ p6k/2 — THE SKY: the star-field, the constellations ═══════════
+   ONE baked sprite mesh (the p6j star pattern: inward-facing DOT_TEX
+   quads on the dome radius — additive, so a BLACK vertex is an absent
+   star and lighting one is a color write, never a mesh change).
+   Layout in the buffer, contiguous by group:
+     [c0 base][c0 anchors][c1 base][c1 anchors]...[the FILL]
+   States: hidden (sky<5 or !starsSeen) · incomplete (base lit, anchors
+   dark) · complete (beaconLit[i]: base brightened + anchors lit) ·
+   whole-sky fill (sky≥6). Stars are NEVER lights. */
+const SK_DOME_R = 414;
+const SK_CONST = [
+  /* az/el: the western sea sky, spread so each reads alone; stars as
+     [dAz, dEl, size, warm] offsets; anchors are the MISSING points */
+  { id: 'lanternbird', az: -0.95, el: 0.52,
+    stars: [[-0.10, -0.05, 2.6, 0], [-0.055, -0.015, 2.2, 0], [0, 0.02, 2.9, 1], [0.05, 0.055, 2.3, 0],
+            [0.10, 0.08, 2.1, 0], [0.02, -0.06, 2.0, 0], [0.075, -0.035, 2.2, 1]],
+    anchors: [[0.145, 0.115, 3.6, 0], [-0.145, -0.09, 3.3, 0]] },
+  { id: 'breaker', az: -1.45, el: 0.66,
+    stars: [[-0.12, -0.02, 2.2, 0], [-0.06, 0.03, 2.5, 0], [0, -0.015, 2.3, 1], [0.06, 0.035, 2.6, 0],
+            [0.12, -0.01, 2.2, 0], [0.0, 0.07, 2.0, 0]],
+    anchors: [[0.155, 0.06, 3.5, 0], [-0.155, 0.05, 3.4, 0]] },
+  { id: 'keelstar', az: -1.92, el: 0.55,
+    stars: [[-0.02, -0.09, 2.4, 0], [0.02, -0.04, 2.2, 0], [-0.015, 0.01, 2.5, 1], [0.02, 0.06, 2.3, 0],
+            [-0.05, 0.1, 2.1, 0], [0.06, 0.1, 2.1, 0]],
+    anchors: [[0, 0.145, 3.7, 0], [0.005, -0.135, 3.2, 0]] },
+  { id: 'greymoth', az: -2.38, el: 0.8,
+    stars: [[0, 0, 2.7, 1], [-0.07, 0.05, 2.3, 0], [0.07, 0.05, 2.3, 0], [-0.11, 0.1, 2.1, 0],
+            [0.11, 0.1, 2.1, 0], [-0.06, -0.05, 2.2, 0], [0.06, -0.05, 2.2, 0], [0, 0.075, 2.0, 0]],
+    anchors: [[-0.155, 0.145, 3.6, 0], [0.155, 0.145, 3.6, 0], [0, -0.105, 3.2, 0]] },
+];
+const SK_FILL_N = 240;
+/* buffer bookkeeping: per record {v0, n} vertex ranges */
+const skStarSpans = [];   // [{base:{v0,n}, anch:{v0,n}}...]
+let skFillSpan = null;
+let skStarMesh = null, skStarColA = null, skStarBase = null;   // base = authored colors
+(function skBuildStars() {
+  const p = [], c = [], u = [], base = [];
+  const _q = new THREE.Quaternion(), _z = new THREE.Vector3(0, 0, 1), _n = new THREE.Vector3();
+  const quad = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  const uvs = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+  const pushStar = (az, el, s, cc) => {
+    const ce = Math.cos(el);
+    const px = Math.sin(az) * ce * SK_DOME_R, py = Math.sin(el) * SK_DOME_R, pz = Math.cos(az) * ce * SK_DOME_R;
+    _n.set(-px, -py, -pz).normalize();
+    _q.setFromUnitVectors(_z, _n);
+    for (let k = 0; k < 6; k++) {
+      const v = new THREE.Vector3(quad[k][0] * s, quad[k][1] * s, 0).applyQuaternion(_q);
+      p.push(px + v.x, py + v.y, pz + v.z);
+      c.push(0, 0, 0);                       // born dark; the derive lights them
+      base.push(cc[0], cc[1], cc[2]);
+      u.push(uvs[k][0], uvs[k][1]);
+    }
+  };
+  for (const C of SK_CONST) {
+    const span = { base: { v0: p.length / 3, n: 0 }, anch: null };
+    for (const st of C.stars) {
+      const cc = st[3] ? [1.0, 0.93, 0.78] : [0.86, 0.92, 1.0];
+      pushStar(C.az + st[0], C.el + st[1], st[2], cc);
+    }
+    span.base.n = p.length / 3 - span.base.v0;
+    span.anch = { v0: p.length / 3, n: 0 };
+    for (const st of C.anchors) pushStar(C.az + st[0], C.el + st[1], st[2], [0.93, 0.96, 1.0]);
+    span.anch.n = p.length / 3 - span.anch.v0;
+    skStarSpans.push(span);
+  }
+  /* the FILL: the whole sky the family will sail phase 8 under */
+  skFillSpan = { v0: p.length / 3, n: 0 };
+  const rnd = mulberry32(606);
+  for (let i = 0; i < SK_FILL_N; i++) {
+    const az = rnd() * TAU, el = 0.06 + Math.pow(rnd(), 1.35) * 1.38;
+    const b = 0.3 + rnd() * 0.6;
+    const cc = rnd() < 0.14 ? [b, b * 0.9, b * 0.76] : [b * 0.88, b * 0.94, b];
+    pushStar(az, el, 0.8 + rnd() * 1.7, cc);
+  }
+  skFillSpan.n = p.length / 3 - skFillSpan.v0;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(c), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(u), 2));
+  skStarMesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true, opacity: 0, fog: false,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  skStarMesh.frustumCulled = false;
+  skStarMesh.visible = false;
+  skyGrp.add(skStarMesh);
+  skStarColA = g.attributes.color;
+  skStarBase = new Float32Array(base);
+})();
+/* write a span's colors as base × k (0 = absent, 1 = lit, >1 = gleam) */
+function skPaintSpan(span, k) {
+  for (let v = span.v0; v < span.v0 + span.n; v++) {
+    skStarColA.setXYZ(v, skStarBase[v * 3] * k, skStarBase[v * 3 + 1] * k, skStarBase[v * 3 + 2] * k);
+  }
+  skStarColA.needsUpdate = true;
+}
+/* the steady state for constellation i (gleam pulses ride on top) */
+function skPaintConst(i) {
+  const lit = skBeaconLit()[i];
+  skPaintSpan(skStarSpans[i].base, lit ? 1.22 : 0.62);
+  skPaintSpan(skStarSpans[i].anch, lit ? 1.35 : 0);
+}
+function skPaintSky() {
+  for (let i = 0; i < 4; i++) skPaintConst(i);
+  skPaintSpan(skFillSpan, skSky() >= 6 ? 1 : 0);
+}
+/* direction of constellation i's center (unit, world) */
+const _skCD = [0, 0, 0];
+function skConstDir(i) {
+  const C = SK_CONST[i];
+  const ce = Math.cos(C.el);
+  _skCD[0] = Math.sin(C.az) * ce; _skCD[1] = Math.sin(C.el); _skCD[2] = Math.cos(C.az) * ce;
+  return _skCD;
+}
+</script>
+<script>
+/* ═══════════ p6k/3 — THE STAR LANTERN + the silver pool (pinned exports) ═══════════ */
+
+/* the shared additive kit (p6j's pattern — crossed DOT_TEX quads) */
+function skGlowQuad(md, x, y, z, w, h, cc, uOut) {
+  const v = [[-w, -h], [w, -h], [w, h], [-w, -h], [w, h], [-w, h]];
+  const uv = [[0, 0], [1, 0], [1, 1], [0, 0], [1, 1], [0, 1]];
+  for (let k = 0; k < 6; k++) {
+    md.p.push(x + v[k][0], y + v[k][1], z);
+    md.c.push(cc[0] * 0.7, cc[1] * 0.7, cc[2] * 0.7);
+    uOut.push(uv[k][0], uv[k][1]);
+  }
+  for (let k = 0; k < 6; k++) {
+    md.p.push(x, y + v[k][1], z + v[k][0]);
+    md.c.push(cc[0] * 0.7, cc[1] * 0.7, cc[2] * 0.7);
+    uOut.push(uv[k][0], uv[k][1]);
+  }
+}
+function skFlatQuad(md, x, y, z, ax, az, len, w, cc, uOut) {
+  const fx = ax * len, fz = az * len, nx = -az * w, nz = ax * w;
+  const q = [[x - fx + nx, z - fz + nz], [x + fx + nx, z + fz + nz], [x + fx - nx, z + fz - nz], [x - fx - nx, z - fz - nz]];
+  const uv = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const idx = [0, 1, 2, 0, 2, 3];
+  for (const i of idx) {
+    md.p.push(q[i][0], y, q[i][1]);
+    md.c.push(cc[0], cc[1], cc[2]);
+    uOut.push(uv[i][0], uv[i][1]);
+  }
+}
+function skGlowMesh(md, uvsArr, op) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(md.p), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(md.c), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvsArr), 2));
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    map: DOT_TEX, vertexColors: true, transparent: true, opacity: op === undefined ? 0.85 : op,
+    fog: false, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  m.frustumCulled = false;
+  return m;
+}
+const SK_SILVER = [0.72, 0.82, 1.0], SK_SILVER2 = [0.5, 0.62, 0.85];
+
+/* ── the masthead lantern: a silver cage above the mainmast head — the
+   boat's build completes UPWARD (the visible-upgrade law). The cage is
+   solid geometry; the light is one additive glow mesh. ── */
+let skLantGrp = null, skLantGlow = null, skLantK = 0;
+(function skBuildLantern() {
+  skLantGrp = new THREE.Group();
+  const md = MD();
+  const C_SILV = col(0x9fb2c8), C_SILV2 = col(0x6c7d96), C_DARK = col(0x3a4353);
+  /* a short finial mast above the masthead, then the cage */
+  boxW(md, { x: 0, y: 0, z: 0, w: 0.045, d: 0.045, h: 0.55, col: C_SILV2 });
+  latheW(md, [[0.05, 0], [0.19, 0.08], [0.21, 0.34], [0.17, 0.5], [0.04, 0.6]],
+    { seg: 7, x: 0, y: 0.5, z: 0, col: C_SILV, cols: [C_DARK, SK_SILVER, SK_SILVER, C_SILV] });
+  for (let k = 0; k < 4; k++) {
+    const a = k * (TAU / 4);
+    boxW(md, { x: Math.cos(a) * 0.19, y: 0.55, z: Math.sin(a) * 0.19, w: 0.022, d: 0.022, h: 0.34, col: C_DARK });
+  }
+  boxW(md, { x: 0, y: 1.1, z: 0, w: 0.05, d: 0.05, h: 0.06, col: C_SILV2 });
+  const cage = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }), false);
+  cage.frustumCulled = false;
+  skLantGrp.add(cage);
+  const gm = MD(), uvs = [];
+  skGlowQuad(gm, 0, 0.82, 0, 1.35, 1.35, SK_SILVER, uvs);
+  skGlowQuad(gm, 0, 0.82, 0, 0.55, 0.55, [0.9, 0.95, 1], uvs);
+  skLantGlow = skGlowMesh(gm, uvs, 0.0);
+  skLantGrp.add(skLantGlow);
+  /* the masthead: the mainmast tops out at y≈3.05 local (p6c's build) */
+  skLantGrp.position.set(0, 3.05, 0.28);
+  skLantGrp.visible = false;
+  sailboat.group.add(skLantGrp);
+})();
+
+/* ── the silver pool: the lantern's light on the ground around the
+   player — the moth fight's safe ground (p6l consumes the export) ── */
+let skPoolMesh = null;
+(function skBuildPool() {
+  const md = MD(), uvs = [];
+  skFlatQuad(md, 0, 0, 0, 1, 0, SK_POOL_R * 1.12, SK_POOL_R * 1.12, [0.34, 0.42, 0.6], uvs);
+  skFlatQuad(md, 0, 0.02, 0, 0, 1, SK_POOL_R * 0.62, SK_POOL_R * 0.62, [0.3, 0.38, 0.58], uvs);
+  skPoolMesh = skGlowMesh(md, uvs, 0.8);
+  skPoolMesh.renderOrder = 3;
+  skPoolMesh.visible = false;
+  scene.add(skPoolMesh);
+})();
+
+/* ═══ the pinned interface ═══ */
+window.__p6k = window.__p6k || {};
+window.__p6k.lanternPoolR = SK_POOL_R;
+window.__p6k.lanternPoolAt = function (x, z) {
+  if (!skLanternOn()) return false;
+  /* the pool travels with its bearer: the player ashore, the masthead when
+     she is the nearest light. Both are honest silver ground. */
+  const px = P.sailing ? BOAT.x : P.x, pz = P.sailing ? BOAT.z : P.z;
+  if (Math.hypot(x - px, z - pz) <= SK_POOL_R) return true;
+  if (Math.hypot(x - BOAT.x, z - BOAT.z) <= SK_POOL_R + 1.2) return true;
+  return false;
+};
+window.__p6k.beaconPos = SK_B.map(b => ({ x: b.x, z: b.z }));
+window.__p6k.sightingActive = () => skLaneT > 0;
+window.__p6k.laneTarget = () => (skLaneT > 0 ? skLaneI : -1);
+</script>
+<script>
+/* ═══════════ p6k/4 — THE FOUR ISLETS: ground, towers, portals, registry ═══════════
+   Region pattern: one analytic pad-stack per islet → makeMeshField →
+   the SAME field renders the sheet and answers groundH (rendered ==
+   physics by construction). The skirt blends to the captured previous
+   chain, so the sea keeps its floor right up to each footprint. */
+const _skGroundH = groundH;
+const _skWorldSolid = worldSolidAt;
+
+/* pad-stack: h = max over pads of (y − max(0, d − r) · fall) — overlapping
+   pads chain into walkable ramps; authored, never generated */
+function skPadH(pads, x, z) {
+  let h = -1e9;
+  for (let i = 0; i < pads.length; i++) {
+    const p = pads[i];
+    const d = Math.hypot(x - p[0], z - p[1]);
+    const v = p[3] - Math.max(0, d - p[2]) * p[4];
+    if (v > h) h = v;
+  }
+  return h;
+}
+/* per-islet pads: [x, z, r, y, fall] (y absolute; WL = −0.55) */
+const SK_PADS = [
+  /* 0 HARBOR STAR: court knoll + ramp chain down to the landing spit */
+  [[-203, 118, 9, 5.65, 0.55],
+   [-197, 109, 4, 3.6, 0.5], [-193, 104, 4, 1.6, 0.45], [-190.5, 100.5, 4.5, 0.0, 0.4],
+   [-189, 98, 5, -0.2, 0.3]],
+  /* 1 REEF STAR: awash base ring, south landing shelf, two terraces, crown */
+  [[-902, 318, 3.6, 4.65, 0.9],
+   [-904.5, 315.5, 2.6, 3.4, 0.8],
+   [-902, 313.5, 4.5, 2.05, 0.7],
+   [-899, 310.5, 3, 0.9, 0.6],
+   [-902, 308, 6, -0.2, 0.35],
+   [-902, 305, 4, -0.2, 0.3],
+   [-902, 318, 12, -0.3, 0.5]],
+  /* 2 DROWNED STAR: one broad shoal bank + the dry spit (the hall dips below) */
+  [[-1252, 238, 26, -1.4, 0.5],
+   [-1236, 252, 6, 0.0, 0.28], [-1240, 248, 4, -0.6, 0.3]],
+  /* 3 FAR STAR: beach → ramp → meadow → tower rise, cove to the southeast */
+  [[-2306, -1014, 6.5, 5.75, 0.5],
+   [-2301, -1009, 4, 4.7, 0.5],
+   [-2298, -1005, 14, 3.65, 0.4],
+   [-2293, -999, 5, 1.5, 0.35],
+   [-2288, -993, 8, -0.2, 0.25],
+   [-2298, -1005, 22, -0.5, 0.45]],
+];
+function skRawFor(i) {
+  const B = SK_B[i], pads = SK_PADS[i];
+  const T = B.tower;
+  return function (x, z) {
+    const base = _skGroundH(x, z);
+    const d = Math.hypot(x - B.x, z - B.z);
+    if (d >= B.r) return base;
+    const k = smoothstep(clamp((B.r - d) / 8, 0, 1));
+    let h = lerp(base, Math.max(base, skPadH(pads, x, z)), k);
+    if (i === 2) {
+      /* the flooded hall: the tower's ground floor gave itself to the sea */
+      const dT = Math.hypot(x - T.x, z - T.z);
+      if (dT < 5.6) h = lerp(h, SK_WL - 1.15, smoothstep(clamp((5.6 - dT) / 0.9, 0, 1)));
+    }
+    return h;
+  };
+}
+/* fields on 2 m lattices, boxes aligned to each footprint */
+const skFields = [], skBoxes = [];
+for (let i = 0; i < 4; i++) {
+  const B = SK_B[i];
+  const x0 = B.x - (B.r + 4), z0 = B.z - (B.r + 4), x1 = B.x + (B.r + 4), z1 = B.z + (B.r + 4);
+  skBoxes.push([x0, z0, x1, z1]);
+  skFields.push(makeMeshField(skRawFor(i), x0, z0, x1, z1, 2, () => false));
+}
+function skIsleIdx(x, z) {
+  for (let i = 0; i < 4; i++) {
+    const B = SK_B[i];
+    const dx = x - B.x, dz = z - B.z;
+    if (dx * dx + dz * dz < (B.r + 3) * (B.r + 3)) return i;
+  }
+  return -1;
+}
+function skGroundAt(x, z) {
+  const i = skIsleIdx(x, z);
+  return i < 0 ? _skGroundH(x, z) : skFields[i](x, z);
+}
+groundH = function (x, z) {
+  const i = skIsleIdx(x, z);
+  if (i >= 0) return skFields[i](x, z);
+  return _skGroundH(x, z);
+};
+
+/* ── the rendered sheets: same lattice, same field, isle palette ── */
+const _skc = [0, 0, 0];
+function skSheetColor(f, x, z, y) {
+  const n = vnoise(x * 0.07, z * 0.07);
+  const n2 = vnoise(x * 0.019 + 11, z * 0.019 - 4);
+  if (y < SK_WL - 0.9) { mix3(S_IDEEP, S_IWET, clamp((y - (SK_WL - 5.5)) / 4.6, 0, 1), _skc); return _skc; }
+  if (y < SK_WL + 0.5) { mix3(S_IWET, S_ISAND, clamp((y - (SK_WL - 0.9)) / 1.4, 0, 1), _skc); return _skc; }
+  const sx = (f(x + 2, z) - f(x - 2, z)) / 4;
+  const sz = (f(x, z + 2) - f(x, z - 2)) / 4;
+  const slope = Math.hypot(sx, sz);
+  mix3(S_ISAND, S_ITURF, clamp((y - SK_WL - 1.6) / 4.4 + n2 * 0.25, 0, 1), _skc);
+  mix3(_skc, S_ITURF2, clamp(n * 0.5 + n2 * 0.45 + 0.4, 0, 1) * 0.5, _skc);
+  const rockT = 0.5 + n * 0.22 + n2 * 0.16;
+  if (slope > rockT) mix3(_skc, n > 0 ? S_IROCK : S_IROCK2, clamp((slope - rockT) / 0.55, 0, 0.85), _skc);
+  return _skc;
+}
+const skSheets = [];
+(function skBuildSheets() {
+  for (let i = 0; i < 4; i++) {
+    const B = SK_B[i], f = skFields[i];
+    const [x0, z0, x1, z1] = skBoxes[i];
+    const md = MD();
+    const gcv = (x, z) => {
+      const y = f(x, z);
+      const c = skSheetColor(f, x, z, y);
+      return [c[0], c[1], c[2], y];
+    };
+    for (let x = x0; x < x1; x += 2) {
+      for (let z = z0; z < z1; z += 2) {
+        const mx = x + 1, mz = z + 1;
+        if (Math.hypot(mx - B.x, mz - B.z) > B.r + 3) continue;
+        const c00 = gcv(x, z), c10 = gcv(x + 2, z), c01 = gcv(x, z + 2), c11 = gcv(x + 2, z + 2);
+        pushTriIsle(md, x, c00[3], z, x, c01[3], z + 2, x + 2, c11[3], z + 2, c00, c01, c11);
+        pushTriIsle(md, x, c00[3], z, x + 2, c11[3], z + 2, x + 2, c10[3], z, c00, c11, c10);
+      }
+    }
+    const m = mdMesh(md, WORLD_MAT, false);
+    m.matrixAutoUpdate = false; m.updateMatrix();
+    m.frustumCulled = false;
+    m.visible = false;
+    scene.add(m);
+    skSheets.push(m);
+  }
+})();
+
+/* ── solid authority: the tower shells (walls read as walls; every
+   doorway is a registered portal and stays open air) ── */
+function skAngTo(cx, cz, x, z) { return Math.atan2(x - cx, z - cz); }
+function skAngDiff(a, b) {
+  let d = a - b;
+  d = ((d % TAU) + TAU) % TAU;
+  if (d > Math.PI) d -= TAU;
+  return Math.abs(d);
+}
+/* ring specs: [isle, r0, r1, doorAng, doorHalf] */
+const SK_RINGS = [
+  [0, 2.35, 3.15, 2.53, 0.5],
+  [2, 5.0, 6.2, 0.79, 0.36],
+  [3, 3.45, 4.35, 0.71, 0.4],
+];
+function skSolidAt(x, z) {
+  for (let i = 0; i < SK_RINGS.length; i++) {
+    const [bi, r0, r1, dAng, dHalf] = SK_RINGS[i];
+    const T = SK_B[bi].tower;
+    const d = Math.hypot(x - T.x, z - T.z);
+    if (d > r0 && d < r1 && skAngDiff(skAngTo(T.x, T.z, x, z), dAng) > dHalf) return true;
+  }
+  return false;
+}
+worldSolidAt = function (x, z) {
+  if (skIsleIdx(x, z) >= 0 && skSolidAt(x, z)) return true;
+  return _skWorldSolid(x, z);
+};
+/* movement colliders along the same rings (arc studs, door gaps open) */
+(function skRingColls() {
+  for (const [bi, r0, r1, dAng, dHalf] of SK_RINGS) {
+    const T = SK_B[bi].tower;
+    const rm = (r0 + r1) / 2, th = (r1 - r0) / 2;
+    const n = Math.max(10, Math.round(rm * 4));
+    for (let k = 0; k < n; k++) {
+      const a = k / n * TAU;
+      if (skAngDiff(a, dAng) < dHalf + 0.55 / rm) continue;
+      addColl(T.x + Math.sin(a) * rm, T.z + Math.cos(a) * rm, th + 0.5);
+    }
+  }
+})();
+
+/* ── the towers: dead harbor-stars, one merged mesh + one glow mesh per
+   islet. Chunky ashlar courses (12 segment blocks a course, door courses
+   skipped at the doorway); every doorway renders frame + light gradient
+   + a pale threshold stone — Rule 2 in pixels. ── */
+const C_SKSTONE = col(0xcfc8b4), C_SKSTONE2 = col(0xa9a291), C_SKSTONE3 = col(0x847e6e),
+      C_SKIRON = col(0x3d4148), C_SKVERD = col(0x5f8a7a), C_SKDARK = col(0x2c3038);
+const SK_TOWER_MAT = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+function skRing(md, T, y0, rm, th, courseH, courses, doorAng, doorHalf, doorTop, jitterSeed) {
+  for (let c = 0; c < courses; c++) {
+    const y = y0 + c * courseH;
+    const n = 12;
+    for (let s = 0; s < n; s++) {
+      const a = (s + (c % 2) * 0.5) / n * TAU;
+      if (y - y0 < doorTop && skAngDiff(a, doorAng) < doorHalf + 0.5 / rm) continue;
+      const j = hash2(jitterSeed + s * 7, c * 13);
+      const cc = j > 0.3 ? C_SKSTONE : (j > -0.3 ? C_SKSTONE2 : C_SKSTONE3);
+      boxW(md, {
+        x: T.x + Math.sin(a) * rm, y: y - 0.04 + j * 0.03, z: T.z + Math.cos(a) * rm,
+        w: rm * Math.PI / n * 0.98, d: th, h: courseH + 0.06, ry: a,
+        col: cc, colB: C_SKSTONE3,
+      });
+    }
+  }
+}
+function skDoorFrame(md, gm, guv, T, y0, rr, doorAng, doorHalf, h) {
+  const dx = Math.sin(doorAng), dz = Math.cos(doorAng);
+  const px = -dz, pz = dx;             // tangential
+  const wHalf = rr * Math.sin(doorHalf);
+  for (const s of [-1, 1]) {
+    boxW(md, { x: T.x + dx * rr + px * wHalf * s, y: y0 - 0.1, z: T.z + dz * rr + pz * wHalf * s,
+      w: 0.24, d: 0.34, h: h + 0.1, ry: doorAng, col: C_SKSTONE2, colB: C_SKSTONE3 });
+  }
+  boxW(md, { x: T.x + dx * rr, y: y0 + h, z: T.z + dz * rr,
+    w: wHalf + 0.34, d: 0.36, h: 0.34, ry: doorAng, col: C_SKSTONE, colB: C_SKSTONE2 });
+  /* the floor cue: a pale worn threshold slab through the gap */
+  boxW(md, { x: T.x + dx * rr, y: y0 - 0.13, z: T.z + dz * rr,
+    w: wHalf + 0.1, d: 0.6, h: 0.15, ry: doorAng, col: col(0xe2dbc6), colB: C_SKSTONE2 });
+  /* the light gradient: a soft additive sheet standing in the doorway */
+  skGlowQuad(gm, 0, 0, 0, 0.01, 0.01, [0, 0, 0], guv);   // keep buffers aligned (noop)
+  const gmd = { p: gm.p, c: gm.c };
+  const q = [[-wHalf * 0.9, 0.05], [wHalf * 0.9, 0.05], [wHalf * 0.7, h * 0.92], [-wHalf * 0.7, h * 0.92]];
+  const uv = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  const idx = [0, 1, 2, 0, 2, 3];
+  for (const i of idx) {
+    gmd.p.push(T.x + dx * rr + px * q[i][0], y0 + q[i][1], T.z + dz * rr + pz * q[i][0]);
+    gmd.c.push(0.2, 0.24, 0.3);
+    guv.push(uv[i][0], uv[i][1]);
+  }
+}
+function skLampCage(md, x, y, z, s) {
+  latheW(md, [[0.34 * s, 0], [0.5 * s, 0.12 * s], [0.52 * s, 0.7 * s], [0.42 * s, 0.98 * s], [0.1 * s, 1.15 * s]],
+    { seg: 7, x, y, z, col: C_SKIRON, cols: [C_SKIRON, C_SKVERD, C_SKIRON, C_SKIRON] });
+  for (let k = 0; k < 4; k++) {
+    const a = k * (TAU / 4) + 0.4;
+    boxW(md, { x: x + Math.cos(a) * 0.44 * s, y: y + 0.12 * s, z: z + Math.sin(a) * 0.44 * s,
+      w: 0.035, d: 0.035, h: 0.85 * s, col: C_SKDARK });
+  }
+  /* the cold glass — dark until its beacon burns */
+  latheW(md, [[0.2 * s, 0.25 * s], [0.26 * s, 0.45 * s], [0.18 * s, 0.72 * s]],
+    { seg: 6, x, y, z, col: C_SKDARK, cols: [C_SKDARK, col(0x424c5c)] });
+}
+function skRock(md, x, z, r, h, seed) {
+  const y = skGroundAt(x, z);
+  latheW(md, [[r, 0], [r * 1.02, h * 0.4], [r * 0.62, h * 0.82], [0.1, h]],
+    { seg: 6, ex: 0.85, x, y: y - 0.5, z, ry: seed * 1.9, flat: true, segJitter: 0.16,
+      col: S_IROCK, cols: [S_IROCK2, S_IROCK, S_STONE2] });
+}
+/* absolute lamp positions (beam origins); [3] is the Far Star's — its
+   lamp ROOM is p6l's, but the shell carries the cage and the beam */
+const SK_LAMP = [];
+const skTowerMeshes = [], skTowerGlows = [];
+const SK_DECK = [];               // per-islet deck info for plat colliders
+(function skBuildTowers() {
+  for (let bi = 0; bi < 4; bi++) {
+    const B = SK_B[bi], T = B.tower;
+    const md = MD();
+    const gm = MD(), guv = [];
+    const gy = skGroundAt(T.x, T.z);
+    if (bi === 0) {
+      /* THE HARBOR STAR: drum + interior spiral + open lamp deck */
+      const y0 = gy - 0.3;
+      skRing(md, T, y0, (2.35 + 3.15) / 2, 0.42, 1.24, 6, T.doorAng, 0.5, 2.4, 3);
+      skDoorFrame(md, gm, guv, T, y0 + 0.1, 2.75, T.doorAng, 0.5, 2.3);
+      /* the deck: floor disc + parapet course + the lamp cage */
+      const deckY = y0 + 7.44;
+      latheW(md, [[0.2, 0], [3.15, 0]], { seg: 12, x: T.x, y: deckY, z: T.z, flat: true, col: C_SKSTONE2, cols: [C_SKSTONE2] });
+      skRing(md, T, deckY, (2.35 + 3.15) / 2, 0.34, 0.8, 1, T.doorAng + Math.PI, 0.4, 1.0, 9);
+      /* interior spiral treads (rendered; the colliders mirror these) */
+      for (let s = 0; s < 18; s++) {
+        const a = T.doorAng + 1.1 + s * 0.26;
+        const ty = y0 + 0.35 + s * 0.42;
+        boxW(md, { x: T.x + Math.sin(a) * 1.55, y: ty - 0.14, z: T.z + Math.cos(a) * 1.55,
+          w: 0.62, d: 0.5, h: 0.16, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
+      }
+      skLampCage(md, T.x, deckY + 0.86, T.z, 1.25);
+      boxW(md, { x: T.x, y: deckY, z: T.z, w: 0.3, d: 0.3, h: 0.9, col: C_SKSTONE3 });
+      SK_LAMP.push({ x: T.x, y: deckY + 1.5, z: T.z });
+      SK_DECK.push({ x: T.x, z: T.z, y: deckY, r: 2.2 });
+      skRock(md, B.x + 8, B.z - 6, 2.2, 3.1, 11);
+      skRock(md, B.x - 10, B.z + 5, 1.7, 2.4, 12);
+    } else if (bi === 1) {
+      /* THE REEF STAR: no drum — a stone plinth and the basket pillar on
+         the crown; the climb is the rock itself, washed by the sets */
+      const cy = skGroundAt(T.x, T.z);
+      latheW(md, [[1.7, 0], [1.45, 0.5], [1.15, 0.9]], { seg: 7, x: T.x, y: cy - 0.2, z: T.z,
+        flat: true, segJitter: 0.12, col: C_SKSTONE2, cols: [C_SKSTONE3, C_SKSTONE2] });
+      boxW(md, { x: T.x, y: cy + 0.7, z: T.z, w: 0.26, d: 0.26, h: 1.5, col: C_SKSTONE3 });
+      skLampCage(md, T.x, cy + 2.2, T.z, 1.1);
+      SK_LAMP.push({ x: T.x, y: cy + 2.85, z: T.z });
+      SK_DECK.push(null);
+      /* the stair gate: a leaning weathered arch where the shelf meets
+         the ramp — the threshold reads from both sides */
+      {
+        const ax = -902, az = 309.5, ay = skGroundAt(ax, az);
+        for (const s of [-1, 1]) {
+          boxW(md, { x: ax + 1.15 * s, y: ay - 0.2, z: az, w: 0.26, d: 0.34, h: 2.6 + s * 0.15,
+            rz: s * 0.06, col: C_SKSTONE2, colB: C_SKSTONE3 });
+        }
+        boxW(md, { x: ax, y: ay + 2.35, z: az, w: 1.62, d: 0.38, h: 0.36, rz: 0.05, col: C_SKSTONE, colB: C_SKSTONE2 });
+        boxW(md, { x: ax, y: ay - 0.16, z: az, w: 1.2, d: 0.62, h: 0.16, col: col(0xe2dbc6), colB: C_SKSTONE2 });
+        const uv = [[0, 0], [1, 0], [1, 1], [0, 1]];
+        for (const i of [0, 1, 2, 0, 2, 3]) {
+          const q = [[-1.0, 0.05], [1.0, 0.05], [0.8, 2.2], [-0.8, 2.2]][i];
+          gm.p.push(ax + q[0], ay + q[1], az);
+          gm.c.push(0.2, 0.24, 0.3);
+          guv.push(uv[i][0], uv[i][1]);
+        }
+      }
+      skRock(md, B.x - 7, B.z - 9, 2.4, 2.2, 21);
+      skRock(md, B.x + 9, B.z + 3, 1.9, 1.8, 22);
+    } else if (bi === 2) {
+      /* THE DROWNED STAR: a leaning shell, hall awash, spiral to a tilted
+         lamp room. The lean is rendered per-course; colliders stay true. */
+      const y0 = SK_WL - 1.3;
+      const leanX = 0.14, leanZ = 0.1;      // m of drift per m of height
+      for (let c = 0; c < 9; c++) {
+        const y = y0 + c * 1.34;
+        const off = (y - y0);
+        for (let s = 0; s < 12; s++) {
+          const a = (s + (c % 2) * 0.5) / 12 * TAU;
+          if ((y - y0) < 3.4 && skAngDiff(a, T.doorAng) < 0.36 + 0.5 / 5.6) continue;
+          /* the seaward wall is broken open above half height */
+          if (c > 5 && skAngDiff(a, 3.9) < 0.7) continue;
+          const j = hash2(31 + s * 7, c * 13);
+          boxW(md, {
+            x: T.x + off * leanX + Math.sin(a) * 5.6, y: y - 0.04, z: T.z + off * leanZ + Math.cos(a) * 5.6,
+            w: 5.6 * Math.PI / 12 * 0.97, d: 0.55, h: 1.4, ry: a,
+            col: y < SK_WL + 0.8 ? mix3(C_SKSTONE3, col(0x4e5a58), 0.5) : (j > 0.2 ? C_SKSTONE2 : C_SKSTONE3),
+            colB: C_SKSTONE3,
+          });
+        }
+      }
+      /* the flooded mouth's frame + gradient (the portal renders) */
+      skDoorFrame(md, gm, guv, T, SK_WL - 0.1, 5.6, T.doorAng, 0.36, 3.2);
+      /* spiral stair hugging the inner wall, hall landing to lamp floor */
+      for (let s = 0; s < 22; s++) {
+        const a = T.doorAng + 2.5 + s * 0.245;
+        const ty = 0.05 + s * 0.42;
+        const off = (ty - y0);
+        boxW(md, { x: T.x + off * leanX * 0.55 + Math.sin(a) * 4.0, y: ty - 0.16, z: T.z + off * leanZ * 0.55 + Math.cos(a) * 4.0,
+          w: 0.75, d: 0.55, h: 0.18, ry: a, col: s % 2 ? C_SKSTONE : C_SKSTONE2, colB: C_SKSTONE3 });
+      }
+      /* the stair-base landing beside the mouth (punt hop-off) */
+      boxW(md, { x: T.x + Math.sin(T.doorAng + 2.2) * 3.9, y: -0.15, z: T.z + Math.cos(T.doorAng + 2.2) * 3.9,
+        w: 1.5, d: 1.5, h: 0.22, ry: T.doorAng + 2.2, col: C_SKSTONE2, colB: C_SKSTONE3 });
+      /* the tilted lamp floor + cage: the room leans with its tower */
+      const fy = 8.9, foffX = (fy - y0) * leanX * 0.55, foffZ = (fy - y0) * leanZ * 0.55;
+      boxW(md, { x: T.x + foffX, y: fy - 0.2, z: T.z + foffZ, w: 3.6, d: 3.6, h: 0.24, rx: 0.07, rz: 0.05, col: C_SKSTONE2, colB: C_SKSTONE3 });
+      skLampCage(md, T.x + foffX, fy + 0.14, T.z + foffZ, 1.3);
+      SK_LAMP.push({ x: T.x + foffX, y: fy + 0.8, z: T.z + foffZ });
+      SK_DECK.push({ x: T.x + foffX, z: T.z + foffZ, y: fy, r: 3.3 });
+      skRock(md, -1237, 254.5, 1.6, 1.7, 31);   // the spit boulder (a snapper's)
+    } else {
+      /* THE FAR STAR: perfect, lit-ready, silent. Shell + door + cage
+         only — its lamp room belongs to the guardian (p6l). */
+      const y0 = gy - 0.3;
+      skRing(md, T, y0, (3.45 + 4.35) / 2, 0.46, 1.42, 9, T.doorAng, 0.4, 2.9, 41);
+      skDoorFrame(md, gm, guv, T, y0 + 0.1, 3.9, T.doorAng, 0.4, 2.8);
+      const topY = y0 + 12.9;
+      latheW(md, [[0.2, 0], [4.35, 0]], { seg: 12, x: T.x, y: topY, z: T.z, flat: true, col: C_SKSTONE2, cols: [C_SKSTONE2] });
+      skRing(md, T, topY, (3.45 + 4.35) / 2, 0.36, 0.9, 1, T.doorAng + Math.PI, 0.3, 1.0, 43);
+      skLampCage(md, T.x, topY + 0.95, T.z, 1.6);
+      SK_LAMP.push({ x: T.x, y: topY + 1.8, z: T.z });
+      SK_DECK.push(null);
+      skRock(md, B.x + 12, B.z + 8, 2.6, 3.4, 44);
+      skRock(md, B.x - 6, B.z + 14, 2.0, 2.6, 45);
+    }
+    const m = mdMesh(md, SK_TOWER_MAT, false);
+    m.matrixAutoUpdate = false; m.updateMatrix();
+    m.frustumCulled = false;
+    m.visible = false;
+    scene.add(m);
+    skTowerMeshes.push(m);
+    const g = skGlowMesh(gm, guv, 0.5);
+    g.visible = false;
+    scene.add(g);
+    skTowerGlows.push(g);
+  }
+})();
+
+/* ── the climbs' colliders (plat = support, never wall) ── */
+const skPlatColls = [];
+(function skBuildClimbColls() {
+  const T0 = SK_B[0].tower, gy0 = skGroundAt(T0.x, T0.z) - 0.3;
+  for (let s = 0; s < 18; s++) {
+    const a = T0.doorAng + 1.1 + s * 0.26;
+    const c = addColl(T0.x + Math.sin(a) * 1.55, T0.z + Math.cos(a) * 1.55, 0.6, gy0 + 0.35 + s * 0.42);
+    c.plat = true;
+    skPlatColls.push(c);
+  }
+  const D0 = SK_DECK[0];
+  for (const [ox, oz] of [[0, 0], [1.3, 0.8], [-1.3, -0.8], [0.9, -1.2], [-0.9, 1.2]]) {
+    const c = addColl(D0.x + ox, D0.z + oz, 1.25, D0.y);
+    c.plat = true;
+    skPlatColls.push(c);
+  }
+  const T2 = SK_B[2].tower, y02 = SK_WL - 1.3;
+  for (let s = 0; s < 22; s++) {
+    const a = T2.doorAng + 2.5 + s * 0.245;
+    const ty = 0.05 + s * 0.42;
+    const off = (ty - y02) * 0.55;
+    const c = addColl(T2.x + off * 0.14 + Math.sin(a) * 4.0, T2.z + off * 0.1 + Math.cos(a) * 4.0, 0.72, ty);
+    c.plat = true;
+    skPlatColls.push(c);
+  }
+  {
+    const c = addColl(T2.x + Math.sin(T2.doorAng + 2.2) * 3.9, T2.z + Math.cos(T2.doorAng + 2.2) * 3.9, 1.5, 0.07);
+    c.plat = true;
+    skPlatColls.push(c);
+  }
+  const D2 = SK_DECK[2];
+  for (const [ox, oz] of [[0, 0], [1.6, 1.0], [-1.6, -1.0], [1.0, -1.5], [-1.0, 1.5]]) {
+    const c = addColl(D2.x + ox, D2.z + oz, 1.4, D2.y + (ox * 0.07 + oz * 0.05));
+    c.plat = true;
+    skPlatColls.push(c);
+  }
+})();
+
+/* ── rescue anchors: a dunked or downed player wakes on the islet's own
+   footing, WITH the boat — never 400 m away on someone else's strand ── */
+ISLE_ANCHORS.push(
+  { x: -190, z: 96, sx: -189, sz: 98, id: 'harborstar' },
+  { x: -902, z: 301, sx: -902, sz: 307, id: 'reefstar' },
+  { x: -1241, z: 249, sx: -1236, sz: 252, id: 'drownedstar' },
+  { x: -2285, z: -990, sx: -2288, sz: -993, id: 'farstar' },
+);
+
+/* ── the swell yields to the islets: shoal the amp (and pull the color
+   band in) around each footprint, calm inside the drowned hall — the
+   same law every charted isle already obeys ── */
+const _skSeaShoal = seaShoalAt;
+seaShoalAt = function (x, z) {
+  const s = _skSeaShoal(x, z);
+  for (let i = 0; i < 4; i++) {
+    const B = SK_B[i];
+    const dx = x - B.x, dz = z - B.z;
+    const d2 = dx * dx + dz * dz;
+    const rOut = B.r + 58;
+    if (d2 > rOut * rOut) continue;
+    const d = Math.sqrt(d2);
+    s.amp *= clamp((d - B.r * 0.94) / 58, 0, 1);
+    s.off = Math.min(s.off, smoothstep(clamp((d - B.r * 0.98) / 160, 0, 1)));
+  }
+  return s;
+};
+
+/* ═══ RULES registrations: the ground owner + all four thresholds ═══ */
+window.__WORLD_REG.push({
+  name: 'star-isles', kind: 'ground', over: ['sea'],
+  owns: (x, z) => skIsleIdx(x, z) >= 0,
+  ground: (x, z) => skGroundAt(x, z),
+  note: 'the four dark-beacon islets (p6k) — pad-stack fields on 2 m lattices; solid = skSolidAt (tower shells); every doorway is a portal below',
+});
+window.__PORTALS.push(
+  { name: 'harbor-star-door',
+    x: SK_B[0].tower.x + Math.sin(2.53) * 2.75, z: SK_B[0].tower.z + Math.cos(2.53) * 2.75,
+    openNow: () => true },
+  { name: 'reef-star-arch', x: -902, z: 309.5, openNow: () => true },
+  { name: 'drowned-star-mouth',
+    x: SK_B[2].tower.x + Math.sin(0.79) * 5.6, z: SK_B[2].tower.z + Math.cos(0.79) * 5.6,
+    openNow: () => true },
+  { name: 'far-star-door',
+    x: SK_B[3].tower.x + Math.sin(0.71) * 3.9, z: SK_B[3].tower.z + Math.cos(0.71) * 3.9,
+    openNow: () => true },
+);
+/* the pinned door export for p6l: outward-facing yaw of the doorway */
+window.__p6k.farStarDoor = {
+  x: SK_B[3].tower.x + Math.sin(0.71) * 3.9,
+  z: SK_B[3].tower.z + Math.cos(0.71) * 3.9,
+  yaw: 0.71,
+};
+</script>
