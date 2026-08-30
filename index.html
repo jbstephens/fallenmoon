@@ -35515,12 +35515,12 @@ let obCooledK = -1;
 (function obBuildSheets() {
   const x0 = OB_C.x - OB_HX, z0 = OB_C.z - OB_HZ;
   const S = 3;
-  for (let cxk = 0; cxk < 2; cxk++) {
-    for (let czk = 0; czk < 2; czk++) {
+  for (let cxk = 0; cxk < 1; cxk++) {
+    for (let czk = 0; czk < 1; czk++) {
       const md = MD();
       const lavaIdx = [], hot = [], cold = [];
-      const gx0 = x0 + cxk * OB_HX, gz0 = z0 + czk * OB_HZ;
-      const gx1 = gx0 + OB_HX, gz1 = gz0 + OB_HZ;
+      const gx0 = x0, gz0 = z0;
+      const gx1 = gx0 + OB_HX * 2, gz1 = gz0 + OB_HZ * 2;
       const gcv = (x, z) => {
         const y = obField(x, z);
         const c = obSheetColor(x, z, y);
@@ -35554,7 +35554,7 @@ let obCooledK = -1;
                   OB_OBS[1] + g * (OB_OBS2[1] - OB_OBS[1]),
                   OB_OBS[2] + g * (OB_OBS2[2] - OB_OBS[2]));
       }
-      OB_CHUNKS.push({ mesh: m, cx: gx0 + OB_HX / 2, cz: gz0 + OB_HZ / 2, lavaIdx, hot, cold });
+      OB_CHUNKS.push({ mesh: m, cx: OB_C.x, cz: OB_C.z, lavaIdx, hot, cold });
     }
   }
 })();
@@ -35883,9 +35883,9 @@ window.__obSpriteLog = [];
 (function obSpawnSprites() {
   const homes = [
     /* the mid-trail pocket */
-    [-1186, -1046], [-1180, -1052], [-1173, -1044],
+    [-1186, -1046], [-1178, -1052],
     /* the far-west crust (the heart chest's keepers) */
-    [-1352, -1132], [-1364, -1146], [-1355, -1150],
+    [-1352, -1132], [-1360, -1146],
     /* the east crust (the salt chest's keepers) */
     [-1112, -1182], [-1126, -1194],
   ];
@@ -35985,8 +35985,8 @@ const OB_HORNETS = [];
 window.__obHornetLog = [];
 (function obSpawnHornets() {
   const homes = [
-    [-1178, -1098], [-1188, -1104], [-1170, -1108],
-    [-1248, -1148], [-1238, -1152], [-1256, -1156],
+    [-1178, -1098], [-1186, -1106],
+    [-1248, -1148], [-1240, -1154],
   ];
   for (let i = 0; i < homes.length; i++) {
     const [hx, hz] = homes[i];
@@ -36191,7 +36191,7 @@ const OB_WARM_PAL = {
 const OB_HOUND_MAT = TOON.clone();
 function obBuildHound() {
   const root = new THREE.Group();
-  root.scale.setScalar(0.78);           // a GREAT hound — but a hound, not a horse
+  root.scale.setScalar(0.7);            // a GREAT hound — but a hound, not a horse
   const parts = { silverable: [] };
   const A = OB_ASH_PAL;
   const mk = (md) => { const m = mdMesh(md, OB_HOUND_MAT); m.frustumCulled = false; parts.silverable.push(m); return m; };
@@ -36308,7 +36308,7 @@ let obBone = null, obBoneGlow = null;
     blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
   }), false);
   obBoneGlow.frustumCulled = false;
-  g.add(obBoneGlow);
+  obBoneGlow.visible = false;              // the ivory reads on its own — a draw saved
   g.visible = false;
   scene.add(g);
   obBone = g;
@@ -36869,8 +36869,8 @@ function obTickCure(t) {
     obBone.scale.setScalar(0.6);
     obBone.position.set(P.x - Math.sin(P.heading) * 0.32, obGroundAt(P.x, P.z) + 1.05, P.z - Math.cos(P.heading) * 0.32);
     const k = smoothstep(clamp((t - 8.1) / 2.2, 0, 1));
-    const hx = P.x + Math.sin(P.heading + 2.6) * lerp(3.4, 1.1, k);
-    const hz = P.z + Math.cos(P.heading + 2.6) * lerp(3.4, 1.1, k);
+    const hx = P.x + Math.sin(P.heading + 2.6) * lerp(3.4, 1.6, k);
+    const hz = P.z + Math.cos(P.heading + 2.6) * lerp(3.4, 1.6, k);
     H.x += (hx - H.x) * Math.min(1, DT * 3);
     H.z += (hz - H.z) * Math.min(1, DT * 3);
     H.y = obGroundAt(H.x, H.z);
@@ -37202,7 +37202,7 @@ function obBowPos() {
   return { x: BOAT.x + Math.sin(BOAT.ang) * 1.55, z: BOAT.z + Math.cos(BOAT.ang) * 1.55, y: y + 0.55 };
 }
 function obHoundFootingNear(x, z) {
-  for (let r = 1.6; r <= 4.6; r += 1.0) {
+  for (let r = 1.6; r <= 7.6; r += 1.0) {
     for (let i = 0; i < 8; i++) {
       const a = i / 8 * TAU;
       const px = x + Math.sin(a) * r, pz = z + Math.cos(a) * r;
@@ -37272,7 +37272,12 @@ function obTickHound() {
   }
   obPrevSailing = P.sailing;
   if (P.sailing) {
-    if (H.st !== 'bow') { obSetCompSt('sit'); H.spd = 0; }
+    if (H.st === 'bow') {
+      const b = obBowPos();
+      H.x = b.x; H.z = b.z; H.y = b.y;
+      H.ang = BOAT.ang;
+      H.spd = 0;
+    } else { obSetCompSt('sit'); H.spd = 0; }
     return;
   }
   if (H.st === 'bow') {
@@ -37373,10 +37378,17 @@ currentInteract = function () {
           Math.hypot(H.x - BOAT.x, H.z - BOAT.z) < 14) {
         return { id: 'obHoundBow', label: '✕ SHE RIDES THE BOW' };
       }
-      /* she is always pettable — except where a beat is waiting: a dog at
-         heel must never upstage the Moonwheel (the probe caught GOOD DOG
-         shadowing SET THE OLD BONE at the socket's edge) */
-      if (obNear(H.x, H.z, 2.1) && !P.air &&
+      /* she is always pettable — except where a beat or a door is waiting:
+         a dog at heel must never upstage the Moonwheel or a doorway (the
+         probe caught GOOD DOG shadowing both) */
+      let doorNear = false;
+      if (typeof ROOMS !== 'undefined') {
+        for (let ri = 0; ri < ROOMS.length; ri++) {
+          const ex = ROOMS[ri].ext;
+          if (ex && Math.hypot(P.x - ex.outX, P.z - ex.outZ) < 3.2) { doorNear = true; break; }
+        }
+      }
+      if (obNear(H.x, H.z, 2.1) && !P.air && !doorNear &&
           !(obBoneCarry() && obNear(WHEEL_POS.x, WHEEL_POS.z, 11))) {
         return { id: 'obPet', label: '✕ GOOD DOG' };
       }
@@ -37391,6 +37403,7 @@ doInteract = function (ctx) {
   else if (ctx.id === 'obChest') obOpenChest(ctx.e);
   else if (ctx.id === 'obPet') {
     obSetCompSt('pet');
+    HOUND.petN = (HOUND.petN || 0) + 1;
     HOUND.wagK = 1;
     SFX.houndBark();
     rumble({ duration: 280, strong: 0.3, weak: 0.7 }, 'good-dog');
@@ -37619,7 +37632,7 @@ cullChunks = function (ccx, ccz) {
   /* mid-fight the bowl walls occlude the badland: park the pocket draws */
   const fightHide = HOUND.mode === 'guardian' && HOUND.active && !HOUND.defeated;
   obPropMesh.visible = nearRegion;
-  obGateGlow.visible = nearRegion && (OB_KILN.x - ccx) * (OB_KILN.x - ccx) + (OB_KILN.z - ccz) * (OB_KILN.z - ccz) < 320 * 320;
+  obGateGlow.visible = !LOWFX && nearRegion && (OB_KILN.x - ccx) * (OB_KILN.x - ccx) + (OB_KILN.z - ccz) * (OB_KILN.z - ccz) < 320 * 320;
   /* pockets */
   for (const sp of OB_SPRITES) {
     const d2 = (sp.x - ccx) * (sp.x - ccx) + (sp.z - ccz) * (sp.z - ccz);
@@ -37630,6 +37643,7 @@ cullChunks = function (ccx, ccz) {
       sp.c.root.rotation.y = sp.ang;
       const rattle = sp.st === 'tele' ? Math.sin(now / 26) * 0.07 : 0;
       sp.c.body.rotation.z = rattle;
+      sp.c.glow.visible = !LOWFX || sp.st === 'tele';   // fx=low banks the idle embers
       sp.c.glow.material.opacity = sp.st === 'tele' ? 0.95 + Math.sin(now / 60) * 0.05 : 0.75;
     }
   }
@@ -37640,13 +37654,15 @@ cullChunks = function (ccx, ccz) {
       h.c.root.position.set(h.x, h.y, h.z);
       h.c.root.rotation.y = h.ang;
       h.c.body.rotation.z = Math.sin(now / (h.st === 'dart' ? 22 : 40) + h.i) * 0.18;
+      h.c.wings.visible = !LOWFX || h.st === 'tele' || h.st === 'dart';
       h.c.wings.material.opacity = 0.3 + 0.2 * Math.abs(Math.sin(now / 18 + h.i));
     }
   }
   /* salts */
+  const obSaltR = LOWFX ? 40 : 85;
   for (const s of obSalt) {
     const d2 = (s.x - ccx) * (s.x - ccx) + (s.z - ccz) * (s.z - ccz);
-    s.mesh.visible = !s.got && !fightHide && d2 < 85 * 85;
+    s.mesh.visible = !s.got && !fightHide && d2 < obSaltR * obSaltR;
     if (s.mesh.visible) {
       s.mesh.position.y = s.baseY + Math.sin(now / 420 + s.ph) * 0.06;
       s.mesh.rotation.y = now / 900 + s.ph;
@@ -37750,7 +37766,9 @@ cullChunks = function (ccx, ccz) {
       H.flash -= dtv;
       H.c.root.scale.setScalar(1 + (H.flash > 0 ? Math.sin(now / 18) * 0.03 : 0));
     } else H.c.root.scale.setScalar(1);
-    c.shadow.visible = H.st !== 'bow';
+    c.shadow.visible = H.st !== 'bow' && !LOWFX;
+    c.glow.visible = H.mode === 'guardian';   // the embers bank once she is home
+    
   }
   /* ── THE OLD BONE, in all its lives ── */
   if (SAVE) {
@@ -37864,6 +37882,7 @@ window.__telemetryHooks.push(function (T) {
   T.houndX = +HOUND.x.toFixed(1);
   T.houndZ = +HOUND.z.toFixed(1);
   T.houndWarm = HOUND.warmShown;
+  T.obPetN = HOUND.petN || 0;
   T.obSpriteAlive = OB_SPRITES.filter(s => !s.dead).length;
   T.obHornetAlive = OB_HORNETS.filter(h => !h.dead).length;
   T.obStLogN = window.__obStLog.length;

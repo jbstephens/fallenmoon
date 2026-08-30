@@ -958,7 +958,7 @@ const OB_WARM_PAL = {
 const OB_HOUND_MAT = TOON.clone();
 function obBuildHound() {
   const root = new THREE.Group();
-  root.scale.setScalar(0.78);           // a GREAT hound — but a hound, not a horse
+  root.scale.setScalar(0.7);            // a GREAT hound — but a hound, not a horse
   const parts = { silverable: [] };
   const A = OB_ASH_PAL;
   const mk = (md) => { const m = mdMesh(md, OB_HOUND_MAT); m.frustumCulled = false; parts.silverable.push(m); return m; };
@@ -1636,8 +1636,8 @@ function obTickCure(t) {
     obBone.scale.setScalar(0.6);
     obBone.position.set(P.x - Math.sin(P.heading) * 0.32, obGroundAt(P.x, P.z) + 1.05, P.z - Math.cos(P.heading) * 0.32);
     const k = smoothstep(clamp((t - 8.1) / 2.2, 0, 1));
-    const hx = P.x + Math.sin(P.heading + 2.6) * lerp(3.4, 1.1, k);
-    const hz = P.z + Math.cos(P.heading + 2.6) * lerp(3.4, 1.1, k);
+    const hx = P.x + Math.sin(P.heading + 2.6) * lerp(3.4, 1.6, k);
+    const hz = P.z + Math.cos(P.heading + 2.6) * lerp(3.4, 1.6, k);
     H.x += (hx - H.x) * Math.min(1, DT * 3);
     H.z += (hz - H.z) * Math.min(1, DT * 3);
     H.y = obGroundAt(H.x, H.z);
