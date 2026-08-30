@@ -5825,6 +5825,9 @@ const PORTAL_SIDES = {
   'reef-star-arch': [-902, 306.2, -901.4, 312.2, 2.0, 2.0],
   'drowned-star-mouth': [-1239.5, 250.0, -1259.0, 226.3, 2.4, 1.8],
   'far-star-door': [-2300.3, -1007.4, -2306.8, -1014.9, 2.2, 1.8],
+  /* the Emberwaste's caldera gate (p6m): A outside on the trail saddle,
+     B inside the cooled bowl — dry crust footing in both states */
+  'kiln-gate': [-1240, -1164, -1240, -1177, 2.6, 2.4],
 };
 /* worlds for the two portal states: openNow reads intent (the SAVE), the
    chain answers from derived plugs — both must agree in BOTH states */

@@ -564,6 +564,13 @@ function defaultSave() {
     mothDone: false,          // the Lantern Moth cured — the Far Star is a roost (p6l)
     lantern6: false,          // THE WANING LANTERN, handed down by the moth (p6l)
     tbc6Seen: false,
+    /* PHASE 7 — OLD BONE (p6m) */
+    emberSeen: false,         // first landfall on the Emberwaste (region title shown)
+    boneDone: false,          // the Kiln Hound cured — THE OLD BONE in hand
+    houndHome: false,         // POST-GAME LAW #1: the hound is a village companion forever
+    emberChest1: false, emberChest2: false,          // the salt caches on the far crusts
+    emberHeart1: false, emberHeart2: false,          // the LAST heart containers
+    tbc7Seen: false,
     tbc2Seen: false, tbc3Seen: false,   // end cards shown once each
     lastPos: null,            // where you ACTUALLY were — what CONTINUE resumes to
     lastShade: [8.2, 7.0],    // the SUNSTRUCK respawn anchor, and only that
@@ -635,6 +642,15 @@ function loadSave() {
     }
     if (out.mothDone) { out.lantern6 = true; qMin = Math.max(qMin, 26); }
     if (out.sky >= 6 || out.ph >= 6) qMin = Math.max(qMin, 27);
+    /* phase 7 — the same MIRROR-6 law. Milestones only drag the quest
+       once the phases stand in order (an early sailor can meet the hound
+       at sky 3 and keep her — the arc itself waits for six). */
+    if (out.boneDone) { out.houndHome = true; out.emberSeen = true; }
+    if (out.sky >= 6 || out.ph >= 6) {
+      if (out.emberSeen) qMin = Math.max(qMin, 29);
+      if (out.boneDone) qMin = Math.max(qMin, 30);
+    }
+    if (out.sky >= 7 || out.ph >= 7) { out.tbc6Seen = true; qMin = Math.max(qMin, 31); }
     if (out.q < qMin) out.q = qMin;
     return out;
   } catch (e) { return null; }
