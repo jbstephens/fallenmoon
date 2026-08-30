@@ -388,8 +388,14 @@ function tickPlayer() {
   const inShade = inShadeAt(P.x, P.z);
   P.prevShade = P.shade; P.shade = inShade;
   if (!inShade && P.prevShade) {
-    // stepping into the glare
-    flashGlare(P.everSun ? 0.14 : 0.6, P.everSun ? 0.5 : 1.3);
+    // stepping into the glare — Crescent-era feedback teaching SUN = DANGER.
+    // Once the swelter retires (the Sliver payoff, sky 4), sun exposure means
+    // nothing anywhere, so the flash retires WITH it: walking the re-greened
+    // canopy crossed a shade edge every few strides and flashed each time
+    // (John, live report). World-changes are permanent — including this one.
+    if (!(typeof swelterRetired !== 'undefined' && swelterRetired)) {
+      flashGlare(P.everSun ? 0.14 : 0.6, P.everSun ? 0.5 : 1.3);
+    }
     P.everSun = true;
   }
   if (P.iframes > 0) P.iframes--;
