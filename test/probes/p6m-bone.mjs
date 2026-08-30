@@ -211,6 +211,7 @@ if (want('pockets')) {
   await api.waitFor('window.__obSpriteLog.length > 0', 25000, 'a sprite commits');
   await api.eval('P.hearts = P.maxHearts; 0');
   const s0 = await api.eval('__fm.obSpriteAlive');
+  const salt0 = await api.eval('P.salt');
   let slain = false;
   for (let i = 0; i < 120 && !slain; i++) {
     const near = await jget(api, `(function(){
@@ -236,7 +237,8 @@ if (want('pockets')) {
   gate('POCKETS: a slag sprite dies to REAL slashes', slain,
     `${s0} → ${await api.eval('__fm.obSpriteAlive')}`);
   gate('POCKETS: the crumble drops salt', await api.eval(
-    `typeof NM_SALT !== 'undefined' && NM_SALT.some(s => s.on)`));
+    `(typeof NM_SALT !== 'undefined' && NM_SALT.some(s => s.on)) || P.salt > ${salt0}`),
+    'salt ' + salt0 + ' → ' + await api.eval('P.salt'));
   const sd = await jget(api, `(function(){
     const L = window.__obSpriteLog, out = [];
     for (const e of L) out.push(e.lunge - e.tele);

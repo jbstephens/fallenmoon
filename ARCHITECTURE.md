@@ -167,6 +167,44 @@ POST-GAME. Load-bearing facts:
   measures ≤0 extra there (night 111 vs day 116). The 80-call village
   gate still passes only for the early-game save the perf suite seeds.
 
+## Phase 7 at a glance (p6m-bone — THE EMBERWASTE + the hound)
+
+`p6m-bone.html` (~2,700 lines): the southern badland coast on the sea box's
+south band (`OB_C` (−1210,−1105), half-extents 215×145; landing beach at
+(−1150,−985), moor (−1146,−970)); ONE analytic field (`obRaw` →
+`makeMeshField`, 3 m lattice, ONE merged sheet whose melt verts remember
+both palettes — `obSetCooled(k)` is the whole world-change), 10 authored
+melt pools; the LAVA GLOW no-go (`obTickHazard`: shimmer vignette, edge
+puff, jump-in crust bounce, celebrate-safety — hearts untouched by
+construction); SLAG SPRITES + CINDER HORNETS (2/pocket, salt drops,
+`__obSpriteLog`/`__obHornetLog` telegraph recorders); 2 salt chests + the
+LAST 2 heart containers (cap 10); THE KILN HOUND (`HOUND`, HP 90 notches
+90/60/30, pounce/tail/motes/clods, `__obStLog`, caldera `OB_KILN`
+(−1240,−1185) r 17 with the kiln-gate portal + its own arena camera);
+the cure (`obCure` — ash→warm-brown vertex lerp, THE OLD BONE handed
+down, boneDone+houndHome) and THE COOLING (`obWheel7` — seat 7, dip-cut
+south, the melt crusts to obsidian IN FRAME, sky 7, TBC 7/8). Post-cure
+she is a COMPANION (`obTickHound`: side-heel follow, doze at the wheel,
+✕ GOOD DOG, boat-bow ride, 60 m teleport catch-up, 2.2 s unstick, never
+in interiors, no collider). Load-bearing facts:
+- Quest banners 28–31; seams (`obTickSeams`) + p2 qMin lines gate phase-7
+  derivations on `sky ≥ 6` so an early sailor can win the hound at sky 3
+  without skipping phases; the wheel takes the bone only at `sky === 6`.
+- The beach face is ONE-SIDED (`padH −= seaward·0.6`): a radial pad
+  shoals the approach and beaches the hull outside COME-ASHORE's 4 m
+  footing search.
+- Prompt rank: world verbs > chests > GOOD DOG; the pet prompt yields
+  near any ROOMS door and near the wheel while the bone is carried.
+- Mid-fight `fightHide` parks the pocket/salt/chest draws (the bowl
+  occludes them); LOWFX rests idle entity glows and the hound's shadow.
+- Interface `window.__p6m`: houndAt/houndRecall/emberCooled/boneItem/
+  region/land/kiln (p6n consumes by feature detection).
+- Debug: `warp.ember · warp.kilnarena · obInfo() · houndInfo() ·
+  coolNow(k) · houndCome()`.
+- Probes: `test/probes/p6m-bone.mjs` (region/hazard/pockets/fight/
+  kidbot×5/cure/journey/hound/saves/perf, ~90 gates) from
+  `test/fixtures/phase6-done-save.json`.
+
 Phase 3 line numbers are deliberately omitted: p6d and p6e are ~3,000 lines
 each and shift every rebuild. Grep by symbol instead — the pinned constants
 below are stable.
