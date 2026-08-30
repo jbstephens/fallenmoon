@@ -119,6 +119,54 @@ farStarDoor, sighting) through shims with fallbacks. Load-bearing facts:
   forward derivations, per-state compass, phase-5 regression) from the
   `test/fixtures/phase5-done-save.json` fixture.
 
+## Phase 8 at a glance (p6n-coin — THE ENDING + the post-game)
+
+`p6n-coin.html` (~2,300 lines, prefix `cn`): quests 32–36 and THE LIVING
+POST-GAME. Load-bearing facts:
+- **THE FULL CYCLE**: `CN_CYCLE_LEN = 720 s` (12:00 loop; the phase map is
+  documented at the top of the file — day [0,0.55), dusk, TRUE NIGHT
+  [0.60,0.95) ≈ a third, dawn). Active only at `moonHome`. It works by
+  wrapping `nmNightTarget` (p6j's clock keeps ticking; only its target is
+  owned) and by writing `fSunK/fSunPhase` AFTER the chain's own sun tick.
+  Cycle state is derived each session — never saved.
+- **THE FOUR CALLS** (q33, at `MOON_SITE`): TONE = strike the ringing bell
+  buoy (`boatSwingHits` wrap), CHORD = hold ✕ at the helm (vent-style
+  walk-and-latch, `CN_RIG_TARG`), RHYTHM = ✕ on the surge with p6i's
+  early-press buffer (≤22 ticks) and hold-grace, SIGHT = spyglass on the
+  sky socket at the moon's own az/el (`cnSockAz/cnSockEl`). State derives
+  from `SAVE.medley[4]`; the session half resets on every derive.
+- **THE RISING** reuses p6d's `moonMesh` (position animated with
+  `matrixAutoUpdate` flipped on, restored to the baked matrix after; its
+  Basic material `color` is modulated for night and reset). Six shots,
+  every one ≤80 calls LOWFX, measured in page: `window.__cnShotStats`.
+- **THE FINALE CULL**: during `cnRising/cnEnd/cnWheel8` the fog is clamped
+  (200–340 m) and any top-level mesh whose bounding sphere lies wholly
+  past it is hidden; the cast (Wick, NPCs, crabs, wisps, gulls, gars,
+  relics) rests during sky shots. Runs LAST in the cull chain, only ever
+  hides; owners re-assert next frame. Play path untouched.
+- **Skippability law**: `cnRising` and `cnEnd` skip only on replay
+  (`fm_seen_*`); the cards advance on ✕ after a dwell.
+- Forward seams (MIRROR-6) live in `cnReconcileSave` — applied at part
+  eval AND in the world-state hook (p2's qMin chain is not edited):
+  sky≥7→q32, medley done→q34, moonRisen→q35, coinGiven→q36, sky≥8→
+  moonHome (+medley/coin/risen backfilled).
+- Post-game: `cnVillGlow` (windows derived from `ROOMS[].ext` + roof
+  lanterns + wheel lamp), `cnLightBeamGrp`, `cnFullMoon` (crater-painted
+  disc replacing the wedge moon at sky 8), `cnMoonRoad`, keepsake/memory
+  menu (`cnMenu` cine state), Pearl's telescope (`cnScope`), playtime in
+  `SAVE.playSec` (persisted piggyback, +explicit every 30 s of play).
+- p6m consumed ONLY via `window.__p6m` shims (`boneItem`, `region`,
+  `houndRecall`) with fallbacks — the part runs without it.
+- Debug: `__fmDebug.moonsite() · endgame() · postgame() · cycleSet(c) ·
+  coinInfo()`; probes `test/probes/p6n-coin.mjs` (verbs, buffer ×20,
+  reload, compass) and `p8-finale.mjs` (the q32→credits journey, the
+  living world ×2 cycles, old-save compat, NEW GAME wipe).
+- KNOWN DEBT (pre-existing, reported 8/30): the late-game village station
+  (0,−24) renders ~112 calls LOWFX day AND night before phase 8 adds
+  anything (grown world + boats + companion). Phase 8's whole night kit
+  measures ≤0 extra there (night 111 vs day 116). The 80-call village
+  gate still passes only for the early-game save the perf suite seeds.
+
 Phase 3 line numbers are deliberately omitted: p6d and p6e are ~3,000 lines
 each and shift every rebuild. Grep by symbol instead — the pinned constants
 below are stable.

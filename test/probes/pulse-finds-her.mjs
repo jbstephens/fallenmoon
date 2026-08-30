@@ -5,7 +5,11 @@ const base = `http://127.0.0.1:${httpPort}`;
 const { proc, port } = await launchChrome();
 const c = await pageSession(port); const api = mkApi(c);
 await api.init();
-await api.seedSave({ ...P4_START, sky: 5, ph: 5, q: 22, mouthOpen: true, sluiceG: 3, swingKeel: true, paddleWheel: true, poleFound: true, marketOpen: true, sliver5: true, tbc5Seen: true, lastPos: [82, -2, 1] });
+/* the idle era moved with the story: since OLD BONE + NEW COIN landed,
+   every pre-8/8 state has a live objective — true idle is moonHome.
+   The law under test is unchanged: no objective, far boat -> the pulse
+   tugs to HER; near boat -> the wheel keeps the idle. */
+await api.seedSave({ ...P4_START, sky: 8, ph: 8, q: 36, mouthOpen: true, sluiceG: 3, swingKeel: true, paddleWheel: true, poleFound: true, marketOpen: true, sliver5: true, tbc5Seen: true, spyglass: true, starsSeen: true, starLantern: true, beaconLit: [true, true, true, true], mothDone: true, lantern6: true, tbc6Seen: true, boneDone: true, tbc7Seen: true, medley: [true, true, true, true], moonRisen: true, coinGiven: true, moonHome: true, lastPos: [82, -2, 1] });
 await api.nav(base + '/?turbo=2');
 await continueIn(api);
 await api.eval('BOAT.x = 305; BOAT.z = 77; 0');   // far upriver, the real case

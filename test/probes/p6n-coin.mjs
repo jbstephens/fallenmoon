@@ -14,8 +14,9 @@ import path from 'node:path';
 
 const SHOTS = '/tmp/fm_p6n';
 fs.mkdirSync(SHOTS, { recursive: true });
+const IS_MAIN = (process.argv[1] || '').includes('p6n-coin');
 const WANT = process.argv.slice(2).length ? process.argv.slice(2) : ['smoke', 'calls', 'buffer', 'reload', 'compass'];
-const want = (s) => WANT.includes(s);
+const want = (s) => IS_MAIN && WANT.includes(s);
 
 export const P7_DONE = JSON.parse(fs.readFileSync(path.join(GAME, 'test', 'fixtures', 'phase7-done-save.json'), 'utf8'));
 
@@ -224,7 +225,7 @@ if (want('reload')) {
     SAVE.medley = [true, true, true, true];
     SAVE.moonRisen = true; SAVE.coinGiven = true; SAVE.moonHome = true; SAVE.sky = 8; SAVE.ph = 8; SAVE.q = 36;
     storeSave(); applyWorldState();
-    return { q: SAVE.q, home: __fm.cnMoonHome, cyc: __fm.cnCycleActive };
+    return { q: SAVE.q, home: cnMoonHome(), cyc: cnCycleActive() };
   })()`);
   gate('a finished save derives moonHome free play + the live cycle', rt2.q === 36 && rt2.home && rt2.cyc, JSON.stringify(rt2));
   gate('reload: zero console errors', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
@@ -249,13 +250,15 @@ if (want('compass')) {
   await station('q35 the coin waits on the surf', 'SAVE.q = 35; SAVE.moonRisen = true', false);
   await station('q36 the wheel wants its coin', 'SAVE.q = 36; SAVE.coinGiven = true', false);
   await station('post-game idle (the pulse still finds a far boat)', 'SAVE.q = 36; SAVE.sky = 8; SAVE.ph = 8; SAVE.moonHome = true', true);
-  /* MIRROR-7: null objective + far boat → the pulse aims at her */
-  await api.eval(`BOAT.x = -400; BOAT.z = 100; SAVE.boatX = -400; SAVE.boatZ = 100; __fmDebug.warp(8, 7); 0`);
+  /* MIRROR-7: a null objective never silences the pulse — the moonglass
+     still tugs (a far boat when she is far; the wheel when she is near;
+     the standing pulse-finds-her probe owns the far-boat law itself) */
+  await api.eval('__fmDebug.warp(8, 7); 0');
   await api.waitTicks(6);
-  const pulse = await jget(api, `(function(){ var o = objectivePoint(); var far = Math.hypot(BOAT.x - P.x, BOAT.z - P.z) > 120; return { o: o, far: far }; })()`);
-  gate('MIRROR-7: free play, boat far — objective null, pulse target live', pulse.o === null && pulse.far, JSON.stringify(pulse));
+  const pulse = await jget(api, `(function(){ var o = objectivePoint(); var m0 = compassMotes; doPulse(); return { o: o, fired: compassMotes > m0 }; })()`);
+  gate('MIRROR-7: free-play idle — objective null, the pulse still answers', pulse.o === null && pulse.fired, JSON.stringify(pulse));
   gate('compass: zero console errors', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
   api.close();
 }
 
-summary();
+if (IS_MAIN) summary();
