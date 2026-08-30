@@ -6204,6 +6204,61 @@ async function suiteRules(base) {
       const calls = await api.eval('__fm.calls'), tris = await api.eval('__fm.tris');
       check('rules: frame budget holds at the moored isle (LOWFX)', calls <= 80 && tris <= 120000,
         `calls=${calls} tris=${tris}`);
+      /* ── THE MOVING HULL: the 260-frame check above is static/moored — it
+         never caught the sailing breach (the clamp read a phantom pre-swell
+         pose, and the far-sea sheet ignored hulls entirely; John
+         photographed the sea slicing the deck at paddle speed). Sail her at
+         FULL paddle speed over open swell and raycast every water tier
+         inside the liner, every frame, in the hull's OWN frame so the
+         pitched bow is covered. Zero breaches, with teeth. ── */
+      await api.eval(`SET.on = false;
+        if (SAVE) { SAVE.swingKeel = true; SAVE.paddleWheel = true; }
+        __fmDebug.warpSea(-1150, -120, -Math.PI / 2 + 0.3); 0`);
+      await api.waitTicks(30);
+      await api.eval('__fakePad.axes(0,-1); __fakePad.press(1); 0');
+      await api.eval(`window.__mviol = { n: 0, frames: 0, casts: 0, teeth: 0, worst: -99, spdMax: 0 };
+        (function m() {
+          const W = window.__mviol; if (!W) return;
+          W.frames++;
+          W.spdMax = Math.max(W.spdMax, BOAT.spd);
+          const q = sailboat.group.quaternion, gp = sailboat.group.position;
+          const rc = new THREE.Raycaster();
+          const v = new THREE.Vector3();
+          const tiers = [];
+          if (waveMesh.visible) tiers.push(waveMesh);
+          if (farSeaMesh.visible) tiers.push(farSeaMesh);
+          for (const [bx, fw] of [[0,3.0],[0,1.6],[0,0],[0,-1.6],[0,-2.6],[0.9,1.2],[-0.9,1.2],[0.9,-1.2],[-0.9,-1.2]]) {
+            v.set(bx, 0.48, fw).applyQuaternion(q).add(gp);
+            const ly = v.y;
+            for (const t of tiers) {
+              rc.set(new THREE.Vector3(v.x, WL + 30, v.z), new THREE.Vector3(0, -1, 0));
+              const hits = rc.intersectObject(t, false);
+              if (!hits.length) continue;
+              W.casts++;
+              const y = WL + 30 - hits[0].distance;
+              if (y > ly + 0.02) { W.n++; if (y - ly > W.worst) W.worst = y - ly; }
+            }
+          }
+          /* teeth: she genuinely rode troughs where the far sheet's OLD
+             height (WL−0.55) stood above her waterline — the exact frames
+             the photographed bug lived in */
+          if (WL - 0.55 > gp.y + 0.04) W.teeth++;
+          if (W.frames < 420) requestAnimationFrame(m);
+        })(); 0`);
+      await api.waitFor('__mviol && __mviol.frames >= 420', 120000, 'moving-hull monitor');
+      await api.eval('__fakePad.press(); __fakePad.axes(0, 0); 0');
+      const mv = JSON.parse(await api.eval('(() => { const r = JSON.stringify(__mviol); __mviol = undefined; return r; })()'));
+      check('rules: no water tier ever surfaces inside the SAILING hull at full paddle speed (LOWFX)',
+        mv.n === 0 && mv.casts > 1500 && mv.spdMax > 12,
+        `viol=${mv.n} worst=+${mv.worst.toFixed(2)}m casts=${mv.casts} spdMax=${mv.spdMax.toFixed(1)}`);
+      check('rules: the moving test has teeth — she rode troughs the old far sheet would have cut through',
+        mv.teeth > 12, `teeth=${mv.teeth}/${mv.frames}`);
+      /* teardown: ashore, boat re-moored at the isle for the skiff leg */
+      await api.eval(`P.sailing = false; BOAT.spd = 0;
+        BOAT.x = -1480; BOAT.z = -253; sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
+        sailboatColl.off = false; sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z;
+        __fmDebug.warp(${FOUNDRY_ANCHOR[0]}, ${FOUNDRY_ANCHOR[1]}); P.hearts = P.maxHearts; 0`);
+      await api.waitTicks(12);
       /* ── the SKIFF rides a graded riffle on the true interpolated sheet ── */
       await api.eval('SET.on = false; 0');
       const ferry = JSON.parse(await api.eval('JSON.stringify({ x: LANDINGS[1].x, z: LANDINGS[1].z })'));
