@@ -1429,3 +1429,132 @@ Far Star tower + lamp-room arena, the LANTERN MOTH fight, the cures/
 cinematics, quest 23–27 flow + compass answers + forward derivations,
 TBC 6/8, market tinker + Pearl beats). Insert both before p7-flow in
 build.sh. Interfaces pinned in the build brief.
+
+# PHASE 7 — OLD BONE + PHASE 8 — NEW COIN: THE ENDING
+(locked 2026-08-30 overnight; John: "build everything left on the next go.
+The end needs to have dope cinematics. And the game after you beat it
+should still be enjoyable to play." Both mandates are LAW for this section.)
+
+## PHASE 7 — OLD BONE: THE EMBERWASTE (quests 28→31)
+The TBC 6/8 tease pays off: the far southern red glow — flickering, cooling.
+SAIL SOUTH (the sailing spine's last landfall) to THE EMBERWASTE: a badland
+coast where the deep places still burn. Pre-cooling, the region is
+reachable-but-hostile: LAVA GLOW is absolute no-go (a kid-fair NEW hazard
+kind — stepping toward glow gives a strong heat-shimmer warning + a firm
+knockback puff, never damage-from-nowhere, nothing kills); crusted stone
+spines, obsidian ridges and cooled flows are the safe paths — a pathfinding
+region (read the ground, walk the dark stone). Slash pockets: SLAG SPRITES
+(2-hit, crumble to warm gravel + salt) and CINDER HORNET drifts. Salt seams,
+the last HEART CONTAINERS, chests on the far crusts.
+
+THE GUARDIAN — THE KILN HOUND: a great hound of crusted slag and ember
+seams, and in its jaws — carried the way a loyal dog carries its most
+treasured bone — THE OLD BONE. It has guarded it alone in the heat for a
+year. Arena: a cooled caldera bowl.
+  P1: telegraphed pounces (crouch-wiggle ≥0.9s, visible) + tail sweeps
+      (jump the line); body chips always land.
+  P2: it shakes off EMBER MOTES that drift as slow no-go bubbles — herd
+      yourself between them; strike after each shake (tired window).
+  P3: it digs and hurls slag clods (watch shadows, sidestep) and circles
+      faster; the caldera rim knocks back inward (no fall fail).
+HP ~90, notch bar, kid-bot-wins with the chasing bot, cold-7yo timing.
+THE CURE: the ash-grey hound cools warm-brown, drops the Old Bone in your
+hands, and — POST-GAME LAW #1 — FOLLOWS YOU HOME: the KILN HOUND becomes a
+village companion forever (dozes by the Moonwheel, trots to greet you,
+rides the boat's bow on request ✕ near her). A dog is the best post-game
+reward a family game can give.
+
+THE PAYOFF — THE COOLING (in frame, the re-greening's dark twin): slot the
+Old Bone: seventh notch, sky step 7 — the Emberwaste CRUSTS OVER in frame:
+lava dims ember-red → charcoal → glass-black obsidian that GLINTS under the
+near-night sky; steam ghosts rise and die; the region opens fully (new
+walkable flows = the post-game playground's last rooms). Quest 31: 7/8 —
+and the Moonwheel's eighth socket begins to GLOW, pointing not at any land…
+but DOWN, at the sea. TBC 7/8: the drowned moon, waiting.
+
+## PHASE 8 — NEW COIN: THE MOON RISES (quests 32→36, THE ENDING)
+The truth (resolving the chain with grace, keeping the series mystery):
+the Falls Hollow mural told it — when the moon CAME APART and fell, the
+bell-keepers' ancestors CHAINED her into the sea to save the world from
+her crash. The chain was a rescue that became a prison; the keepers kept
+vigil for generations, waiting for someone to mend the sky so she could
+rise safely. That someone is a kid with a sword. (WHAT struck the moon
+stays unanswered — the series mystery survives the finale.)
+
+THE FINALE ARC:
+1. q32 THE EIGHTH SOCKET — the wheel's socket-glow lays a moonglass line
+   down the sky to the sea: the compass now owns the whole journey (every
+   state, MIRROR-4 law). Tock, Pearl, Finn, the Warden, the trader each
+   get ONE line about the vigil (house voice; no lore dump).
+2. q33 THE FOUR CALLS — THE PUZZLE MEDLEY (the escalation law's capstone:
+   every puzzle KIND returns as one song, zero text): sail the crossing;
+   over the drowned moon the isles' bells ring themselves (phase 3) —
+   answer them: match the TONE (bell verb); the WIND ORGAN on the far
+   Crown answers over the water — tune the CHORD (organ verb, aeolian
+   remote: hold ✕ on the mast rigging, the sail is the instrument); the
+   sea begins to SURGE in time — pole/paddle ON THE BEAT (sluice verb);
+   and the sky opens an empty socket of stars — SIGHT it (spyglass verb).
+   Each call answered = a CHAIN LINK BURSTS on the seabed below (felt as
+   a deep bell-toll through the hull, seen as a silver bloom in the deep).
+   Generous windows, free retries, each verb taught by its own history.
+3. q34 THE RISING — THE CINEMATIC (John's mandate: DOPE. The most
+   authored beat in the game; multi-shot; skippable on replay only, like
+   the jump): the last link parts — silence — the sea SWELLS in a ring —
+   and THE MOON BREACHES like a whale the size of the sky: water sheeting
+   off her face in silver moonfalls, chain links raining and singing past
+   the hull, the boat surfing the ring-wave out (player's own shot, Rule
+   5), and she CLIMBS — past the gulls, past the beacons' beams swinging
+   up to follow her, while THE FIRST NIGHT falls with her rising: the
+   whole star-field completes around her, the sea turns hammered silver,
+   and every light the family ever lit answers at once — four beacons
+   blazing, the night market's lanterns, the village windows, the
+   lighthouse beam, fireflies rising off the re-greened forest like the
+   world exhaling. Beat count ~45-60s of authored shots, every one baked
+   (sprites/gradients/vertex color — ≤80 calls per shot on the Pi, LOWFX
+   first-class).
+4. q35 THE NEW COIN — she leaves one thing behind on the tide: THE NEW
+   COIN — the chain's own CLASP, the moon's stolen piece that LOCKED her
+   down, washed to your feet on the silver surf (given by the sea; the
+   pattern of the lantern ceremony — the last relic is granted, not won).
+   Carry it home under the first night (the world already transformed
+   around the walk — fireflies, night-birds, the hound trotting beside).
+5. q36 THE WHEEL COMPLETE — slot the New Coin: the Moonwheel turns whole,
+   sky step 8 = NIGHT ITSELF; THE END SEQUENCE: a moonlit flight over
+   every place they healed (village → bay → isles → forest → falls →
+   Crown → river → market → obsidian fields glinting → back over the sea
+   where she hangs full and home) — then the card: THE MOON IS HOME.
+   then: FALLEN MOON. then the credits in the house voice (the game's
+   people: Wick, Pearl, Finn, Tock, the Warden, the keepers, the hound —
+   and "for the family that fixed the sky"). Always skippable on replay.
+
+## POST-GAME — THE LIVING WORLD (John's mandate: LAW. Beating the game
+unlocks the BEST version of the world, never a dead save.)
+- THE FULL CYCLE RUNS FOREVER: dawn → the phase-3 sun arc → gold hour →
+  dusk → TRUE NIGHT (moon + complete stars) → dawn. Every phase's content
+  finally breathes in one day: the market opens each dusk, the beacons
+  burn each night, gold-hour still glints the Crown, fireflies own the
+  forest dark. Night is beautiful, never hostile: no new night hazards.
+- moonHome flag; resuming a finished save = free play in the whole world.
+  ALL regions, boats, verbs, loops live; remaining hearts/chests/salt
+  collectible; nothing removed, nothing locked.
+- Post-game touches (small, warm): every named NPC gets ONE post-game
+  line under the night sky; Pearl's telescope now shows THE MOON'S FACE
+  (her chalk-stars arc completes); the Kiln Hound naps at the wheel; the
+  Lantern Moth's tower roost glows on the far horizon at night; the
+  Moonwheel stands as a lit monument (walk-up shows the eight phases and
+  a playtime/hearts/salt keepsake card — the family's record).
+- Replay: the wheel offers THE RISING and THE END SEQUENCE as watchable
+  memories (the loved-list preserved; skippable, obviously).
+
+## Build/process (all standing law): parts p6m-bone.html (Emberwaste
+region, hazard, pockets, Kiln Hound, cooling payoff, hound companion) and
+p6n-coin.html (finale arc, medley, RISING + END cinematics, first night,
+full day-night cycle, post-game touches), inserted before p7-flow.
+Interfaces pinned in the briefs. Flags: emberSeen, hazard rules, boneDone,
+sky7, tbc7Seen, hound{Home,Named?}, q32..36, medley[4], moonRisen, coin
+carried, moonHome, sky8, cycle state derived not saved-per-minute.
+Forward derivations for EVERY beat (MIRROR-6). Compass answers EVERY
+state (MIRROR-4). World rules registries for all new ground/portals.
+Budgets ≤80 calls LOWFX everywhere including every RISING shot and the
+night village. Full harness + new probes + kid-bot-wins + old-save
+compat + the finale driven END-TO-END by real verbs before ship.
