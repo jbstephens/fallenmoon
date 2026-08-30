@@ -82,6 +82,9 @@ async function launchChrome() {
     proc.on('exit', () => reject(new Error('chrome exited early\n' + buf)));
     setTimeout(() => reject(new Error('no devtools ws')), 15000);
   });
+  /* a crashed probe must never leave a 150%-CPU chrome behind (the
+     contention law: stray headless chrome fakes every later regression) */
+  process.on('exit', () => { try { proc.kill('SIGKILL'); } catch (e) {} });
   return { proc, port: new URL(wsUrl).port };
 }
 function connect(wsUrl) {
