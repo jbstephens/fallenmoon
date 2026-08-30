@@ -640,6 +640,28 @@ function loadSave() {
   } catch (e) { return null; }
 }
 function storeSave() {
+  /* THE BOAT IS SAVED WHERE SHE FLOATS (a rule, not two beats). Only the
+     crossing cine and the isle rescue reliably wrote SAVE.boatX/Z — every
+     other autosave kept whatever old moor was last written, so a rescue or
+     a drift left the save 150 m from where she truly floated and a reload
+     teleported her away from the player. Snapshot the LIVE vessels on
+     every serialize instead. Guards: only during real play (boot/title/
+     cine derive or film the boat — not the player's truth), never
+     mid-voyage/handoff (authored travel writes its own beats), and
+     typeof-guarded because this part evals long before the boats exist. */
+  try {
+    if (SAVE && typeof BOAT !== 'undefined' &&
+        (state === 'play' || state === 'pause' || state === 'dialog') &&
+        typeof FLOODLIVE !== 'undefined' && FLOODLIVE.boatDone &&
+        !(typeof VOYAGE !== 'undefined' && VOYAGE.active) &&
+        !(typeof AUTORUN !== 'undefined' && AUTORUN.active)) {
+      SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; SAVE.boatAng = BOAT.ang;
+      if (typeof SKF !== 'undefined' && typeof riverWet === 'function' && riverWet() &&
+          !(typeof P !== 'undefined' && P.skiffing)) {
+        SAVE.skiffX = SKF.x; SAVE.skiffZ = SKF.z;
+      }
+    }
+  } catch (e) {}
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } catch (e) {}
 }
 SAVE = loadSave();
