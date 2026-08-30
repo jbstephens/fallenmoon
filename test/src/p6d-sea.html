@@ -553,7 +553,12 @@ function refreshHullClamp(cx, cz) {
       const hx = H.x(), hz = H.z();
       if (Math.abs(hx - cx) > WG_SPAN / 2 + 24 || Math.abs(hz - cz) > WG_SPAN / 2 + 24) continue;
       _hulX[_hulN] = hx; _hulZ[_hulN] = hz;
-      _hulY[_hulN] = H.waterlineY() - WL;         // relative to WL, like h
+      /* relative to WL, like h — LESS the hull's tilt reach: the clamp is a
+         flat plane at her centre waterline, but at paddle speed she trims
+         by the bow (spd*0.008) and rides swell gradients, so her bow liner
+         can sit half a metre BELOW that plane. A hull may declare how far
+         its waterline dips when tilted; the water yields that much more. */
+      _hulY[_hulN] = H.waterlineY() - WL - (H.tiltDrop ? H.tiltDrop() : 0);
       _hulRIn[_hulN] = H.r + WG_CELL;
       _hulROut[_hulN] = H.r + WG_CELL + 6;
       _hulN++;
@@ -694,7 +699,16 @@ let farSeaMesh = null;
     }
   }
   farSeaMesh = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
-  farSeaMesh.position.y = WL - 0.55;
+  /* RULE 4: this sheet is STATIC and runs under the entire open sea — it
+     cannot consult __HULLS, so it must sit below any hull's deepest ride.
+     At WL−0.55 every swell trough deeper than half a metre pushed it up
+     through the sailing hull's deck (John's photos). Three swells sum to
+     −1.71, a big set's leading dip adds −0.96; the hull's heave is floored
+     at −2.1 (updateSeaFrame), so WL−2.4 is below every waterline that can
+     exist. Visually free: its top surface only shows beyond the swell
+     grid's rim (≥160 m), where 2 m of depth is under a pixel of grazing
+     angle, and the rim already dissolves into this sheet's colour. */
+  farSeaMesh.position.y = WL - 2.4;
   farSeaMesh.matrixAutoUpdate = false; farSeaMesh.updateMatrix();
   farSeaMesh.frustumCulled = false;
   farSeaMesh.visible = false;
@@ -2165,15 +2179,26 @@ function updateSeaFrame(dtv) {
   if (!P.sailing) { SEAFX.heave = 0; SEAFX.pitch = 0; SEAFX.roll = 0; SEAFX.deckY = WL - 0.18; return; }
   const f = 1.5, s = 0.9;
   const fx = Math.sin(BOAT.ang), fz = Math.cos(BOAT.ang);
-  const hM = swellAt(BOAT.x, BOAT.z);
-  const hB = swellAt(BOAT.x + fx * f, BOAT.z + fz * f);
-  const hS = swellAt(BOAT.x - fx * f, BOAT.z - fz * f);
-  const hP = swellAt(BOAT.x - fz * s, BOAT.z + fx * s);
-  const hT = swellAt(BOAT.x + fz * s, BOAT.z - fx * s);
+  /* THE SWELL BELONGS TO THE OPEN SEA. seaShoalAt answers with FULL
+     amplitude at any far coordinate — including the bay's flat plane and
+     the river's standing reaches, where John's refit boat heaved and
+     pitched over water that renders dead flat (and in the river the
+     phantom trough sank her half a metre under the surface she rides).
+     The hull's swell response ramps in only west of the headland, where
+     the swell grid actually draws it. */
+  const swellK = clamp((-104 - BOAT.x) / 28, 0, 1);
+  const hM = swellAt(BOAT.x, BOAT.z) * swellK;
+  const hB = swellAt(BOAT.x + fx * f, BOAT.z + fz * f) * swellK;
+  const hS = swellAt(BOAT.x - fx * f, BOAT.z - fz * f) * swellK;
+  const hP = swellAt(BOAT.x - fz * s, BOAT.z + fx * s) * swellK;
+  const hT = swellAt(BOAT.x + fz * s, BOAT.z - fx * s) * swellK;
   SEAFX.heave = hM;
+  /* vessel-side floor (Rule 4, static sheets): she may never ride below
+     the far-sea underlayment, whatever three swells and a big set add to */
+  if (SEAFX.heave < -2.1) SEAFX.heave = -2.1;
   SEAFX.pitch = Math.atan2(hB - hS, f * 2) * 0.85;
   SEAFX.roll = Math.atan2(hT - hP, s * 2) * 0.75;
-  SEAFX.deckY = WL - 0.18 + hM;
+  SEAFX.deckY = WL - 0.18 + SEAFX.heave;
 }
 /* the boat's visual transform: heave, pitch and roll off the swell gradient
    at the hull. Composed as a quaternion so pitch/roll stay in the HULL's
@@ -2818,6 +2843,15 @@ cullChunks = function (ccx, ccz) {
   }
   seamMesh.visible = west && near2(-110, CHAN.z, 300);
   farSeaMesh.visible = flooded() && ccx < 40;
+  /* RULE 4 ordering: pose the hull FIRST, then let the water consult her.
+     p6c's older sailing pose (no heave) runs inside the delegate chain
+     above, and the clamp used to read the boat's Y right there — a phantom
+     waterline a full swell-height wrong in a trough, which is exactly how
+     the rendered sea sliced through the deck at paddle speed (the moored
+     gate never caught it: moored, both poses agree). The TRUE pose (heave,
+     pitch, the river lift) must be on the group before refreshHullClamp
+     reads it. */
+  poseBoatOnSwell(now);
   /* THE SWELL GRID — written in place, only where there is open sea to see.
      West of the headland it owns the surface; inside the bay, the bay's own
      plane does, and the harbour gap gets its static patch. */
@@ -2869,8 +2903,7 @@ cullChunks = function (ccx, ccz) {
     }
   }
   bellwright.char.root.visible = west && near2(bellwright.x, bellwright.z, 40);
-  /* the boat on the swell, and her keel under her */
-  poseBoatOnSwell(now);
+  /* (the boat was already posed above, BEFORE the water consulted her) */
   if (sailboat.group.visible && refitDone()) {
     sail2.scale.y += (((P.sailing && BOAT.sailK > 0.5) ? 1 : 0.12) - sail2.scale.y) * Math.min(1, dtv * 3);
   }
@@ -3113,6 +3146,11 @@ window.__HULLS.push({
   underway: () => !!(P.sailing || VOYAGE.active),
   x: () => BOAT.x, z: () => BOAT.z,
   waterlineY: () => sailboat.group.position.y + 0.04,
+  /* how far below the centre waterline her liner can reach when she pitches
+     (half-length 3.2 m) and rolls (half-beam 1.1 m) — zero when moored */
+  tiltDrop: () => Math.min(0.9,
+    Math.abs(SEAFX.pitch + BOAT.spd * 0.008) * 3.2 +
+    Math.abs(SEAFX.roll - BOAT.heel) * 1.1),
   /* mooring law (Rule 6): she floats in ≥1.3 m or she is re-moored */
   depthOk: () => waterDepthAt(BOAT.x, BOAT.z) >= 1.3,
   rescue: () => rescueStrandedBoat(),
