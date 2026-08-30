@@ -129,9 +129,24 @@ function obBaseH(x, z) {
   const beachK = clamp((h - 0.4) / 1.4, 0, 1);
   h += ((vnoise(x * 0.02, z * 0.02) - 0.5) * 5.2 +
         (vnoise(x * 0.055 + 7, z * 0.055 - 3) - 0.5) * 2.4) * beachK;
-  /* the landing tongue (smooth sand, wins by max) */
+  /* the badland floor never dips under the beach line: a below-sea pit
+     inland bakes as a teal "lake" that reads as water (screenshot law) */
+  if (z < -1004) h = Math.max(h, 0.9);
+  /* the landing beach (smooth sand, wins by max): a WIDE strand — a kid
+     sails at a 1.4 km glowing coastline and must be able to land on it,
+     not thread a needle. Steep at the waterline so the hull noses close
+     enough for COME ASHORE's 4 m footing search. */
   const dL = Math.hypot(x - OB_LAND.x, z - OB_LAND.z);
-  h = Math.max(h, 0.45 - Math.max(0, dL - 9) * 0.22);
+  const dL2 = Math.hypot(x - (OB_LAND.x - 16), z - (OB_LAND.z + 3));
+  const dL3 = Math.hypot(x - (OB_LAND.x + 15), z - (OB_LAND.z + 2));
+  let padH = Math.max(0.45 - Math.max(0, dL - 9) * 0.26,
+    0.4 - Math.max(0, dL2 - 8) * 0.26,
+    0.4 - Math.max(0, dL3 - 8) * 0.26);
+  /* one-sided: the strand faces the sea with a FACE, not a radial shoal —
+     a submarine tongue 12 m out beached the hull before COME ASHORE could
+     ever reach footing (the probe caught the grounding) */
+  padH -= Math.max(0, z - (OB_LAND.z + 3)) * 0.6;
+  h = Math.max(h, padH);
   /* the caldera: bowl, crest, and the north gate saddle */
   const dK = Math.hypot(x - OB_KILN.x, z - OB_KILN.z);
   if (dK < 26) {
@@ -244,13 +259,14 @@ function obSheetColor(x, z, y) {
   if (y < OB_WL - 0.9) { mix3(S_IDEEP, S_IWET, clamp((y - (OB_WL - 5.5)) / 4.6, 0, 1), _obc); return _obc; }
   if (y < OB_WL + 0.6) { mix3(S_IWET, OB_SAND, clamp((y - (OB_WL - 0.9)) / 1.5, 0, 1), _obc); return _obc; }
   /* dark crust, ash drifts, a cinder blush near the melt */
-  mix3(OB_CRUST, OB_CRUST2, clamp(n * 0.9 + 0.15, 0, 1), _obc);
-  mix3(_obc, OB_ASHC, clamp(n2 * 0.8 - 0.15, 0, 0.6), _obc);
+  mix3(OB_CRUST, OB_CRUST2, clamp(n * 1.1 + 0.1, 0, 1), _obc);
+  mix3(_obc, OB_ASH2, clamp(n2 * 1.1 - 0.25, 0, 0.75), _obc);
+  if (n2 < 0.32) mix3(_obc, OB_BASALT, 0.55, _obc);
   const sx = (obField(x + 2, z) - obField(x - 2, z)) / 4;
   const sz = (obField(x, z + 2) - obField(x, z - 2)) / 4;
   const slope = Math.hypot(sx, sz);
   if (slope > 0.45) mix3(_obc, OB_BASALT, clamp((slope - 0.45) / 0.5, 0, 0.85), _obc);
-  if (ed < 5) mix3(_obc, OB_CINDER, (1 - ed / 5) * 0.55, _obc);
+  if (ed < 8) mix3(_obc, OB_CINDER, (1 - ed / 8) * 0.7, _obc);
   /* the worn-ash road: the walkable line reads at a glance */
   const td = obTrailDist(x, z);
   if (td < 3.2) mix3(_obc, OB_ASH2, (1 - td / 3.2) * 0.5, _obc);
@@ -334,9 +350,22 @@ function obSetCooled(k) {
 let obGlowMesh = null;
 (function obBuildGlow() {
   const md = MD(), uvs = [];
+  const rnd = mulberry32(727);
   for (const p of OB_POOLS) {
-    skFlatQuad(md, p.x, p.y + 0.22, p.z, 1, 0, p.r * 1.25, p.r * 1.25, [1.0, 0.42, 0.12], uvs);
-    skFlatQuad(md, p.x, p.y + 0.26, p.z, 0, 1, p.r * 0.7, p.r * 0.7, [1.0, 0.62, 0.2], uvs);
+    /* the surface sheets (read from above) */
+    skFlatQuad(md, p.x, p.y + 0.4, p.z, 1, 0, p.r * 1.25, p.r * 1.25, [1.0, 0.42, 0.12], uvs);
+    skFlatQuad(md, p.x, p.y + 0.44, p.z, 0, 1, p.r * 0.7, p.r * 0.7, [1.0, 0.62, 0.2], uvs);
+    /* the HAZE COLUMN (read from eye height and from the sea): crossed
+       vertical sheets of ember light standing in the melt */
+    skGlowQuad(md, p.x, p.y + 0.8 + p.r * 0.16, p.z, p.r * 0.8, 1.4 + p.r * 0.18, [1.0, 0.34, 0.08], uvs);
+    skGlowQuad(md, p.x, p.y + 0.5, p.z, p.r * 0.45, 0.9, [1.0, 0.58, 0.16], uvs);
+    /* rim embers: banked coals glinting in the crust cracks */
+    const n = Math.round(p.r * 0.55);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * TAU, rr = p.r + 0.6 + rnd() * 2.2;
+      const ex = p.x + Math.cos(a) * rr, ez = p.z + Math.sin(a) * rr;
+      skGlowQuad(md, ex, obBaseH(ex, ez) + 0.22, ez, 0.28 + rnd() * 0.3, 0.2 + rnd() * 0.2, [1.0, 0.4 + rnd() * 0.2, 0.1], uvs);
+    }
   }
   obGlowMesh = skGlowMesh(md, uvs, 0.62);
   obGlowMesh.renderOrder = 3;
@@ -730,6 +759,7 @@ window.__obHornetLog = [];
     const [hx, hz] = homes[i];
     const c = buildEmberHornet();
     c.root.scale.setScalar(1.9);
+    c.shadow.visible = false;             // they fly — the shadow draw stays home
     c.root.visible = false;
     scene.add(c.root);
     OB_HORNETS.push({
@@ -918,8 +948,8 @@ function obTickChests() {
    legs, a tail that talks. Underneath the ash the warm brown is already
    there — the cure lerps every vertex home (the moth-cure pattern). */
 const OB_ASH_PAL = {
-  body: col(0x5a5350), plate: col(0x6b625c), belly: col(0x746a62),
-  muzzle: col(0x4c4642), ear: col(0x3f3a36), paw: col(0x332f2c), eye: col(0xf0b34a),
+  body: col(0x746a63), plate: col(0x8a7d72), belly: col(0x968a7c),
+  muzzle: col(0x615850), ear: col(0x50473f), paw: col(0x3f3833), eye: col(0xffc45e),
 };
 const OB_WARM_PAL = {
   body: col(0x8a6748), plate: col(0xa07c55), belly: col(0xc7a274),
@@ -928,6 +958,7 @@ const OB_WARM_PAL = {
 const OB_HOUND_MAT = TOON.clone();
 function obBuildHound() {
   const root = new THREE.Group();
+  root.scale.setScalar(0.78);           // a GREAT hound — but a hound, not a horse
   const parts = { silverable: [] };
   const A = OB_ASH_PAL;
   const mk = (md) => { const m = mdMesh(md, OB_HOUND_MAT); m.frustumCulled = false; parts.silverable.push(m); return m; };
@@ -1146,17 +1177,11 @@ const OB_MOTES = [];
 (function () {
   for (let i = 0; i < 6; i++) {
     const g = new THREE.Group();
-    const md = MD();
-    lathe(md, [[0, -0.3], [0.26, -0.1], [0.3, 0.12], [0.2, 0.3], [0, 0.38]], { seg: 7, col: [0.9, 0.35, 0.1] });
-    const core = mdMesh(md, new THREE.MeshBasicMaterial({
-      vertexColors: true, transparent: true, opacity: 0.8,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }), false);
-    core.frustumCulled = false;
-    g.add(core);
+    /* ONE additive mesh: soft outer bloom + hot inner pip (a draw apiece) */
     const gm = MD(), uvs = [];
-    skGlowQuad(gm, 0, 0.05, 0, 0.9, 0.9, [1.0, 0.5, 0.16], uvs);
-    g.add(skGlowMesh(gm, uvs, 0.75));
+    skGlowQuad(gm, 0, 0.05, 0, 0.95, 0.95, [1.0, 0.46, 0.14], uvs);
+    skGlowQuad(gm, 0, 0.05, 0, 0.36, 0.36, [1.0, 0.72, 0.3], uvs);
+    g.add(skGlowMesh(gm, uvs, 0.85));
     g.visible = false;
     scene.add(g);
     OB_MOTES.push({ g, on: false, x: 0, z: 0, y: 0, vx: 0, vz: 0, life: 0, ph: i });
@@ -1533,9 +1558,9 @@ function obLerpCam(t0, t1, t, a, b) {
 function obBoneToJaws() {
   const H = HOUND;
   obBone.visible = true;
-  obBone.scale.setScalar(1.5);
-  const hx = H.x + Math.sin(H.ang) * 1.25, hz = H.z + Math.cos(H.ang) * 1.25;
-  obBone.position.set(hx, H.y + 1.05, hz);
+  obBone.scale.setScalar(0.7);
+  const hx = H.x + Math.sin(H.ang) * 0.86, hz = H.z + Math.cos(H.ang) * 0.86;
+  obBone.position.set(hx, H.y + 0.8, hz);
   obBone.rotation.set(0, H.ang + Math.PI / 2, 0.1);
 }
 function obGrantBone() {
@@ -1608,7 +1633,7 @@ function obTickCure(t) {
     /* THE ADOPTION: she shakes head-to-tail, pads over, and presses her
        brow to Wick. A dog decides, and it is decided. */
     obGrantBone();
-    obBone.scale.setScalar(1.1);
+    obBone.scale.setScalar(0.6);
     obBone.position.set(P.x - Math.sin(P.heading) * 0.32, obGroundAt(P.x, P.z) + 1.05, P.z - Math.cos(P.heading) * 0.32);
     const k = smoothstep(clamp((t - 8.1) / 2.2, 0, 1));
     const hx = P.x + Math.sin(P.heading + 2.6) * lerp(3.4, 1.1, k);
@@ -1666,7 +1691,7 @@ function obSeat7(k) {
     item.position.set(b[0], b[1], b[2]);
     item.rotation.set(0, wheelRing.rotation.y + (ry || 0), 0);
   };
-  put(obBone, Math.PI / 2 - k * Math.PI / 4, 1.3);
+  put(obBone, Math.PI / 2 - k * Math.PI / 4, 0.95);
   put(typeof mlRelic !== 'undefined' ? mlRelic : null, Math.PI / 4 - k * Math.PI / 4, 1.6);
   put(typeof nmItem5 !== 'undefined' ? nmItem5 : null, -k * Math.PI / 4, 0.9);
   put(typeof sliverProp !== 'undefined' ? sliverProp : null, -Math.PI / 4 - k * Math.PI / 4, 0.9);
@@ -1704,7 +1729,7 @@ function obTickWheel7(t) {
     const k = smoothstep(clamp(t / 1.4, 0, 1));
     const s2 = (typeof hWheelSeat === 'function') ? hWheelSeat(Math.PI / 2) : [wx, wy, wz];
     const sy = groundH(P.x, P.z) + 1.5;
-    obBone.scale.setScalar(lerp(1.1, 1.3, k));
+    obBone.scale.setScalar(lerp(0.6, 0.95, k));
     obBone.position.set(lerp(P.x, s2[0], k), lerp(sy, s2[1], k) + Math.sin(k * Math.PI) * 1.4, lerp(P.z, s2[2], k));
     cineCam(wx + 5.0, wy + 1.0, wz + 6.2, wx, wy + 2.6, wz);
     if (t > 1.4 && CINE.step === 1) {
@@ -1875,6 +1900,61 @@ function obShowTBC7() {
 }
 </script>
 <script>
+/* ═══════════ p6m/9b — the caldera camera (the lamp-room pattern) ═══════════
+   Near the rim the follow cam slides OUTSIDE the bowl and the wall owns
+   the frame. Inside the caldera the camera keeps to the bowl's own air:
+   same stick feel, clamped by the circle and the crest. */
+function obArenaCamera(dtv) {
+  const wantDist = 5.2;
+  CAM.dist += (wantDist - CAM.dist) * Math.min(1, dtv * 3);
+  let manual = false;
+  if (state === 'play') {
+    const sx = clamp(IN.cx, -1, 1), sy = clamp(IN.cy, -1, 1);
+    if (sx || sy) { CAM.yaw -= sx * 3.1 * dtv; CAM.pitch += sy * 2.0 * dtv; manual = true; }
+    if (CAMIN.mdx || CAMIN.mdy) { CAM.yaw -= CAMIN.mdx * 0.0034; CAM.pitch += CAMIN.mdy * 0.0026; manual = true; }
+    if (CAMIN.tdx || CAMIN.tdy) { CAM.yaw -= CAMIN.tdx * 0.0085; CAM.pitch += CAMIN.tdy * 0.0065; manual = true; }
+  }
+  CAMIN.mdx = CAMIN.mdy = CAMIN.tdx = CAMIN.tdy = 0;
+  if (manual || CAMIN.touching) CAM.stickAge = 0; else CAM.stickAge += dtv;
+  CAM.pitch = clamp(CAM.pitch, PITCH_MIN, PITCH_MAX);
+  const ty = P.fy + 1.35;
+  const tx = P.x, tz = P.z;
+  const cp = Math.cos(CAM.pitch), spv = Math.sin(CAM.pitch);
+  const dx = Math.sin(CAM.yaw) * cp, dz = Math.cos(CAM.yaw) * cp;
+  let dist = CAM.dist;
+  for (let s2 = 0.2; s2 <= 1.0; s2 += 0.1) {
+    const sx2 = tx + dx * dist * s2, sz2 = tz + dz * dist * s2;
+    if (Math.hypot(sx2 - OB_KILN.x, sz2 - OB_KILN.z) > OB_KILN.r - 1.6) {
+      dist = Math.max(1.4, dist * (s2 - 0.1));
+      break;
+    }
+  }
+  const cx = tx + dx * dist, cz = tz + dz * dist;
+  let cy = ty + spv * dist;
+  cy = clamp(cy, OB_KILN_FLOOR + 0.6, OB_KILN_FLOOR + 6.2);
+  const k = CAM.ready ? Math.min(1, dtv * (manual ? 15 : 6.5)) : 1;
+  CAM.x += (cx - CAM.x) * k; CAM.y += (cy - CAM.y) * k; CAM.z += (cz - CAM.z) * k;
+  CAM.ready = true;
+  camera.position.set(
+    CAM.x + (Math.random() - 0.5) * CAM.shake,
+    CAM.y + (Math.random() - 0.5) * CAM.shake * 0.6,
+    CAM.z + (Math.random() - 0.5) * CAM.shake);
+  CAM.shake = Math.max(0, CAM.shake - dtv * 1.6);
+  _obCamLook.set(tx, ty, tz);
+  camera.lookAt(_obCamLook);
+}
+const _obCamLook = new THREE.Vector3();
+const _obPrevUpdateCamera = updateCamera;
+updateCamera = function (dtv) {
+  if (CAM.mode === 'follow' && HOUND.mode === 'guardian' && !HOUND.defeated &&
+      obInKiln(P.x, P.z) && Math.hypot(P.x - OB_KILN.x, P.z - OB_KILN.z) < OB_KILN.r - 0.5) {
+    obArenaCamera(dtv);
+    return;
+  }
+  _obPrevUpdateCamera(dtv);
+};
+</script>
+<script>
 /* ═══════════ p6m/10 — THE HOUND COMES HOME (post-game law #1) ═══════════
    One animated entity, pooled particles, baked meshes. She trots near
    you in the village and the world, dozes by the Moonwheel when you rest
@@ -1889,7 +1969,7 @@ function obBowPos() {
   return { x: BOAT.x + Math.sin(BOAT.ang) * 1.55, z: BOAT.z + Math.cos(BOAT.ang) * 1.55, y: y + 0.55 };
 }
 function obHoundFootingNear(x, z) {
-  for (let r = 1.6; r <= 4.6; r += 1.0) {
+  for (let r = 1.6; r <= 7.6; r += 1.0) {
     for (let i = 0; i < 8; i++) {
       const a = i / 8 * TAU;
       const px = x + Math.sin(a) * r, pz = z + Math.cos(a) * r;
@@ -1901,17 +1981,32 @@ function obHoundFootingNear(x, z) {
   return { x, z, y: groundH(x, z) };
 }
 function obHoundSafeSpot(x, z) {
-  if (obCooled() || obLavaEdgeDist(x, z) > 0.8) return { x, z };
+  const lavaOk = obCooled() || !obInRegion(x, z) || obLavaEdgeDist(x, z) > 0.8;
+  if (lavaOk && !worldSolidAt(x, z) && groundH(x, z) > OB_WL + 0.1) return { x, z };
   const s = obHoundFootingNear(x, z);
   return { x: s.x, z: s.z };
 }
 function obHoundStep(mx, mz) {
   const H = HOUND;
+  const x0 = H.x, z0 = H.z;
   const nx = H.x + mx, nz = H.z + mz;
   if (worldSolidAt(nx, H.z) || (!obCooled() && obInRegion(nx, H.z) && obLavaEdgeDist(nx, H.z) < 0.7)) { /* blocked x */ }
   else if (groundH(nx, H.z) > OB_WL + 0.05) H.x = nx;
   if (worldSolidAt(H.x, nz) || (!obCooled() && obInRegion(H.x, nz) && obLavaEdgeDist(H.x, nz) < 0.7)) { /* blocked z */ }
   else if (groundH(H.x, nz) > OB_WL + 0.05) H.z = nz;
+  /* a dog does not stand politely in a dead end forever: pinned for a
+     couple of seconds (water's edge, a wall's shadow) she just finds her
+     own way around — the pet teleport, early (she derived at the
+     waterline once and follow was a statue; the probe caught it) */
+  if (Math.abs(H.x - x0) + Math.abs(H.z - z0) < 0.001) {
+    H.stuckT = (H.stuckT || 0) + DT;
+    if (H.stuckT > 2.2) {
+      H.stuckT = 0;
+      const s = obHoundFootingNear(P.x - Math.sin(P.heading + 0.55) * 2.4, P.z - Math.cos(P.heading + 0.55) * 2.4);
+      H.x = s.x; H.z = s.z; H.y = s.y;
+      burst(psDust, H.x, H.y + 0.3, H.z, 8, 1.2, 0.8, 0.6);
+    }
+  } else H.stuckT = 0;
 }
 function obHoundHopTo(to, next) {
   const H = HOUND;
@@ -1944,7 +2039,12 @@ function obTickHound() {
   }
   obPrevSailing = P.sailing;
   if (P.sailing) {
-    if (H.st !== 'bow') { obSetCompSt('sit'); H.spd = 0; }
+    if (H.st === 'bow') {
+      const b = obBowPos();
+      H.x = b.x; H.z = b.z; H.y = b.y;
+      H.ang = BOAT.ang;
+      H.spd = 0;
+    } else { obSetCompSt('sit'); H.spd = 0; }
     return;
   }
   if (H.st === 'bow') {
@@ -1965,7 +2065,7 @@ function obTickHound() {
   const d = Math.hypot(P.x - H.x, P.z - H.z);
   if (d > 60) {
     /* teleport-catches-up, the way pets do */
-    const s = obHoundSafeSpot(P.x - Math.sin(P.heading) * 2.4, P.z - Math.cos(P.heading) * 2.4);
+    const s = obHoundSafeSpot(P.x - Math.sin(P.heading + 0.55) * 2.4, P.z - Math.cos(P.heading + 0.55) * 2.4);
     H.x = s.x; H.z = s.z; H.y = groundH(H.x, H.z);
     burst(psDust, H.x, H.y + 0.3, H.z, 8, 1.2, 0.8, 0.6);
     obSetCompSt('follow');
@@ -1993,8 +2093,8 @@ function obTickHound() {
   const nearWheel = Math.hypot(P.x - WHEEL_POS.x, P.z - WHEEL_POS.z) < 20;
   if (nearWheel && pSpd < 0.4 && state === 'play') H.dozeT += DT; else H.dozeT = 0;
   if (H.dozeT > 6) { H.dozeT = 0; obSetCompSt('toDoze'); return; }
-  /* the follow */
-  const tx = P.x - Math.sin(P.heading) * 2.3, tz = P.z - Math.cos(P.heading) * 2.3;
+  /* the follow: at heel — behind-left, out of the camera's lane */
+  const tx = P.x - Math.sin(P.heading + 0.55) * 2.1, tz = P.z - Math.cos(P.heading + 0.55) * 2.1;
   const dt2 = Math.hypot(tx - H.x, tz - H.z);
   if (dt2 > 1.1) {
     const a = Math.atan2(tx - H.x, tz - H.z);
@@ -2021,7 +2121,7 @@ const _obPrevInteract = currentInteract;
 currentInteract = function () {
   if (SAVE) {
     /* the wheel takes its seventh — in phase order, after the sixth */
-    if (obBoneCarry() && SAVE.sky === 6 && QUEST.q >= 30 && obNear(WHEEL_POS.x, WHEEL_POS.z, 5.2)) {
+    if (obBoneCarry() && SAVE.sky === 6 && QUEST.q >= 30 && obNear(WHEEL_POS.x, WHEEL_POS.z, 6.5)) {
       return { id: 'obWheel7', label: '✕ SET THE OLD BONE' };
     }
     /* the region's chests */
@@ -2045,7 +2145,20 @@ currentInteract = function () {
           Math.hypot(H.x - BOAT.x, H.z - BOAT.z) < 14) {
         return { id: 'obHoundBow', label: '✕ SHE RIDES THE BOW' };
       }
-      if (obNear(H.x, H.z, 2.1) && !P.air) return { id: 'obPet', label: '✕ GOOD DOG' };
+      /* she is always pettable — except where a beat or a door is waiting:
+         a dog at heel must never upstage the Moonwheel or a doorway (the
+         probe caught GOOD DOG shadowing both) */
+      let doorNear = false;
+      if (typeof ROOMS !== 'undefined') {
+        for (let ri = 0; ri < ROOMS.length; ri++) {
+          const ex = ROOMS[ri].ext;
+          if (ex && Math.hypot(P.x - ex.outX, P.z - ex.outZ) < 3.2) { doorNear = true; break; }
+        }
+      }
+      if (obNear(H.x, H.z, 2.1) && !P.air && !doorNear &&
+          !(obBoneCarry() && obNear(WHEEL_POS.x, WHEEL_POS.z, 11))) {
+        return { id: 'obPet', label: '✕ GOOD DOG' };
+      }
     }
   }
   return null;
@@ -2057,6 +2170,7 @@ doInteract = function (ctx) {
   else if (ctx.id === 'obChest') obOpenChest(ctx.e);
   else if (ctx.id === 'obPet') {
     obSetCompSt('pet');
+    HOUND.petN = (HOUND.petN || 0) + 1;
     HOUND.wagK = 1;
     SFX.houndBark();
     rumble({ duration: 280, strong: 0.3, weak: 0.7 }, 'good-dog');
@@ -2140,7 +2254,9 @@ function obTickSeams() {
 }
 function obTickLandfall() {
   if (!SAVE || SAVE.emberSeen) return;
-  if (!P.sailing && !P.skiffing && !P.skPunting && obInRegion(P.x, P.z) && P.fy > OB_WL + 0.2) {
+  /* the wet-sand step counts: COME ASHORE can set you down at the very
+     waterline (fy ≈ WL−0.3) and the region must still say its name */
+  if (!P.sailing && !P.skiffing && !P.skPunting && obInRegion(P.x, P.z) && P.fy > OB_WL - 0.32) {
     SAVE.emberSeen = true; storeSave();
     showCaption('THE EMBERWASTE', 5000);
     SFX.bellSmall ? SFX.bellSmall(0.7) : SFX.chime(0.8);
@@ -2280,12 +2396,14 @@ cullChunks = function (ccx, ccz) {
   if (obGlintMesh.visible && CINE.id !== 'obWheel7') {
     obGlintMesh.material.opacity = 0.55 + 0.22 * Math.sin(now / 640);
   }
+  /* mid-fight the bowl walls occlude the badland: park the pocket draws */
+  const fightHide = HOUND.mode === 'guardian' && HOUND.active && !HOUND.defeated;
   obPropMesh.visible = nearRegion;
   obGateGlow.visible = nearRegion && (OB_KILN.x - ccx) * (OB_KILN.x - ccx) + (OB_KILN.z - ccz) * (OB_KILN.z - ccz) < 320 * 320;
   /* pockets */
   for (const sp of OB_SPRITES) {
     const d2 = (sp.x - ccx) * (sp.x - ccx) + (sp.z - ccz) * (sp.z - ccz);
-    sp.c.root.visible = !sp.dead && d2 < 130 * 130;
+    sp.c.root.visible = !sp.dead && !fightHide && d2 < 92 * 92;
     if (sp.c.root.visible) {
       const hop = (sp.st === 'idle') ? Math.abs(Math.sin(sp.hopPh)) * 0.12 : 0;
       sp.c.root.position.set(sp.x, sp.y + hop, sp.z);
@@ -2297,7 +2415,7 @@ cullChunks = function (ccx, ccz) {
   }
   for (const h of OB_HORNETS) {
     const d2 = (h.x - ccx) * (h.x - ccx) + (h.z - ccz) * (h.z - ccz);
-    h.c.root.visible = !h.dead && d2 < 130 * 130;
+    h.c.root.visible = !h.dead && !fightHide && d2 < 78 * 78;
     if (h.c.root.visible) {
       h.c.root.position.set(h.x, h.y, h.z);
       h.c.root.rotation.y = h.ang;
@@ -2308,7 +2426,7 @@ cullChunks = function (ccx, ccz) {
   /* salts */
   for (const s of obSalt) {
     const d2 = (s.x - ccx) * (s.x - ccx) + (s.z - ccz) * (s.z - ccz);
-    s.mesh.visible = !s.got && d2 < 120 * 120;
+    s.mesh.visible = !s.got && !fightHide && d2 < 85 * 85;
     if (s.mesh.visible) {
       s.mesh.position.y = s.baseY + Math.sin(now / 420 + s.ph) * 0.06;
       s.mesh.rotation.y = now / 900 + s.ph;
@@ -2317,7 +2435,7 @@ cullChunks = function (ccx, ccz) {
   /* chests */
   for (const e of obChests) {
     const d2 = (e.ch.x - ccx) * (e.ch.x - ccx) + (e.ch.z - ccz) * (e.ch.z - ccz);
-    e.ch.group.visible = d2 < 160 * 160;
+    e.ch.group.visible = !fightHide && d2 < 110 * 110;
   }
   /* fight furniture */
   const fight = HOUND.mode === 'guardian' && HOUND.active && !HOUND.defeated;
@@ -2355,7 +2473,7 @@ cullChunks = function (ccx, ccz) {
   /* ── THE HOUND (guardian and companion share one skin) ── */
   const H = HOUND;
   const dH2 = (H.x - ccx) * (H.x - ccx) + (H.z - ccz) * (H.z - ccz);
-  const houndVis = dH2 < 180 * 180 &&
+  const houndVis = dH2 < 110 * 110 &&
     (H.mode === 'companion' || fight || H.st === 'sleep' || CINE.id === 'obCure' || H.defeated);
   H.c.root.visible = houndVis;
   if (houndVis && !SIM_FREEZE) {
@@ -2423,7 +2541,7 @@ cullChunks = function (ccx, ccz) {
       }
     } else if (obBoneCarry() && state === 'play') {
       obBone.visible = true;
-      obBone.scale.setScalar(1.1);
+      obBone.scale.setScalar(0.6);
       obBoneGlow.material.opacity = 0.4;
       obBone.position.set(P.x - Math.sin(P.heading) * 0.32, groundH(P.x, P.z) + 1.05, P.z - Math.cos(P.heading) * 0.32);
       obBone.rotation.set(0, P.heading + Math.PI / 2, 0.1);
@@ -2526,6 +2644,7 @@ window.__telemetryHooks.push(function (T) {
   T.houndX = +HOUND.x.toFixed(1);
   T.houndZ = +HOUND.z.toFixed(1);
   T.houndWarm = HOUND.warmShown;
+  T.obPetN = HOUND.petN || 0;
   T.obSpriteAlive = OB_SPRITES.filter(s => !s.dead).length;
   T.obHornetAlive = OB_HORNETS.filter(h => !h.dead).length;
   T.obStLogN = window.__obStLog.length;
@@ -2568,6 +2687,23 @@ function obExtendDebugOnce() {
     },
   });
 }
+
+/* name-tag every p6m scene object (perf forensics read these) */
+(function obNameAll() {
+  const tag = (root, n) => { if (root) root.traverse ? root.traverse(o => { if (!o.name) o.name = n; }) : 0; };
+  for (const ch of OB_CHUNKS) tag(ch.mesh, 'obChunk');
+  tag(obGlowMesh, 'obGlow'); tag(obGlintMesh, 'obGlint');
+  tag(obPropMesh, 'obProps'); tag(obGateGlow, 'obGateGlow');
+  for (const sp of OB_SPRITES) tag(sp.c.root, 'obSprite');
+  for (const h of OB_HORNETS) tag(h.c.root, 'obHornet');
+  for (const sd of obSalt) tag(sd.mesh, 'obSalt');
+  for (const e of obChests) { tag(e.ch.group, 'obChest'); tag(e.ch.heart, 'obHeart'); }
+  tag(HOUND.c.root, 'obHound');
+  tag(obBone, 'obBone');
+  tag(obRing, 'obRing'); tag(obMark, 'obMark');
+  for (const mo of OB_MOTES) tag(mo.g, 'obMote');
+  for (const cl of OB_CLODS) { tag(cl.m, 'obClod'); tag(cl.sh, 'obClodShadow'); }
+})();
 
 /* ═══ the pinned interface (the sibling p6n consumes this) ═══ */
 window.__p6m = window.__p6m || {};
