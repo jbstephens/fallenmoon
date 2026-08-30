@@ -2499,6 +2499,8 @@ function tickBoatFollows() {
       const bx = P.x + Math.sin(a) * r, bz = P.z + Math.cos(a) * r;
       if (waterDepthAt(bx, bz) < 1.3) continue;
       if (!boatMooringOK(bx, bz)) continue;
+      if (typeof window.__boatSurfaceYAt === 'function' &&
+          Math.abs(window.__boatSurfaceYAt(bx, bz) - WL) > 0.05) continue;   // sea water only — never up a river
       BOAT.x = bx; BOAT.z = bz;
       sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
       sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
@@ -2507,9 +2509,72 @@ function tickBoatFollows() {
     }
   }
 }
+/* ── the one validated bring-her-to-my-shore search, shared by every
+   rescue: deep enough to float (≥0.9), never inside a solid, and never in
+   ANOTHER water authority's elevated water (the river stands above WL —
+   a rescue that moors her up a river mouth strands her all over again;
+   __boatSurfaceYAt is registered by the river-mouth part, typeof-guarded
+   here because this part evals first). ── */
+function boatComesToShore() {
+  for (let rr = 3; rr <= 12; rr += 0.7) {
+    for (let ii = 0; ii < 24; ii++) {
+      const aa = ii * (TAU / 24);
+      const fx = P.x + Math.sin(aa) * rr, fz = P.z + Math.cos(aa) * rr;
+      if (worldSolidAt(fx, fz)) continue;
+      if (waterDepthAt(fx, fz) < 0.9) continue;
+      if (typeof window.__boatSurfaceYAt === 'function' &&
+          Math.abs(window.__boatSurfaceYAt(fx, fz) - WL) > 0.05) continue;
+      BOAT.x = fx; BOAT.z = fz; BOAT.spd = 0;
+      sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
+      sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
+      if (SAVE) { SAVE.boatX = BOAT.x; SAVE.boatZ = BOAT.z; storeSave(); }
+      return true;
+    }
+  }
+  return false;
+}
+/* ═══ THE STRANDED-BY-MERCY RULE (a standing rule, not a gate — John's
+   law). The dunk-instant orphan guard below only ever ran INSIDE the dunk
+   handler: John stood WADING on a knee-deep shoal with the boat floating
+   11 m away across unwadeable water, and every swim attempt dunk-bounced
+   him back to that same shoal — the guard's moment had passed, so no
+   rescue ever came. This rule OWNS the space instead: whenever you are in
+   or at the water, she is 6–80 m off, and the straight path to her
+   crosses water too deep to wade, a strand timer runs; at ~4 s she comes
+   to your shore by the same validated search. Checked every half second,
+   sample-based, zero allocation; never while sailing/punting/skiffing,
+   during Pearl's voyage, indoors, in the hollow or the Foundry, and only
+   on a flooded world with the boat afloat. ═══ */
+let strandT = 0, strandCapTick = -99999;
+function tickStrandRule() {
+  if ((simTick % 30) !== 0) return;
+  if (P.sailing || P.skiffing || P.skPunting || VOYAGE.active) { strandT = 0; return; }
+  if (!flooded() || !FLOODLIVE.boatDone) { strandT = 0; return; }
+  if (typeof roomAt === 'function' && roomAt(P.x, P.z)) { strandT = 0; return; }
+  if (inHollowAt(P.x, P.z)) { strandT = 0; return; }
+  if (typeof inFoundryAt === 'function' && inFoundryAt(P.x, P.z)) { strandT = 0; return; }
+  const inWater = waterDepthAt(P.x, P.z) > 0.05 || P.fy < WL + 0.12;
+  if (!inWater) { strandT = 0; return; }
+  const bd = Math.hypot(P.x - BOAT.x, P.z - BOAT.z);
+  if (bd < 6 || bd > 80) { strandT = 0; return; }
+  let crossing = false;
+  for (let s = 2; s < bd - 2; s += 1.6) {
+    const sx = P.x + (BOAT.x - P.x) / bd * s, sz = P.z + (BOAT.z - P.z) / bd * s;
+    if (waterDepthAt(sx, sz) > 0.62) { crossing = true; break; }
+  }
+  if (!crossing) { strandT = 0; return; }
+  strandT += 0.5;
+  if (strandT < 4) return;
+  strandT = 0;
+  if (boatComesToShore() && simTick - strandCapTick > 1800) {
+    strandCapTick = simTick;
+    showCaption('She noses over to you.', 3200);
+  }
+}
 function tickTide() {
   if (state !== 'play') return;
   tickBoatFollows();
+  tickStrandRule();
   /* the resonance: with the Crescent thread alive, the forecourt answers */
   if (SAVE && !SAVE.basinOpen && QUEST.q >= 2 && !P.sailing) {
     if (Math.hypot(P.x - HUM_SPOT.x, P.z - HUM_SPOT.z) < 11) {
@@ -2559,19 +2624,7 @@ function tickTide() {
             if (waterDepthAt(sx, sz) > 0.62) { crossing = true; break; }
           }
         }
-        if (crossing) {
-          outer: for (let rr = 3; rr <= 12; rr += 0.7) {
-            for (let ii = 0; ii < 24; ii++) {
-              const aa = ii * (TAU / 24);
-              const fx = P.x + Math.sin(aa) * rr, fz = P.z + Math.cos(aa) * rr;
-              if (worldSolidAt(fx, fz)) continue;
-              if (waterDepthAt(fx, fz) < 0.9) continue;
-              BOAT.x = fx; BOAT.z = fz; BOAT.spd = 0;
-              storeSave();
-              break outer;
-            }
-          }
-        }
+        if (crossing) boatComesToShore();   // the fast path of the strand rule
       }
     }
   }
