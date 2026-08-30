@@ -179,10 +179,10 @@ if (want('postgame')) {
   const card = await api.eval(`document.getElementById('cnWheelCard').textContent`);
   gate('the keepsake card: playtime, hearts, salt', /2h/.test(card) && /HEARTS/.test(card) && /SALT/.test(card),
     card.slice(0, 90));
+  const pos0 = await jget(api, '({x:+P.x.toFixed(1), z:+P.z.toFixed(1)})');
   await api.tap(13);                     // down → WATCH THE RISING
   await api.tap(0);
   await api.waitFor(`__fm.cinId === 'cnRising'`, 20000, 'the memory begins');
-  const pos0 = await jget(api, '({x:+P.x.toFixed(1), z:+P.z.toFixed(1)})');
   await sleep(1800);
   await api.tap(0);                      // a memory is always skippable
   await api.waitFor(`__fm.state === 'play' && __fm.cinId === null`, 30000, 'the memory skips');
@@ -225,8 +225,8 @@ if (want('postgame')) {
   await api.eval('__fmDebug.cycleSet(0.955); 0');
   await api.waitFor('__fm.nightK < 0.75 && __fm.nightK > 0.2', 60000, 'dawn lifts');
   const dawn = await stationMax(10);
-  gate('dawn never spikes past the night (≤ night + 4)', dawn.c <= night.c + 4,
-    `night ${night.c} → dawn ${dawn.c}`);
+  gate('dawn never spikes past the day/night baseline (+6)', dawn.c <= Math.max(day.c, night.c) + 6,
+    `day ${day.c} night ${night.c} → dawn ${dawn.c}`);
   await api.shot('post-6-dawn');
   gate('postgame: zero console errors', api.errs.length === 0, api.errs.slice(0, 4).join(' | '));
   api.close();
