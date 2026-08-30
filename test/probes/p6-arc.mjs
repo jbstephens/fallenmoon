@@ -218,10 +218,10 @@ if (want('derive')) {
       { ...PHASE5_DONE, starsSeen: true, starLantern: true, spyglass: true,
         beaconLit: [true, true, true, true], mothDone: true },
       `__fm.quest === 26 && __fm.lantern6 && __fm.carry6`],
-    ['sky 6 derives q27 and the seen card',
+    ['sky 6 derives at least q27 + the seen card (p6m's seam may carry it to 28 — phase 7 begins)',
       { ...PHASE5_DONE, starsSeen: true, starLantern: true, spyglass: true,
         beaconLit: [true, true, true, true], mothDone: true, lantern6: true, sky: 6, ph: 6 },
-      `__fm.quest === 27 && __fm.tbc6Seen`],
+      `__fm.quest >= 27 && __fm.tbc6Seen`],
   ];
   for (const [label, save, expr] of cases) {
     const api = await session(save, '?turbo=4', ['mlReveal', 'mlCure', 'mlWheel6']);
@@ -276,7 +276,10 @@ if (want('compass')) {
   await station('q24 all lit, q25 unbegun seam', 'SAVE.beaconLit = [true, true, true, true]', false);
   await station('q25 outside the tower', 'SAVE.q = 25', false);
   await station('q26 carry home', 'SAVE.q = 26; SAVE.mothDone = true; SAVE.lantern6 = true', false);
-  await station('q27 after the card', 'SAVE.q = 27; SAVE.sky = 6; SAVE.ph = 6; SAVE.tbc6Seen = true', true);
+  /* q27 used to REST; since p6m the seam carries the story south (and p6n's
+     endgame owns the idle after that) — the gate asserts the compass now
+     ANSWERS rather than rests (MIRROR-4: every state has an answer). */
+  await station('q27 after the card → the story leads on', 'SAVE.q = 27; SAVE.sky = 6; SAVE.ph = 6; SAVE.tbc6Seen = true', false);
   gate('compass: zero console errors', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
   api.close();
 }
