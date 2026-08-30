@@ -1231,24 +1231,30 @@ let cnFullMoon = null, cnFullMoonForce = 0;
   const rnd = mulberry32(20260830);
   const craters = [];
   for (let i = 0; i < 9; i++) {
-    const a = rnd() * TAU, d = Math.pow(rnd(), 0.7) * 0.82;
-    craters.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, r: 0.09 + rnd() * 0.16, deep: 0.55 + rnd() * 0.2 });
+    const a = rnd() * TAU, d = Math.pow(rnd(), 0.7) * 0.78;
+    craters.push({ x: Math.cos(a) * d, y: Math.sin(a) * d, r: 0.12 + rnd() * 0.18, deep: 0.5 + rnd() * 0.18 });
   }
+  /* two soft maria — the dark seas a kid draws first */
+  const maria = [{ x: -0.28, y: 0.22, r: 0.42 }, { x: 0.3, y: -0.14, r: 0.34 }];
   const colAt = (ux, uy) => {
     let k = 1;
     const rim = Math.hypot(ux, uy);
-    let base = rim > 0.93 ? 0.88 : 1;
+    let base = rim > 0.9 ? lerp(1, 0.78, (rim - 0.9) / 0.1) : 1;
+    for (const m of maria) {
+      const d = Math.hypot(ux - m.x, uy - m.y);
+      if (d < m.r) base *= lerp(0.86, 1, smoothstep(d / m.r));
+    }
     for (const c of craters) {
       const d = Math.hypot(ux - c.x, uy - c.y);
       if (d < c.r) {
         const t = d / c.r;
-        k = t > 0.72 ? 1.1 : c.deep + t * 0.3;
+        k = t > 0.72 ? 1.12 : c.deep + t * 0.35;
         break;
       }
     }
     return [0.93 * base * k, 0.94 * base * k, 0.9 * base * k];
   };
-  const SEG = 40, RINGS = 7;
+  const SEG = 40, RINGS = 20;
   for (let ri = 0; ri < RINGS; ri++) {
     const r0 = ri / RINGS, r1 = (ri + 1) / RINGS;
     for (let s = 0; s < SEG; s++) {
@@ -1261,6 +1267,7 @@ let cnFullMoon = null, cnFullMoonForce = 0;
   }
   const mat = new THREE.MeshBasicMaterial({
     vertexColors: true, transparent: true, opacity: 0, fog: false, depthWrite: false,
+    side: THREE.DoubleSide,
   });
   cnFullMoon = mdMesh(md, mat, false);
   cnFullMoon.frustumCulled = false;
@@ -2111,7 +2118,8 @@ cullChunks = function (ccx, ccz) {
     cnFullMoon.visible = want > 0.02 && scene.fog.near < 1e6 && state !== 'title';
     if (cnFullMoon.visible) {
       cnFullMoon.material.opacity = want * 0.97;
-      cnFullMoon.userData.halo.material.opacity = want * 0.22;
+      /* through Pearl's glass the FACE is the show — the halo steps back */
+      cnFullMoon.userData.halo.material.opacity = want * (CINE.id === 'cnScope' ? 0.05 : 0.22);
       if (typeof nmMoonMesh !== 'undefined' && nmMoonMesh && want > 0.3) nmMoonMesh.visible = false;
     }
   }
