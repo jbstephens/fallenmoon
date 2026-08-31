@@ -7015,7 +7015,9 @@ function hitBossClaw() {
   const cp = B.st === 'stuck' ? B.slamPos : bossClawPos();
   burst(psSpark, cp[0], groundH(cp[0], cp[1]) + 0.8, cp[1], 12, 2.2, 1.8, 0.5);
   if (B.st === 'stuck' || B.st === 'dizzy') B.t = Math.min(B.t, 1.2);   // brief extra window
-  dealBossDamage(12);            // 6x — the telegraphed weakness pays off decisively
+  dealBossDamage(16);            // 8x — the telegraphed weakness pays off decisively
+  // (was 6x: the 40%-commit slam mercy sped the mashing kid up ~7%, which
+  //  erased the aimer's lead — the reward scales with the mercy)
 }
 /* one hint per PHASE, and each one names what that phase actually does.
    Phase 1 keeps its save flag (so it stays a once-ever line); 2 and 3 are
