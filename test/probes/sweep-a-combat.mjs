@@ -464,10 +464,16 @@ if (want('tort')) {
     }
     await teleGate(api, 'tortSlam', 'tortoise shell slam', 2);
     await teleGate(api, 'tortRoll', 'tortoise roll', 2);
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 110; i++) {
       if ((await tele(api, 'islesGull')).length >= 2) break;
+      /* a gull teleported away from its own home flies HOME instead of
+         attacking (the leash), so move the home with it — setup only; the
+         windup still comes from the gull's own state machine */
       await api.eval(`fCallGull();
-        for (const g of FGULLS) if (!g.dead && g.st === 'drift') { g.x = P.x + 3.4; g.z = P.z; }
+        for (const g of FGULLS) {
+          if (g.dead || g.st !== 'drift') continue;
+          g.sx = P.x; g.sz = P.z; g.x = P.x + 3.4; g.z = P.z; g.t = 0;
+        }
         0`);
       await sleep(300);
     }
