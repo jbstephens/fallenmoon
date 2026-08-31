@@ -98,10 +98,34 @@ const beacon = (() => {
   scene.add(m);
   return m;
 })();
+/* ── THE TELEGRAPH LEDGER ──────────────────────────────────────────────
+   Every hostile windup, measured in SIM TICKS on the real path (a frame is
+   not game time). House law: ≥54 ticks — 0.9 s — of visible warning before
+   anything may touch her. Suites read `window.__fmTele` and assert it; the
+   entity carries its own start tick so nothing here is a test hook that
+   could disagree with the mechanic it measures. */
+window.__fmTele = [];
+function fmTeleStart(o) { o.teleTick = simTick; }
+function fmTeleFire(who, o) {
+  if (o.teleTick === undefined || o.teleTick === null) return;
+  if (window.__fmTele.length < 3000) window.__fmTele.push({ who, ticks: simTick - o.teleTick });
+  o.teleTick = undefined;
+}
+/* boss arenas register here: inside one, the guardian IS the answer and a
+   bobbing orb over its head reads as a phantom will-o'-wisp. The compass
+   (△ pulse + objBearing) keeps pointing — only the marker hides. */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+function beaconMutedHere() {
+  for (const a of window.__BEACON_MUTE) {
+    if (a.live && !a.live()) continue;
+    if (Math.hypot(P.x - a.x, P.z - a.z) < a.r) return true;
+  }
+  return false;
+}
 function updateBeacon(now) {
   const inWorld = state === 'play' || state === 'dialog' || state === 'pause';
   const o = (inWorld && QUEST.q >= 2) ? objectivePoint() : null;
-  if (!o) { beacon.visible = false; return; }
+  if (!o || beaconMutedHere()) { beacon.visible = false; return; }
   beacon.visible = true;
   const bob = Math.sin(now / 520) * 0.28;
   beacon.position.set(o.x, groundH(o.x, o.z) + 3.6 + bob, o.z);

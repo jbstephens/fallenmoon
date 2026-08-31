@@ -666,13 +666,13 @@ function tickCrab(cr) {
     // v3: leashed to the patrol ground — no kiting crab trains to the village
     if (d2p > 13 || Math.hypot(cr.x - cr.sx, cr.z - cr.sz) > 28) { cr.st = 'patrol'; cr.t = 0; }
     else if (d2p < 3.6 && cr.lungeCD <= 0) {
-      cr.st = 'tele'; cr.t = 0;
+      cr.st = 'tele'; cr.t = 0; fmTeleStart(cr);
       SFX.click();
     }
   } else if (cr.st === 'tele') {
-    // claws up, rattling — the read
-    if (cr.t > 0.55) {
-      cr.st = 'lunge'; cr.t = 0;
+    // claws up, rattling — the read (a full 0.9 s of it)
+    if (cr.t > 0.90) {
+      cr.st = 'lunge'; cr.t = 0; fmTeleFire('scorchCrab', cr);
       const d = Math.hypot(P.x - cr.x, P.z - cr.z) || 1;
       cr.dir = [(P.x - cr.x) / d, (P.z - cr.z) / d];
       SFX.click();
@@ -685,9 +685,9 @@ function tickCrab(cr) {
     cr.x = lr[0]; cr.z = lr[1];
     // v3: a well-timed jump sails over the pinch
     if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z, cr.c.root);
-    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
+    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.45; }
   } else if (cr.st === 'recover') {
-    if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
+    if (cr.t > 0.50) { cr.st = 'aggro'; cr.t = 0; }   // recovery shaved to pay for the windup
   }
   // soft push so it never overlaps the player standing still
   if (d2p < 1.35 && cr.st !== 'lunge') {
@@ -762,12 +762,12 @@ function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
       w.z += (P.z - w.z) / d * 1.25 * DT;
       faceP();
     }
-    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; SFX.chirp(); }   // rear-up + chirp
+    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; fmTeleStart(w); SFX.chirp(); }   // rear-up + chirp
   } else if (w.st === 'tele') {
     faceP();
     w.y = gy + 2.15 + Math.sin(w.t * 18) * 0.06;
-    if (w.t > 0.55) {
-      w.st = 'dive'; w.t = 0;
+    if (w.t > 0.90) {           // a full 0.9 s reared up before it stoops
+      w.st = 'dive'; w.t = 0; fmTeleFire('sunImp', w);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - w.x, dy = ty - w.y, dz = P.z - w.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -799,7 +799,7 @@ function popWisp(w) {
    Proximity always wakes it — no quest-state excuses. */
 const BOSS_HP = 90;
 const BOSS = {
-  c: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
+  c: null, mark: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
   hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
   x: GROTTO_B.x, z: GROTTO_B.z - 2, ang: Math.PI,
   slamPos: [0, 0], chargeDir: [0, 0], chargeN: 0,
@@ -825,6 +825,7 @@ function refreshBossBar(hitFlash) {
     bossBarShown = want;
     bossBarEl.classList.toggle('on', want);
     if (want) bossNameEl.textContent = 'THE SUNSTRUCK KING-CRAB';
+const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 60%
     if (!want) bossBarEl.classList.remove('hit');
   }
   if (!want) return;
@@ -842,6 +843,29 @@ function refreshBossBar(hitFlash) {
 function calmBossEyes(t) {
   const colA = BOSS.c.eyeGlow.geometry.attributes.color;
   for (let i = 0; i < colA.count; i++) {
+  if (!BOSS.mark) BOSS.mark = buildSlamMark();
+}
+/* THE SLAM MARK — a baked ground ring burning at the COMMITTED strike point,
+   so the slam is a place you can walk out of instead of a place you already
+   are. One pooled annulus, unit radius, scaled per frame. No shadowBlur. */
+function buildSlamMark() {
+  /* a standing band, not a flat disc: the arena floor slopes, and a disc at
+     one Y buries itself in the sand (caught in the staged screenshot) */
+  const md = MD();
+  for (let i = 0; i < 20; i++) {
+    const a0 = i / 20 * TAU, a1 = (i + 1) / 20 * TAU;
+    pushQuad(md, [Math.cos(a0), 0, Math.sin(a0)], [Math.cos(a1), 0, Math.sin(a1)],
+      [Math.cos(a1) * 1.1, 0.55, Math.sin(a1) * 1.1], [Math.cos(a0) * 1.1, 0.55, Math.sin(a0) * 1.1],
+      i % 2 ? [1, 0.72, 0.34] : [1, 0.5, 0.18]);
+  }
+  const m = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  m.frustumCulled = false;
+  m.visible = false;
+  scene.add(m);
+  return m;
     colA.setXYZ(i, lerp(1.0, 0.15, t), lerp(0.62, 0.12, t), lerp(0.2, 0.1, t));
   }
   colA.needsUpdate = true;
@@ -886,25 +910,32 @@ function tickBoss() {
       keepInArena(B, 3.2);
       const wantSlam = B.phase !== 2;
       if (B.t > (B.phase === 3 ? 1.6 : 2.2)) {
-        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; SFX.click(); }
+        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; fmTeleStart(B); SFX.click(); }
         else if (!wantSlam || (B.phase === 3 && B.chargeN % 2 === 1)) { B.st = 'burrow'; B.t = 0; SFX.burrow(); }
         else B.t = 1.2;
       }
       break;
     }
     case 'slamTele':
-      B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
-      if (B.t > 0.75) {
-        B.st = 'slam'; B.t = 0;
+      /* it tracks you for the first 60% and then COMMITS: after that the
+         mark is burned into the sand and walking off it is the answer.
+         (It used to chase you all the way to impact — undodgeable.) */
+      if (B.t < BOSS_SLAM_TELE * 0.6) {
+        B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
+      }
+      if (B.t > BOSS_SLAM_TELE) {
+        B.st = 'slam'; B.t = 0; fmTeleFire('kingCrabSlam', B);
         SFX.thump(true);
         CAM.shake = 0.5;
         rumble({ duration: 280, strong: 0.9, weak: 0.6 });
         burst(psDust, B.slamPos[0], groundH(B.slamPos[0], B.slamPos[1]) + 0.3, B.slamPos[1], 22, 2.6, 2.2, 0.8);
-        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z, B.c.root);
+        // and a well-timed jump sails over the shockwave (the scorch-crab rule)
+        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5 &&
+            P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, B.x, B.z, B.c.root);
       }
       break;
     case 'slam':
-      if (B.t > 0.35) { B.st = 'stuck'; B.t = 0; }
+      if (B.t > 0.25) { B.st = 'stuck'; B.t = 0; }   // recovery shaved for the windup
       break;
     case 'stuck':   // the claw is down — HIT IT
       if (B.t > 2.3) { B.st = 'track'; B.t = 0; }
@@ -923,12 +954,12 @@ function tickBoss() {
       break;
     case 'emerge':
       faceP();
-      if (B.t > 0.7) { B.st = 'chargeTele'; B.t = 0; SFX.click(); }
+      if (B.t > 0.45) { B.st = 'chargeTele'; B.t = 0; fmTeleStart(B); SFX.click(); }   // shaved for the windup
       break;
     case 'chargeTele':
       faceP();
-      if (B.t > 0.65) {
-        B.st = 'charge'; B.t = 0;
+      if (B.t > 0.90) {          // reared and aimed for a full 0.9 s
+        B.st = 'charge'; B.t = 0; fmTeleFire('kingCrabCharge', B);
         const d = d2p || 1;
         B.chargeDir = [(P.x - B.x) / d, (P.z - B.z) / d];
         B.chargeN++;
@@ -1525,6 +1556,25 @@ function animateEnemies(dtv, now) {
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
   for (const cr of crabs) {
     if (cr.dead) continue;
+  /* the slam mark: it draws itself on the sand through the windup, brightest
+     once the crab has committed — the ring you have to be outside of */
+  if (B.mark) {
+    const tele = B.active && !B.defeated && B.st === 'slamTele' && B.c.root.visible;
+    B.mark.visible = tele;
+    if (tele) {
+      const k = clamp(B.t / BOSS_SLAM_TELE, 0, 1);
+      const mx = B.slamPos[0], mz = B.slamPos[1];
+      /* seat the band on the LOWEST ground it covers so a slope never eats it */
+      let lo = groundH(mx, mz);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * TAU;
+        lo = Math.min(lo, groundH(mx + Math.cos(a) * 2.5, mz + Math.sin(a) * 2.5));
+      }
+      B.mark.position.set(mx, lo - 0.05, mz);
+      B.mark.scale.set(2.5, 1, 2.5);
+      B.mark.material.opacity = 0.25 + k * 0.55 + Math.sin(now / 70) * 0.08 * k;
+    }
+  }
     const cdx = cr.x - ccx, cdz = cr.z - ccz;
     const cd2 = cdx * cdx + cdz * cdz;
     const vis = cd2 < 33 * 33;   // v3: fog haze owns everything past ~33 m

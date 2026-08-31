@@ -2041,15 +2041,15 @@ function tickGulls() {
         // the PAIR goes together: one rears, the other a half-beat later
         for (const o of GULLS) {
           if (o.dead || o.pair !== g.pair || o.st !== 'wheel') continue;
-          o.st = 'tele'; o.t = o === g ? 0 : -0.42; o.cd = 6;
+          o.st = 'tele'; o.t = o === g ? 0 : -0.42; o.cd = 6; fmTeleStart(o);
         }
         SFX.gullCry();
       }
     } else if (g.st === 'tele') {
       // rear up, brighten, cry — the telegraph is unmistakable
       g.y += ((surf + 13.5) - g.y) * 0.06;
-      if (g.t > 0.72) {
-        g.st = 'dive'; g.t = 0;
+      if (g.t > 0.90) {         // a full 0.9 s reared and crying before the stoop
+        g.st = 'dive'; g.t = 0; fmTeleFire('seaGull', g);
         const ty = P.fy + 1.1;
         const dx = P.x - g.x, dy = ty - g.y, dz = P.z - g.z;
         const l = Math.hypot(dx, dy, dz) || 1;

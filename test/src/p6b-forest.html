@@ -1766,6 +1766,8 @@ function hitBoar(b) {
 
 /* ── hornet brain: paired divers ── */
 let hornetsPopped = 0;
+const HORNET_TELE = 0.95;           // ≥54 ticks of reared-up warning before the dive
+const HORNET_PAIR_STAGGER = 0.35;   // the partner dives this much LATER, never together
 function tickHornet(h) {
   if (h.dead) return;
   h.t += DT;
@@ -1790,17 +1792,21 @@ function tickHornet(h) {
       faceP();
     }
     if (d2p < 6.5) {
-      h.st = 'tele'; h.t = 0; SFX.buzz();
-      // THE PAIR: its partner rears up with it and they dive together
+      h.st = 'tele'; h.t = 0; fmTeleStart(h); SFX.buzz();
+      // THE PAIR: its partner rears up with it, then dives a beat LATER, so a
+      // single sidestep is never punished by a simultaneous second hit.
+      // (t counts UP toward HORNET_TELE, so a NEGATIVE start = a later dive.)
       for (const o of HORNETS) {
-        if (o !== h && !o.dead && o.pair === h.pair && o.st === 'drift') { o.st = 'tele'; o.t = -0.12; }
+        if (o !== h && !o.dead && o.pair === h.pair && o.st === 'drift') {
+          o.st = 'tele'; o.t = -HORNET_PAIR_STAGGER; fmTeleStart(o);
+        }
       }
     }
   } else if (h.st === 'tele') {
     faceP();
     h.y = gy + 2.2 + Math.sin(h.t * 22) * 0.07;
-    if (h.t > 0.38) {
-      h.st = 'dive'; h.t = 0;
+    if (h.t > HORNET_TELE) {
+      h.st = 'dive'; h.t = 0; fmTeleFire('emberHornet', h);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - h.x, dy = ty - h.y, dz = P.z - h.z;
       const l = Math.hypot(dx, dy, dz) || 1;

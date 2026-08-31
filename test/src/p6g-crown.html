@@ -2124,14 +2124,14 @@ function tickFawn(f) {
   } else if (f.st === 'alert') {
     f.ang = Math.atan2(P.x - f.x, P.z - f.z);
     if (d2p > 18) { f.st = 'graze'; f.t = 0; }
-    else if (f.t > 0.5 && f.cd <= 0 && d2p < 9) { f.st = 'crouch'; f.t = 0; SFX.fawnHop(); }
+    else if (f.t > 0.5 && f.cd <= 0 && d2p < 9) { f.st = 'crouch'; f.t = 0; fmTeleStart(f); SFX.fawnHop(); }
     else if (f.t > 0.5 && d2p >= 9) moveFawn(f, P.x, P.z, 3.2);
   } else if (f.st === 'crouch') {
     /* THE TELEGRAPH: it drops, it stares, and only then does it jump */
     f.ang = Math.atan2(P.x - f.x, P.z - f.z);
     if ((simTick % 6) === 0) psSpark.spawn(f.x, f.y + 0.4, f.z, 0, 0.6, 0, 0.35);
-    if (f.t > 0.62) {
-      f.st = 'pounce'; f.t = 0; f.hopT = 0;
+    if (f.t > 0.90) {           // a full 0.9 s crouched before the hop
+      f.st = 'pounce'; f.t = 0; f.hopT = 0; fmTeleFire('emberFawn', f);
       f.hopFrom = [f.x, f.z];
       const d = d2p || 1;
       f.hopTo = [f.x + (P.x - f.x) / d * Math.min(d + 1.2, 6.5), f.z + (P.z - f.z) / d * Math.min(d + 1.2, 6.5)];
@@ -2384,7 +2384,7 @@ function stagEmberDrop() {
     e.x = clamp(P.x + (Math.random() - 0.5) * 16, K_ARENA.x - K_ARENA.r + 6, K_ARENA.x + K_ARENA.r - 6);
     e.z = clamp(P.z + (Math.random() - 0.5) * 16, K_ARENA.z - K_ARENA.r + 6, K_ARENA.z + K_ARENA.r - 6);
     if (Math.random() < 0.3) { e.x = K_ARENA.x + Math.cos(a) * d; e.z = K_ARENA.z + Math.sin(a) * d; }
-    e.t = 0; e.hit = false;
+    e.t = 0; e.hit = false; fmTeleStart(e);
     return;
   }
 }
@@ -2583,7 +2583,8 @@ function tickStag() {
     case 'roar':
       if (S.t > 1.4) {
         S.phase++;
-        S.hp = stagPhaseHp(S.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        S.hp = Math.min(S.hp, stagPhaseHp(S.phase));
         refreshStagBar(false);
         S.st = 'track'; S.t = 0;
         if (S.phase === 3) SFX.stagCry();
@@ -2594,13 +2595,13 @@ function tickStag() {
   for (const e of S.embers) {
     if (e.t < 0) continue;
     e.t += DT;
-    if (e.t < 0.85) {
+    if (e.t < 0.95) {           // a full second of falling sparks before it lands
       if ((simTick % 5) === 0) {
         psSpark.spawn(e.x + (Math.random() - 0.5) * 1.6, groundH(e.x, e.z) + 3.5 + Math.random() * 2,
           e.z + (Math.random() - 0.5) * 1.6, 0, -2.4, 0, 0.5);
       }
     } else if (!e.hit) {
-      e.hit = true;
+      e.hit = true; fmTeleFire('stagEmber', e);
       burst(psSpark, e.x, groundH(e.x, e.z) + 0.5, e.z, 16, 2.4, 1.4, 0.5);
       SFX.emberFall();
       if (Math.hypot(P.x - e.x, P.z - e.z) < 2.0 && !underBough(P.x, P.z)) {

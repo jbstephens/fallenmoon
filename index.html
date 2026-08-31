@@ -5101,10 +5101,34 @@ const beacon = (() => {
   scene.add(m);
   return m;
 })();
+/* ── THE TELEGRAPH LEDGER ──────────────────────────────────────────────
+   Every hostile windup, measured in SIM TICKS on the real path (a frame is
+   not game time). House law: ≥54 ticks — 0.9 s — of visible warning before
+   anything may touch her. Suites read `window.__fmTele` and assert it; the
+   entity carries its own start tick so nothing here is a test hook that
+   could disagree with the mechanic it measures. */
+window.__fmTele = [];
+function fmTeleStart(o) { o.teleTick = simTick; }
+function fmTeleFire(who, o) {
+  if (o.teleTick === undefined || o.teleTick === null) return;
+  if (window.__fmTele.length < 3000) window.__fmTele.push({ who, ticks: simTick - o.teleTick });
+  o.teleTick = undefined;
+}
+/* boss arenas register here: inside one, the guardian IS the answer and a
+   bobbing orb over its head reads as a phantom will-o'-wisp. The compass
+   (△ pulse + objBearing) keeps pointing — only the marker hides. */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+function beaconMutedHere() {
+  for (const a of window.__BEACON_MUTE) {
+    if (a.live && !a.live()) continue;
+    if (Math.hypot(P.x - a.x, P.z - a.z) < a.r) return true;
+  }
+  return false;
+}
 function updateBeacon(now) {
   const inWorld = state === 'play' || state === 'dialog' || state === 'pause';
   const o = (inWorld && QUEST.q >= 2) ? objectivePoint() : null;
-  if (!o) { beacon.visible = false; return; }
+  if (!o || beaconMutedHere()) { beacon.visible = false; return; }
   beacon.visible = true;
   const bob = Math.sin(now / 520) * 0.28;
   beacon.position.set(o.x, groundH(o.x, o.z) + 3.6 + bob, o.z);
@@ -6557,13 +6581,13 @@ function tickCrab(cr) {
     // v3: leashed to the patrol ground — no kiting crab trains to the village
     if (d2p > 13 || Math.hypot(cr.x - cr.sx, cr.z - cr.sz) > 28) { cr.st = 'patrol'; cr.t = 0; }
     else if (d2p < 3.6 && cr.lungeCD <= 0) {
-      cr.st = 'tele'; cr.t = 0;
+      cr.st = 'tele'; cr.t = 0; fmTeleStart(cr);
       SFX.click();
     }
   } else if (cr.st === 'tele') {
-    // claws up, rattling — the read
-    if (cr.t > 0.55) {
-      cr.st = 'lunge'; cr.t = 0;
+    // claws up, rattling — the read (a full 0.9 s of it)
+    if (cr.t > 0.90) {
+      cr.st = 'lunge'; cr.t = 0; fmTeleFire('scorchCrab', cr);
       const d = Math.hypot(P.x - cr.x, P.z - cr.z) || 1;
       cr.dir = [(P.x - cr.x) / d, (P.z - cr.z) / d];
       SFX.click();
@@ -6576,9 +6600,9 @@ function tickCrab(cr) {
     cr.x = lr[0]; cr.z = lr[1];
     // v3: a well-timed jump sails over the pinch
     if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z, cr.c.root);
-    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
+    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.45; }
   } else if (cr.st === 'recover') {
-    if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
+    if (cr.t > 0.50) { cr.st = 'aggro'; cr.t = 0; }   // recovery shaved to pay for the windup
   }
   // soft push so it never overlaps the player standing still
   if (d2p < 1.35 && cr.st !== 'lunge') {
@@ -6653,12 +6677,12 @@ function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
       w.z += (P.z - w.z) / d * 1.25 * DT;
       faceP();
     }
-    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; SFX.chirp(); }   // rear-up + chirp
+    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; fmTeleStart(w); SFX.chirp(); }   // rear-up + chirp
   } else if (w.st === 'tele') {
     faceP();
     w.y = gy + 2.15 + Math.sin(w.t * 18) * 0.06;
-    if (w.t > 0.55) {
-      w.st = 'dive'; w.t = 0;
+    if (w.t > 0.90) {           // a full 0.9 s reared up before it stoops
+      w.st = 'dive'; w.t = 0; fmTeleFire('sunImp', w);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - w.x, dy = ty - w.y, dz = P.z - w.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -6690,7 +6714,7 @@ function popWisp(w) {
    Proximity always wakes it — no quest-state excuses. */
 const BOSS_HP = 90;
 const BOSS = {
-  c: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
+  c: null, mark: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
   hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
   x: GROTTO_B.x, z: GROTTO_B.z - 2, ang: Math.PI,
   slamPos: [0, 0], chargeDir: [0, 0], chargeN: 0,
@@ -6716,6 +6740,7 @@ function refreshBossBar(hitFlash) {
     bossBarShown = want;
     bossBarEl.classList.toggle('on', want);
     if (want) bossNameEl.textContent = 'THE SUNSTRUCK KING-CRAB';
+const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 60%
     if (!want) bossBarEl.classList.remove('hit');
   }
   if (!want) return;
@@ -6733,6 +6758,29 @@ function refreshBossBar(hitFlash) {
 function calmBossEyes(t) {
   const colA = BOSS.c.eyeGlow.geometry.attributes.color;
   for (let i = 0; i < colA.count; i++) {
+  if (!BOSS.mark) BOSS.mark = buildSlamMark();
+}
+/* THE SLAM MARK — a baked ground ring burning at the COMMITTED strike point,
+   so the slam is a place you can walk out of instead of a place you already
+   are. One pooled annulus, unit radius, scaled per frame. No shadowBlur. */
+function buildSlamMark() {
+  /* a standing band, not a flat disc: the arena floor slopes, and a disc at
+     one Y buries itself in the sand (caught in the staged screenshot) */
+  const md = MD();
+  for (let i = 0; i < 20; i++) {
+    const a0 = i / 20 * TAU, a1 = (i + 1) / 20 * TAU;
+    pushQuad(md, [Math.cos(a0), 0, Math.sin(a0)], [Math.cos(a1), 0, Math.sin(a1)],
+      [Math.cos(a1) * 1.1, 0.55, Math.sin(a1) * 1.1], [Math.cos(a0) * 1.1, 0.55, Math.sin(a0) * 1.1],
+      i % 2 ? [1, 0.72, 0.34] : [1, 0.5, 0.18]);
+  }
+  const m = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  m.frustumCulled = false;
+  m.visible = false;
+  scene.add(m);
+  return m;
     colA.setXYZ(i, lerp(1.0, 0.15, t), lerp(0.62, 0.12, t), lerp(0.2, 0.1, t));
   }
   colA.needsUpdate = true;
@@ -6777,25 +6825,32 @@ function tickBoss() {
       keepInArena(B, 3.2);
       const wantSlam = B.phase !== 2;
       if (B.t > (B.phase === 3 ? 1.6 : 2.2)) {
-        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; SFX.click(); }
+        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; fmTeleStart(B); SFX.click(); }
         else if (!wantSlam || (B.phase === 3 && B.chargeN % 2 === 1)) { B.st = 'burrow'; B.t = 0; SFX.burrow(); }
         else B.t = 1.2;
       }
       break;
     }
     case 'slamTele':
-      B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
-      if (B.t > 0.75) {
-        B.st = 'slam'; B.t = 0;
+      /* it tracks you for the first 60% and then COMMITS: after that the
+         mark is burned into the sand and walking off it is the answer.
+         (It used to chase you all the way to impact — undodgeable.) */
+      if (B.t < BOSS_SLAM_TELE * 0.6) {
+        B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
+      }
+      if (B.t > BOSS_SLAM_TELE) {
+        B.st = 'slam'; B.t = 0; fmTeleFire('kingCrabSlam', B);
         SFX.thump(true);
         CAM.shake = 0.5;
         rumble({ duration: 280, strong: 0.9, weak: 0.6 });
         burst(psDust, B.slamPos[0], groundH(B.slamPos[0], B.slamPos[1]) + 0.3, B.slamPos[1], 22, 2.6, 2.2, 0.8);
-        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z, B.c.root);
+        // and a well-timed jump sails over the shockwave (the scorch-crab rule)
+        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5 &&
+            P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, B.x, B.z, B.c.root);
       }
       break;
     case 'slam':
-      if (B.t > 0.35) { B.st = 'stuck'; B.t = 0; }
+      if (B.t > 0.25) { B.st = 'stuck'; B.t = 0; }   // recovery shaved for the windup
       break;
     case 'stuck':   // the claw is down — HIT IT
       if (B.t > 2.3) { B.st = 'track'; B.t = 0; }
@@ -6814,12 +6869,12 @@ function tickBoss() {
       break;
     case 'emerge':
       faceP();
-      if (B.t > 0.7) { B.st = 'chargeTele'; B.t = 0; SFX.click(); }
+      if (B.t > 0.45) { B.st = 'chargeTele'; B.t = 0; fmTeleStart(B); SFX.click(); }   // shaved for the windup
       break;
     case 'chargeTele':
       faceP();
-      if (B.t > 0.65) {
-        B.st = 'charge'; B.t = 0;
+      if (B.t > 0.90) {          // reared and aimed for a full 0.9 s
+        B.st = 'charge'; B.t = 0; fmTeleFire('kingCrabCharge', B);
         const d = d2p || 1;
         B.chargeDir = [(P.x - B.x) / d, (P.z - B.z) / d];
         B.chargeN++;
@@ -7416,6 +7471,25 @@ function animateEnemies(dtv, now) {
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
   for (const cr of crabs) {
     if (cr.dead) continue;
+  /* the slam mark: it draws itself on the sand through the windup, brightest
+     once the crab has committed — the ring you have to be outside of */
+  if (B.mark) {
+    const tele = B.active && !B.defeated && B.st === 'slamTele' && B.c.root.visible;
+    B.mark.visible = tele;
+    if (tele) {
+      const k = clamp(B.t / BOSS_SLAM_TELE, 0, 1);
+      const mx = B.slamPos[0], mz = B.slamPos[1];
+      /* seat the band on the LOWEST ground it covers so a slope never eats it */
+      let lo = groundH(mx, mz);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * TAU;
+        lo = Math.min(lo, groundH(mx + Math.cos(a) * 2.5, mz + Math.sin(a) * 2.5));
+      }
+      B.mark.position.set(mx, lo - 0.05, mz);
+      B.mark.scale.set(2.5, 1, 2.5);
+      B.mark.material.opacity = 0.25 + k * 0.55 + Math.sin(now / 70) * 0.08 * k;
+    }
+  }
     const cdx = cr.x - ccx, cdz = cr.z - ccz;
     const cd2 = cdx * cdx + cdz * cdz;
     const vis = cd2 < 33 * 33;   // v3: fog haze owns everything past ~33 m
@@ -9274,6 +9348,8 @@ function hitBoar(b) {
 
 /* ── hornet brain: paired divers ── */
 let hornetsPopped = 0;
+const HORNET_TELE = 0.95;           // ≥54 ticks of reared-up warning before the dive
+const HORNET_PAIR_STAGGER = 0.35;   // the partner dives this much LATER, never together
 function tickHornet(h) {
   if (h.dead) return;
   h.t += DT;
@@ -9298,17 +9374,21 @@ function tickHornet(h) {
       faceP();
     }
     if (d2p < 6.5) {
-      h.st = 'tele'; h.t = 0; SFX.buzz();
-      // THE PAIR: its partner rears up with it and they dive together
+      h.st = 'tele'; h.t = 0; fmTeleStart(h); SFX.buzz();
+      // THE PAIR: its partner rears up with it, then dives a beat LATER, so a
+      // single sidestep is never punished by a simultaneous second hit.
+      // (t counts UP toward HORNET_TELE, so a NEGATIVE start = a later dive.)
       for (const o of HORNETS) {
-        if (o !== h && !o.dead && o.pair === h.pair && o.st === 'drift') { o.st = 'tele'; o.t = -0.12; }
+        if (o !== h && !o.dead && o.pair === h.pair && o.st === 'drift') {
+          o.st = 'tele'; o.t = -HORNET_PAIR_STAGGER; fmTeleStart(o);
+        }
       }
     }
   } else if (h.st === 'tele') {
     faceP();
     h.y = gy + 2.2 + Math.sin(h.t * 22) * 0.07;
-    if (h.t > 0.38) {
-      h.st = 'dive'; h.t = 0;
+    if (h.t > HORNET_TELE) {
+      h.st = 'dive'; h.t = 0; fmTeleFire('emberHornet', h);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - h.x, dy = ty - h.y, dz = P.z - h.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -10975,11 +11055,23 @@ const WYRM = {
   phase: 0, st: 'sleep', t: 0, hp: WYRM_HP, hpMax: WYRM_HP,
   x: H3.x + 2, z: H3.z - 3, ang: 2.4, flash: 0,
   bodyHits: 0, browHits: 0, trail: [], slabT: 0, missStreak: 0,
-  eruptX: 0, eruptZ: 0, sweepA: 0, sweepDone: false, devils: [],
+  eruptX: 0, eruptZ: 0, sweepA: 0, sweepDone: false, devils: [], wakeChips: 0,
   cureT: 0, poolWet: false, barShown: false,
 };
 WYRM.c = buildSiltWyrm();
-for (let i = 0; i < 2; i++) WYRM.devils.push({ m: buildDustDevil(), x: 0, z: 0, tx: 0, tz: 0, on: false, t: 0 });
+/* no phantom orb over the Wyrm's coil — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: H3.x, z: H3.z, r: H3.r, live: () => !(SAVE && SAVE.wyrmDone) });
+const WYRM_DEVIL_ARM = 0.95;   // seconds spun up on the rim before it can touch you
+const WYRM_ERUPT_T = 0.95;     // the converging swirl: a full second of warning
+/* where the silt WAKE actually is this tick (the erupt swirl travels) */
+function wyrmWakePos() {
+  const W = WYRM;
+  if (W.st !== 'erupt') return { x: W.x, z: W.z };
+  const ek = clamp(W.t / WYRM_ERUPT_T, 0, 1);
+  return { x: lerp(W.x, W.eruptX, ek), z: lerp(W.z, W.eruptZ, ek) };
+}
+for (let i = 0; i < 2; i++) WYRM.devils.push({ m: buildDustDevil(), x: 0, z: 0, tx: 0, tz: 0, on: false, t: 0, arm: 0 });
 function wyrmPhaseHp(ph) { return ph <= 1 ? WYRM_HP : ph === 2 ? 48 : 24; }
 
 /* the wyrm's own HP bar — the standing boss convention, shared DOM */
@@ -11101,8 +11193,8 @@ function tickWyrm() {
     case 'wakeup':
       if (W.t > 1.7) { W.st = 'dive'; W.t = 0; }
       break;
-    case 'dive':      // slides under the silt
-      if (W.t > 0.7) { W.st = 'swim'; W.t = 0; W.slabT = 0; SFX.burrow(); }
+    case 'dive':      // slides under the silt (recovery shaved to pay for the longer windups)
+      if (W.t > 0.45) { W.st = 'swim'; W.t = 0; W.slabT = 0; SFX.burrow(); }
       break;
     case 'swim': {
       // the signature: it swims the dry silt like water. Wake = the contract.
@@ -11126,7 +11218,7 @@ function tickWyrm() {
       } else {
         W.slabT = 0;
         if (d2p < 1.7 && W.t > 1.1) {
-          W.st = 'erupt'; W.t = 0;
+          W.st = 'erupt'; W.t = 0; fmTeleStart(W);
           W.eruptX = P.x; W.eruptZ = P.z;
           SFX.wyrmRumble();
           rumble({ duration: 200, strong: 0.5, weak: 0.7 });
@@ -11136,13 +11228,14 @@ function tickWyrm() {
       break;
     }
     case 'erupt':
-      // the swirl converges — HALF A SECOND to move or jump
+      // the swirl converges — a FULL SECOND of visible warning to move or jump
       if ((simTick & 1) === 0) {
         const a = Math.random() * TAU;
         psDust.spawn(W.eruptX + Math.cos(a) * 1.4, groundH(W.eruptX, W.eruptZ) + 0.3, W.eruptZ + Math.sin(a) * 1.4,
           -Math.cos(a) * 1.6, 0.8, -Math.sin(a) * 1.6, 0.4);
       }
-      if (W.t > 0.52) {
+      if (W.t > WYRM_ERUPT_T) {
+        fmTeleFire('wyrmErupt', W);
         W.x = W.eruptX; W.z = W.eruptZ;
         // the wake IS the contract: it stands at the strike point, on screen,
         // before any damage may land (matrixWorld fresh for the frustum test)
@@ -11178,14 +11271,14 @@ function tickWyrm() {
       // body out of the silt, slithering — ALWAYS chippable
       if (W.t > (W.missStreak >= 2 ? 0.3 : 2.0)) {
         if (W.missStreak >= 2) { W.st = 'daze'; W.t = 0; W.missStreak = 0; SFX.wyrmCry(); }
-        else if (W.phase >= 2 && !W.sweepDone && d2p < 6) { W.st = 'sweepTele'; W.t = 0; SFX.click(); }
+        else if (W.phase >= 2 && !W.sweepDone && d2p < 6) { W.st = 'sweepTele'; W.t = 0; fmTeleStart(W); SFX.click(); }
         else { W.st = 'dive'; W.t = 0; W.sweepDone = false; }
       }
       break;
     }
     case 'sweepTele':
-      if (W.t > 0.5) {
-        W.st = 'sweep'; W.t = 0;
+      if (W.t > 0.95) {          // a full second of coiled tail before the scythe
+        W.st = 'sweep'; W.t = 0; fmTeleFire('wyrmSweep', W);
         W.sweepA = 0; W.sweepDone = true;
         SFX.wyrmErupt();
         rumble({ duration: 220, strong: 0.6, weak: 0.5 });
@@ -11210,7 +11303,8 @@ function tickWyrm() {
     case 'roar':
       if (W.t > 1.5) {
         W.phase++;
-        W.hp = wyrmPhaseHp(W.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        W.hp = Math.min(W.hp, wyrmPhaseHp(W.phase));
         refreshWyrmBar(false);
         W.st = 'dive'; W.t = 0;
         if (W.phase === 3) SFX.wyrmCry();
@@ -11221,12 +11315,19 @@ function tickWyrm() {
   if (W.phase === 3 && W.st !== 'roar') {
     for (const dv of W.devils) {
       if (!dv.on) {
-        dv.on = true; dv.t = 0;
+        // born ON THE RIM, spinning up in plain sight — it never appears on top of you
+        dv.on = true; dv.t = 0; dv.arm = 0; fmTeleStart(dv);
         const a = Math.random() * TAU;
-        dv.x = H3.x + Math.cos(a) * 9; dv.z = H3.z + Math.sin(a) * 9;
+        dv.x = H3.x + Math.cos(a) * (H3.r - 1.4); dv.z = H3.z + Math.sin(a) * (H3.r - 1.4);
         dv.tx = H3.x + (Math.random() - 0.5) * 18; dv.tz = H3.z + (Math.random() - 0.5) * 18;
       }
       dv.t += DT;
+      if (dv.arm < WYRM_DEVIL_ARM) {
+        // the arm window: visible, spinning, inert — no drift, no contact
+        dv.arm += DT;
+        continue;
+      }
+      fmTeleFire('wyrmDevil', dv);
       const dd = Math.hypot(dv.tx - dv.x, dv.tz - dv.z);
       if (dd < 1) { dv.tx = H3.x + (Math.random() - 0.5) * 20; dv.tz = H3.z + (Math.random() - 0.5) * 20; }
       else { dv.x += (dv.tx - dv.x) / dd * 2.3 * DT; dv.z += (dv.tz - dv.z) / dd * 2.3 * DT; }
@@ -11239,13 +11340,37 @@ function tickWyrm() {
     for (const dv of W.devils) dv.on = false;
   }
 }
+/* the ONE exposed-set expression — the swing chain and the telemetry both read it */
+function wyrmExposedNow() {
+  const W = WYRM;
+  if (!W.active || W.defeated) return false;
+  return W.st === 'surface' || W.st === 'daze' || W.st === 'sweep' || W.st === 'sweepTele' ||
+         W.st === 'wakeup' || W.st === 'roar' || W.st === 'slamRock';
+}
+/* the WAKE-CHIP: swinging at the silt trail is not nothing. Dull, but honest. */
+function hitWyrmWake(wx, wz) {
+  const W = WYRM;
+  W.wakeChips = (W.wakeChips || 0) + 1;
+  W.flash = 0.10;
+  SFX.thump(false);
+  P.hitstop = 2;
+  CAM.shake = 0.06;
+  rumble({ duration: 60, strong: 0.25, weak: 0.2 });
+  burst(psDust, wx, groundH(wx, wz) + 0.5, wz, 12, 1.8, 1.4, 0.55);
+  dealWyrmDamage(1);
+}
 /* what the sword can reach — wired into the master swing chain below */
 function wyrmSwingHits() {
   const W = WYRM;
   if (!W.active || W.defeated) return false;
-  const exposed = W.st === 'surface' || W.st === 'daze' || W.st === 'sweep' || W.st === 'sweepTele' ||
-                  W.st === 'wakeup' || W.st === 'roar' || W.st === 'slamRock';
-  if (!exposed) return false;
+  if (!wyrmExposedNow()) {
+    // buried, but the wake is right there: a dull silt-chip so the swing reads
+    if (W.st === 'swim' || W.st === 'erupt') {
+      const wp = wyrmWakePos();
+      if (inSwingArc(wp.x, wp.z, 3.6, 1.4)) { hitWyrmWake(wp.x, wp.z); return true; }
+    }
+    return false;
+  }
   if (W.st === 'daze' && inSwingArc(W.x, W.z, 3.4, 1.4)) { hitWyrmBrow(); return true; }
   if (inSwingArc(W.x, W.z, 3.6, 1.4)) { hitWyrmBody(); return true; }
   return false;
@@ -11265,8 +11390,9 @@ function animateWyrm(dtv, now) {
   if (wakeOn) {
     if (W.st === 'erupt') {
       // the swirl CONVERGES on the strike point — danger reads at your feet
-      const ek = clamp(W.t / 0.52, 0, 1);
-      W.c.wakeRoot.position.set(lerp(W.x, W.eruptX, ek), gy - 0.12 + ek * 0.25, lerp(W.z, W.eruptZ, ek));
+      const ek = clamp(W.t / WYRM_ERUPT_T, 0, 1);
+      const wp = wyrmWakePos();
+      W.c.wakeRoot.position.set(wp.x, gy - 0.12 + ek * 0.25, wp.z);
     } else {
       W.c.wakeRoot.position.set(W.x, gy - 0.12 + Math.sin(w * 7) * 0.05, W.z);
     }
@@ -13167,9 +13293,11 @@ function syncTideTelemetry() {
     lastDmgCheck.vis = sv; lastDmgCheck.frus = sf;
   }
   T.wyrmBodyVis = WYRM.c.root.visible;
-  T.wyrmStrikeable = WYRM.active && !WYRM.defeated &&
-    (WYRM.st === 'swim' || WYRM.st === 'erupt' || WYRM.st === 'slamRock' ||
-     WYRM.st === 'sweep' || WYRM.st === 'sweepTele' || WYRM.st === 'surface' || WYRM.st === 'daze');
+  // the ONE expression the sword actually consults — no more, no less
+  T.wyrmStrikeable = wyrmExposedNow();
+  T.wyrmSt = WYRM.st;
+  T.wyrmWakeChips = WYRM.wakeChips || 0;
+  T.wyrmWakeChippable = WYRM.active && !WYRM.defeated && (WYRM.st === 'swim' || WYRM.st === 'erupt');
   T.onSlab = onSlabAt(P.x, P.z);
   T.carryShield = !!P.carryShield;
   T.flood = flooded();
@@ -15310,15 +15438,15 @@ function tickGulls() {
         // the PAIR goes together: one rears, the other a half-beat later
         for (const o of GULLS) {
           if (o.dead || o.pair !== g.pair || o.st !== 'wheel') continue;
-          o.st = 'tele'; o.t = o === g ? 0 : -0.42; o.cd = 6;
+          o.st = 'tele'; o.t = o === g ? 0 : -0.42; o.cd = 6; fmTeleStart(o);
         }
         SFX.gullCry();
       }
     } else if (g.st === 'tele') {
       // rear up, brighten, cry — the telegraph is unmistakable
       g.y += ((surf + 13.5) - g.y) * 0.06;
-      if (g.t > 0.72) {
-        g.st = 'dive'; g.t = 0;
+      if (g.t > 0.90) {         // a full 0.9 s reared and crying before the stoop
+        g.st = 'dive'; g.t = 0; fmTeleFire('seaGull', g);
         const ty = P.fy + 1.1;
         const dx = P.x - g.x, dy = ty - g.y, dz = P.z - g.z;
         const l = Math.hypot(dx, dy, dz) || 1;
@@ -17902,12 +18030,12 @@ function tickFGull(g) {
       g.z += (P.z - g.z) / d * 1.45 * DT;
       faceP();
     }
-    if (d2p < 4.8) { g.st = 'tele'; g.t = 0; SFX.gullCry(); }
+    if (d2p < 4.8) { g.st = 'tele'; g.t = 0; fmTeleStart(g); SFX.gullCry(); }
   } else if (g.st === 'tele') {
     faceP();
     g.y = gy + 2.4 + Math.sin(g.t * 18) * 0.07;
-    if (g.t > 0.55) {
-      g.st = 'dive'; g.t = 0;
+    if (g.t > 0.90) {           // a readable hover before the stoop
+      g.st = 'dive'; g.t = 0; fmTeleFire('islesGull', g);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - g.x, dy = ty - g.y, dz = P.z - g.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -18126,6 +18254,9 @@ function buildHourTortoise() {
 }
 
 const TORT_HP = 84;
+/* no phantom orb over the casting pit — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 const TORT = {
   c: null, active: false, defeated: false, bellTaken: false,
   phase: 0, st: 'sleep', t: 0, hp: TORT_HP, hpMax: TORT_HP,
@@ -18285,8 +18416,8 @@ function tickTortoise() {
       T.x += (P.x - T.x) / d * sp * DT; T.z += (P.z - T.z) / d * sp * DT;
       keepInPit(T, 3.0);
       if (T.t > (T.phase === 3 ? 1.5 : 2.0)) {
-        if (T.phase >= 2 && (T.slamAlt++ & 1) === 0 && d2p < 12) { T.st = 'slamTele'; T.t = 0; SFX.click(); }
-        else { T.st = 'rollTele'; T.t = 0; SFX.tortCry(); }
+        if (T.phase >= 2 && (T.slamAlt++ & 1) === 0 && d2p < 12) { T.st = 'slamTele'; T.t = 0; fmTeleStart(T); SFX.click(); }
+        else { T.st = 'rollTele'; T.t = 0; fmTeleStart(T); SFX.tortCry(); }
       }
       break;
     }
@@ -18303,7 +18434,7 @@ function tickTortoise() {
         const d = d2p || 1;
         T.rollDir = [(P.x - T.x) / d, (P.z - T.z) / d];
         T.ang = Math.atan2(T.rollDir[0], T.rollDir[1]);
-        T.st = 'roll'; T.t = 0;
+        T.st = 'roll'; T.t = 0; fmTeleFire('tortRoll', T);
         SFX.tortRoll();
         rumble({ duration: 240, strong: 0.6, weak: 0.75 });
       }
@@ -18344,8 +18475,8 @@ function tickTortoise() {
     case 'slamTele':
       faceP();
       T.tip = 0;
-      if (T.t > 0.75) {
-        T.st = 'slam'; T.t = 0;
+      if (T.t > 0.95) {          // a full second reared up before the shell drops
+        T.st = 'slam'; T.t = 0; fmTeleFire('tortSlam', T);
         T.ringOn = true; T.ringR = 1.6; T.ringHit = false;
         SFX.thump(true); SFX.shockRing(); SFX.bellTone(110, 1.4);
         CAM.shake = 0.5;
@@ -18354,13 +18485,14 @@ function tickTortoise() {
       }
       break;
     case 'slam':
-      if (T.t > 1.9) { T.st = 'track'; T.t = 0; }
+      if (T.t > 1.7) { T.st = 'track'; T.t = 0; }   // recovery shaved to pay for the windup
       break;
     case 'roar':
       T.tip = Math.max(0, T.tip - DT * 2.4);
       if (T.t > 1.5) {
         T.phase++;
-        T.hp = tortPhaseHp(T.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        T.hp = Math.min(T.hp, tortPhaseHp(T.phase));
         refreshTortBar(false);
         T.st = 'track'; T.t = 0;
         if (T.phase === 3) { SFX.tortCry(); T.toneCD = 2.0; }
@@ -18371,7 +18503,12 @@ function tickTortoise() {
   if (T.ringOn) {
     T.ringR += 8.5 * DT;
     const dr = Math.abs(d2p - T.ringR);
-    if (!T.ringHit && dr < 1.7 && P.fy - groundH(P.x, P.z) < 0.62) {
+    /* THE JUMP HAS TO BE POSSIBLE, not merely arithmetically possible.
+       At the old band (1.7 m) no jump could clear it at all. At 1.1 m the
+       maths works but leaves ~0.1 s of timing tolerance — a frame-perfect
+       ask of a seven-year-old — so the clearance bar comes down with it
+       (0.62 -> 0.45 m of air), widening the window to ~0.18 s. */
+    if (!T.ringHit && dr < 1.1 && P.fy - groundH(P.x, P.z) < 0.45) {
       T.ringHit = true;
       hurtPlayer(1, T.x, T.z, T.c.root);
     }
@@ -22294,14 +22431,14 @@ function tickFawn(f) {
   } else if (f.st === 'alert') {
     f.ang = Math.atan2(P.x - f.x, P.z - f.z);
     if (d2p > 18) { f.st = 'graze'; f.t = 0; }
-    else if (f.t > 0.5 && f.cd <= 0 && d2p < 9) { f.st = 'crouch'; f.t = 0; SFX.fawnHop(); }
+    else if (f.t > 0.5 && f.cd <= 0 && d2p < 9) { f.st = 'crouch'; f.t = 0; fmTeleStart(f); SFX.fawnHop(); }
     else if (f.t > 0.5 && d2p >= 9) moveFawn(f, P.x, P.z, 3.2);
   } else if (f.st === 'crouch') {
     /* THE TELEGRAPH: it drops, it stares, and only then does it jump */
     f.ang = Math.atan2(P.x - f.x, P.z - f.z);
     if ((simTick % 6) === 0) psSpark.spawn(f.x, f.y + 0.4, f.z, 0, 0.6, 0, 0.35);
-    if (f.t > 0.62) {
-      f.st = 'pounce'; f.t = 0; f.hopT = 0;
+    if (f.t > 0.90) {           // a full 0.9 s crouched before the hop
+      f.st = 'pounce'; f.t = 0; f.hopT = 0; fmTeleFire('emberFawn', f);
       f.hopFrom = [f.x, f.z];
       const d = d2p || 1;
       f.hopTo = [f.x + (P.x - f.x) / d * Math.min(d + 1.2, 6.5), f.z + (P.z - f.z) / d * Math.min(d + 1.2, 6.5)];
@@ -22554,7 +22691,7 @@ function stagEmberDrop() {
     e.x = clamp(P.x + (Math.random() - 0.5) * 16, K_ARENA.x - K_ARENA.r + 6, K_ARENA.x + K_ARENA.r - 6);
     e.z = clamp(P.z + (Math.random() - 0.5) * 16, K_ARENA.z - K_ARENA.r + 6, K_ARENA.z + K_ARENA.r - 6);
     if (Math.random() < 0.3) { e.x = K_ARENA.x + Math.cos(a) * d; e.z = K_ARENA.z + Math.sin(a) * d; }
-    e.t = 0; e.hit = false;
+    e.t = 0; e.hit = false; fmTeleStart(e);
     return;
   }
 }
@@ -22753,7 +22890,8 @@ function tickStag() {
     case 'roar':
       if (S.t > 1.4) {
         S.phase++;
-        S.hp = stagPhaseHp(S.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        S.hp = Math.min(S.hp, stagPhaseHp(S.phase));
         refreshStagBar(false);
         S.st = 'track'; S.t = 0;
         if (S.phase === 3) SFX.stagCry();
@@ -22764,13 +22902,13 @@ function tickStag() {
   for (const e of S.embers) {
     if (e.t < 0) continue;
     e.t += DT;
-    if (e.t < 0.85) {
+    if (e.t < 0.95) {           // a full second of falling sparks before it lands
       if ((simTick % 5) === 0) {
         psSpark.spawn(e.x + (Math.random() - 0.5) * 1.6, groundH(e.x, e.z) + 3.5 + Math.random() * 2,
           e.z + (Math.random() - 0.5) * 1.6, 0, -2.4, 0, 0.5);
       }
     } else if (!e.hit) {
-      e.hit = true;
+      e.hit = true; fmTeleFire('stagEmber', e);
       burst(psSpark, e.x, groundH(e.x, e.z) + 0.5, e.z, 16, 2.4, 1.4, 0.5);
       SFX.emberFall();
       if (Math.hypot(P.x - e.x, P.z - e.z) < 2.0 && !underBough(P.x, P.z)) {
@@ -33871,6 +34009,10 @@ let mlVeilEl = null;
    it tires after every pass). HP 84, notch convention 84/56/28. Body
    chips ALWAYS land. Cold-7-year-old telegraphs, ≥0.9 s each. */
 const MOTH_HP = 84;
+/* the wing-gust shove: 0.42 s of carried momentum at 16 m/s under the hit
+   branch's 0.86/tick drag ≈ 1.9 m of ground given up. Enough that the caption
+   ("or lean on the rail and let it catch you") is a true sentence. */
+const ML_GUST_T = 0.42, ML_GUST_V = 16;
 const MOTH = {
   c: null, active: false, defeated: false, phase: 0, st: 'sleep', t: 0,
   hp: MOTH_HP, hpMax: MOTH_HP, x: ML_C.x, y: ML_FLOOR_Y + 2.15, z: ML_C.z,
@@ -33880,6 +34022,7 @@ const MOTH = {
   wave: { ax: 1, az: 0, s: -99, on: false, hit: false, chimed: false }, waveN: 0,
   spiral: { ax: 1, az: 0, s: -99, on: false }, spiralN: 0,
   gustN: 0, diveN: 0, p2n: 0, p3n: 0, hintGust: false, hintPool: false, hintSpiral: false,
+  gustShoves: 0, gustShoveFrom: null,
   wingK: 0.05, wingT: 0, flapHz: 2.2,
 };
 MOTH.c = mlBuildMoth();
@@ -34081,12 +34224,23 @@ function mlTickMoth() {
     case 'gust': {
       M.wingK = 1.25;
       M.gustR += DT * 12;
-      /* the shove: jump it, or let the rail catch you — never hearts */
+      /* THE SHOVE: jump it, or let the rail catch you — never hearts.
+         `P.vx +=` alone was a no-op: outside the 'hit' branch tickPlayer
+         RECOMPUTES vx/vz from the stick every tick, so the caption was
+         promising a push that never happened. The integrated shove is the
+         only one the player feels (hurtPlayer / obHeatPuff idiom): take the
+         reins for a beat and let the hit branch carry her outward. */
       if (!M.gustHit && !P.air && Math.abs(distP - M.gustR) < 1.0) {
         M.gustHit = true;
         const d = distP || 1;
-        P.vx += (P.x - M.x) / d * 9.5;
-        P.vz += (P.z - M.z) / d * 9.5;
+        const ux = (P.x - M.x) / d, uz = (P.z - M.z) / d;
+        P.st = 'hit'; P.hitT = ML_GUST_T;         // shove only — hearts untouched
+        P.vx = ux * ML_GUST_V; P.vz = uz * ML_GUST_V;
+        P.queued = false;
+        M.gustShoveFrom = [P.x, P.z];
+        M.gustShoves = (M.gustShoves || 0) + 1;
+        SFX.mothWing();
+        CAM.shake = Math.max(CAM.shake, 0.16);
         rumble({ duration: 160, strong: 0.2, weak: 0.5 });
         if (!M.hintGust && !cineSeen('mlHintGust')) {
           M.hintGust = true; markCineSeen('mlHintGust');
@@ -35261,6 +35415,10 @@ window.__telemetryHooks.push(function (T) {
   T.mothWaveN = MOTH.waveN;
   T.mothSpiralN = MOTH.spiralN;
   T.mothDiveN = MOTH.diveN;
+  T.mothGustN = MOTH.gustN;
+  T.mothGustShoves = MOTH.gustShoves;
+  T.mothGustShoveDist = MOTH.gustShoveFrom
+    ? +Math.hypot(P.x - MOTH.gustShoveFrom[0], P.z - MOTH.gustShoveFrom[1]).toFixed(2) : 0;
   T.poolLive = ML_POOL.live;
   T.poolX = +ML_POOL.x.toFixed(1);
   T.poolZ = +ML_POOL.z.toFixed(1);
@@ -35394,6 +35552,13 @@ function obRegionT(x, z) {
 const obInRegion = (x, z) => obRegionT(x, z) < 1;
 function obInKiln(x, z) {
   return Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r;
+}
+/* THE GATEWAY: the one arc of the crest that is a doorway and not a wall.
+   Same 0.42 rad the solid ring and the collider studs cut out of themselves —
+   if it looks like you can walk out there, you can. */
+const OB_GATE_HALF = 0.42;
+function obInGateArc(x, z) {
+  return skAngDiff(skAngTo(OB_KILN.x, OB_KILN.z, x, z), 0) < OB_GATE_HALF;
 }
 
 /* ── the arc holds its dusk (the phase-5/6 precedent: the glow reads at
@@ -35769,6 +35934,21 @@ ISLE_SHADE.push(
   { x: -1360, z: -1140, r: 5 },                   /* far-west crust (heart chest) */
   { x: -1085, z: -1140, r: 5 },                   /* east crust (heart chest) */
 );
+/* THE CALDERA MOUTH — the caldera's OWN rescue spot, inside the bowl at the
+   foot of the gate ramp. The isle-anchor sweep answered with the landing
+   beach 219 m away, so fainting on the last notch of the hound fight walked
+   a kid the whole trail back on three hearts. Faint here, wake here, facing
+   her, with the fight re-armed at the phase you left (the checkpoint law —
+   `startCine('sunstruck')` already calls obResetFight(true)).
+   Same wrap shape p6l uses for the lamp room. */
+const OB_KILN_MOUTH = { x: OB_KILN.x, z: OB_KILN.z + 13.2 };
+const _obPrevNearShade = nearestShadeSpot;
+nearestShadeSpot = function (x, z) {
+  if (Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r + 14) {
+    return { x: OB_KILN_MOUTH.x, z: OB_KILN_MOUTH.z };
+  }
+  return _obPrevNearShade(x, z);
+};
 
 /* ── the swell yields to the coast (the charted-isle law) ── */
 const _obSeaShoal = seaShoalAt;
@@ -36607,8 +36787,13 @@ function obTickFight() {
     }
     return;
   }
-  if (!inK && Math.hypot(P.x - OB_KILN.x, P.z - OB_KILN.z) > OB_KILN.r + 7) {
-    /* stepping out re-arms her at the phase you left (the stag rule) */
+  if (!inK) {
+    /* WALKING OUT IS ALLOWED, and it re-arms her at the phase you left (the
+       stag/moth rule). This used to read `> OB_KILN.r + 7` — d > 24 — while
+       a hard clamp pinned the player at r 16, so the branch could never fire
+       and the open north gateway was a painted door. The gate arc is the ONE
+       way out; the rest of the rim is solid geometry and colliders, which is
+       what keeps her in — no clamp needed, and nothing to fall off. */
     obResetFight(true);
     return;
   }
@@ -36616,8 +36801,9 @@ function obTickFight() {
   const gy = obGroundAt(H.x, H.z);
   const distP = Math.hypot(P.x - H.x, P.z - H.z);
   const faceP = () => { H.ang = Math.atan2(P.x - H.x, P.z - H.z); };
-  /* the caldera rim knocks the PLAYER back inward too — no fall fail */
-  if (state === 'play' && obKeepIn(P, 1.0)) {
+  /* the SOLID part of the rim knocks the player back inward — but never
+     across the gate arc, which has to stay walkable */
+  if (state === 'play' && !obInGateArc(P.x, P.z) && obKeepIn(P, 1.0)) {
     P.fy = obGroundAt(P.x, P.z);
     P.vx *= 0.3; P.vz *= 0.3;
   }
@@ -40932,6 +41118,9 @@ function syncTelemetry() {
   TL.wallBurned = wallBurned(); TL.kelpDoorCut = kelpDoorCut;
   TL.chestOpened = chest.opened; TL.heartContainers = P.maxHearts - 5;
   TL.crabsAlive = crabs.filter(c => !c.dead).length;
+  TL.bossT = BOSS.t;
+  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
+  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.wispsAlive = wisps.filter(w => !w.dead).length;
   const pr = state === 'play' ? currentInteract() : null;
   TL.prompt = pr ? pr.id : null;

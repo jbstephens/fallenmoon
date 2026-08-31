@@ -83,6 +83,13 @@ const obInRegion = (x, z) => obRegionT(x, z) < 1;
 function obInKiln(x, z) {
   return Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r;
 }
+/* THE GATEWAY: the one arc of the crest that is a doorway and not a wall.
+   Same 0.42 rad the solid ring and the collider studs cut out of themselves —
+   if it looks like you can walk out there, you can. */
+const OB_GATE_HALF = 0.42;
+function obInGateArc(x, z) {
+  return skAngDiff(skAngTo(OB_KILN.x, OB_KILN.z, x, z), 0) < OB_GATE_HALF;
+}
 
 /* ── the arc holds its dusk (the phase-5/6 precedent: the glow reads at
    dusk; nights are when arcs run) ── */
@@ -457,6 +464,21 @@ ISLE_SHADE.push(
   { x: -1360, z: -1140, r: 5 },                   /* far-west crust (heart chest) */
   { x: -1085, z: -1140, r: 5 },                   /* east crust (heart chest) */
 );
+/* THE CALDERA MOUTH — the caldera's OWN rescue spot, inside the bowl at the
+   foot of the gate ramp. The isle-anchor sweep answered with the landing
+   beach 219 m away, so fainting on the last notch of the hound fight walked
+   a kid the whole trail back on three hearts. Faint here, wake here, facing
+   her, with the fight re-armed at the phase you left (the checkpoint law —
+   `startCine('sunstruck')` already calls obResetFight(true)).
+   Same wrap shape p6l uses for the lamp room. */
+const OB_KILN_MOUTH = { x: OB_KILN.x, z: OB_KILN.z + 13.2 };
+const _obPrevNearShade = nearestShadeSpot;
+nearestShadeSpot = function (x, z) {
+  if (Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r + 14) {
+    return { x: OB_KILN_MOUTH.x, z: OB_KILN_MOUTH.z };
+  }
+  return _obPrevNearShade(x, z);
+};
 
 /* ── the swell yields to the coast (the charted-isle law) ── */
 const _obSeaShoal = seaShoalAt;
@@ -1295,8 +1317,13 @@ function obTickFight() {
     }
     return;
   }
-  if (!inK && Math.hypot(P.x - OB_KILN.x, P.z - OB_KILN.z) > OB_KILN.r + 7) {
-    /* stepping out re-arms her at the phase you left (the stag rule) */
+  if (!inK) {
+    /* WALKING OUT IS ALLOWED, and it re-arms her at the phase you left (the
+       stag/moth rule). This used to read `> OB_KILN.r + 7` — d > 24 — while
+       a hard clamp pinned the player at r 16, so the branch could never fire
+       and the open north gateway was a painted door. The gate arc is the ONE
+       way out; the rest of the rim is solid geometry and colliders, which is
+       what keeps her in — no clamp needed, and nothing to fall off. */
     obResetFight(true);
     return;
   }
@@ -1304,8 +1331,9 @@ function obTickFight() {
   const gy = obGroundAt(H.x, H.z);
   const distP = Math.hypot(P.x - H.x, P.z - H.z);
   const faceP = () => { H.ang = Math.atan2(P.x - H.x, P.z - H.z); };
-  /* the caldera rim knocks the PLAYER back inward too — no fall fail */
-  if (state === 'play' && obKeepIn(P, 1.0)) {
+  /* the SOLID part of the rim knocks the player back inward — but never
+     across the gate arc, which has to stay walkable */
+  if (state === 'play' && !obInGateArc(P.x, P.z) && obKeepIn(P, 1.0)) {
     P.fy = obGroundAt(P.x, P.z);
     P.vx *= 0.3; P.vz *= 0.3;
   }
