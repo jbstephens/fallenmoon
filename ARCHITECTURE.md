@@ -453,6 +453,34 @@ physics come from one function. Solidity = `worldSolidAt` /
 
 ## Other standing conventions
 
+- **The telegraph law, and the ledger that proves it.** Nothing hostile may
+  touch the player without **≥ 0.9 s (≥ 54 sim ticks)** of visible windup.
+  `window.__fmTele` (p5, next to `updateBeacon`) is the shared recorder:
+  the hostile stamps `fmTeleStart(o)` when the windup begins and
+  `fmTeleFire('name', o)` on the frame it commits, so the ledger measures
+  the real mechanic instead of standing in for it. Suites read it and
+  assert `ticks >= 54`; `test/probes/sweep-a-combat.mjs` gates all
+  thirteen. A new hostile adds its two calls and its own gate.
+  Pair attacks stagger with a **negative** start `t` (t counts UP toward
+  the threshold, so negative = later): `-HORNET_PAIR_STAGGER`, `-0.42` for
+  the sea gulls. A positive value fires the partner EARLY.
+- **The roar never refunds.** Phase transitions do
+  `hp = Math.min(hp, phaseHp(phase))`, never `hp = phaseHp(phase)` — hits
+  landed during the roar are the ones a masher can actually reach.
+- **A committed attack marks its ground.** Tracked strike points freeze at
+  60 % of the windup (`BOSS_SLAM_TELE`), draw a baked ring at the committed
+  spot, and honour jump clearance. Ground markers are standing BANDS, not
+  flat discs — a disc buries itself in sloping terrain.
+- **`window.__BEACON_MUTE`** — boss arenas push `{x, z, r, live()}` and the
+  quest beacon ORB hides inside them (the guardian is the answer; a bobbing
+  orb over its head reads as a phantom will-o'-wisp). The △ compass keeps
+  its answer — this is deliberately NOT the `objectivePoint() → null` shape
+  p6l/p6m use, which also kills the compass mid-fight.
+- **An arena you can enter is an arena you can leave.** Never clamp the
+  PLAYER inside a radius that a doorway crosses (the Kiln Hound's caldera
+  was a trap for exactly this reason); clamp only where the rim is solid
+  geometry, and let walking out re-arm the fight at its phase. An arena far
+  from its region's rescue anchor overrides `nearestShadeSpot` for itself.
 - **One heart cap, one grant path.** `HEART_CAP = 10` and `gainHeart(big,
   small, y)` live in p2; every heart container in the game calls it. It
   never shrinks the row, and at the cap it pays the Emberwaste
