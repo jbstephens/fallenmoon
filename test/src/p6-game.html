@@ -90,6 +90,7 @@ function startDialog(id, npc) {
   setState('dialog');
   dlgName.textContent = DLG[id].name;
   dlgText.textContent = '';
+  el('dlgMore').innerHTML = kbdMode() ? 'J' : PADG['✕'];
   SFX.talk();
 }
 function tickDialog() {
@@ -98,12 +99,14 @@ function tickDialog() {
   const full = padGlyphs(d.lines[DS.line]);
   if (DS.chars < full.length) {
     DS.chars = Math.min(full.length, DS.chars + 2);
-    dlgText.textContent = full.slice(0, DS.chars);
+    /* glyphs are single chars, so the reveal can never cut one in half —
+       the diamond swap happens after the slice */
+    dlgText.innerHTML = glyphRender(full.slice(0, DS.chars));
   }
   if (IN.confirm) {
     if (DS.chars < full.length) {
       DS.chars = full.length;
-      dlgText.textContent = full;
+      dlgText.innerHTML = glyphRender(full);
     } else if (DS.line < d.lines.length - 1) {
       DS.line++; DS.chars = 0; dlgText.textContent = '';
       SFX.talk();
@@ -126,8 +129,8 @@ function markTalked(id) {
 /* ── item toast ── */
 function itemToast(big, small) {
   const t = el('itemToast');
-  t.querySelector('.it1').textContent = padGlyphs(big);
-  t.querySelector('.it2').textContent = padGlyphs(small);
+  t.querySelector('.it1').innerHTML = glyphHTML(big);
+  t.querySelector('.it2').innerHTML = glyphHTML(small);
   t.classList.remove('show');
   void t.offsetWidth;
   t.classList.add('show');
@@ -1530,7 +1533,7 @@ function drawTBCArt() {
 }
 function tickTBC() {
   tbcT += DT;
-  if (tbcT > 1.6) el('tbcGo').textContent = padGlyphs('✕ CONTINUE');
+  if (tbcT > 1.6) el('tbcGo').innerHTML = glyphHTML('✕ CONTINUE');
   if (tbcT > 1.6 && IN.confirm) {
     el('tbc').classList.remove('on');
     endCine();

@@ -276,8 +276,10 @@ async function suiteKbd() {
     /* and back on a pad it is glyphs again */
     await api.tap(0);
     await api.waitTicks(2);
-    const padGuard = await api.eval(`(function(){ refreshTitleMenu(); return el('ngRow').textContent; })()`);
-    gate('kbd: on a pad the glyphs come back', /✕/.test(padGuard) && /○/.test(padGuard), padGuard);
+    const padGuard = await api.eval(`(function(){ refreshTitleMenu(); return el('ngRow').innerHTML; })()`);
+    gate('kbd: on a pad the DIAMONDS come back (✕ and ○ by position)',
+      /aria-label="✕"/.test(padGuard) && /aria-label="○"/.test(padGuard),
+      padGuard.slice(0, 90));
     gate('kbd: zero console errors', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
   } catch (e) {
     gate('kbd suite', false, e.message);

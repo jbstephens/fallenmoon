@@ -24,7 +24,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-SWEEP-SHIP-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-DIAMOND-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ── THE HEART ROW HAS ONE CAP (sweep C). Nine containers were each
@@ -110,10 +110,33 @@ function padGlyphs(s) {
   if (s == null || !kbdMode()) return s;
   return String(s).replace(/[✕○□△]/g, g => KBD_GLYPH[g]);
 }
+/* ── THE FACE-BUTTON DIAMOND (platform-agnostic prompts) ──
+   PS4 says ✕ where the 8BitDos say B — the only name every pad shares is
+   POSITION. In pad mode the four face glyphs render as a small four-dot
+   diamond with the wanted button filled (the cross-platform idiom);
+   keyboard mode keeps its key names. Built once, inherits currentColor,
+   costs nothing per frame (every consumer is change-gated or event-time). */
+const PADG = (() => {
+  const dots = [['△', 10, 4.1], ['○', 15.9, 10], ['✕', 10, 15.9], ['□', 4.1, 10]];
+  const out = {};
+  for (const [g] of dots) {
+    out[g] = '<svg class="padg" viewBox="0 0 20 20" role="img" aria-label="' + g + '">' +
+      dots.map(([k, x, y]) =>
+        '<circle cx="' + x + '" cy="' + y + '" r="' + (k === g ? 3.7 : 2.3) +
+        '" fill="currentColor" opacity="' + (k === g ? '1' : '0.45') + '"/>').join('') +
+      '</svg>';
+  }
+  return out;
+})();
+const escHTML = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/* render an ALREADY padGlyphs-prepped string (kbd letters pass through) */
+const glyphRender = s => kbdMode() ? escHTML(s) : escHTML(s).replace(/[✕○□△]/g, g => PADG[g]);
+/* map to the current mode AND render, in one step */
+const glyphHTML = s => s == null ? s : glyphRender(padGlyphs(s));
 /* one-line floating caption (v3: the moon compass first-use hint) */
 let captionTimer = 0;
 function showCaption(text, ms) {
-  floatEl.textContent = padGlyphs(text);
+  floatEl.innerHTML = glyphHTML(text);
   floatEl.classList.add('on');
   clearTimeout(captionTimer);
   captionTimer = setTimeout(() => floatEl.classList.remove('on'), ms || 3000);

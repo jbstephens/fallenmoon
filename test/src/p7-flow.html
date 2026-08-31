@@ -18,13 +18,16 @@ function refreshTitleMenu() {
   if (!hasSave) titleFocus = 0;
   el('ti0').classList.toggle('sel', titleFocus === 0);
   el('ti1').classList.toggle('sel', titleFocus === 1);
-  el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)';
+  /* the legend shows the diamond even for a keyboard reader — position is
+     the universal name, and the parenthetical already names the keys */
+  el('tHint').innerHTML = ('LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)')
+    .replace(/[✕○□△]/g, g => PADG[g]);
   /* the overwrite guard names the REAL buttons. On a keyboard ✕ is J and
      "keep my save" is the BACK edge, which is Escape — not ○'s sprint key,
      so this line is written out rather than run through padGlyphs. */
   el('ngRow').innerHTML = kbdMode()
     ? '<b>J</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>ESC</b> KEEP MY SAVE'
-    : '<b>&#10005;</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>&#9675;</b> KEEP MY SAVE';
+    : '<b>' + PADG['✕'] + '</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>' + PADG['○'] + '</b> KEEP MY SAVE';
 }
 function beginNewGame() {
   SFX.confirm();
@@ -381,7 +384,8 @@ function updatePrompt() {
        the same string for whole minutes at a time */
     if (label !== hudLastPrompt) {
       hudLastPrompt = label;
-      promptEl.innerHTML = label.replace(/(✕|○|□|△|SPACE|\bJ\b|\bK\b|\bL\b|HOLD)/g, '<b>$1</b>');
+      promptEl.innerHTML = glyphRender(label)
+        .replace(/(<svg[\s\S]*?<\/svg>|SPACE|\bJ\b|\bK\b|\bL\b|HOLD)/g, '<b>$1</b>');
     }
     promptEl.classList.add('on');
   } else { promptEl.classList.remove('on'); hudLastPrompt = ''; }

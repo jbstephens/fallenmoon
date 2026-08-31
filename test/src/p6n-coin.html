@@ -1663,7 +1663,7 @@ function cnTickCards(u, instant) {
     if ((S2.t > 2.0 && IN.confirm) || S2.t > 21) { S2.st = 4; S2.t = 0; }
   } else {
     cnCardGo.style.opacity = '1';
-    cnCardGo.textContent = padGlyphs('✕ — GOODNIGHT');
+    cnCardGo.innerHTML = glyphHTML('✕ — GOODNIGHT');
     if (S2.t > 0.6 && IN.confirm) { SFX.confirm(); cnFinishEnd(); }
   }
 }
@@ -1702,8 +1702,8 @@ function cnRefreshWheelMenu(showCard) {
   document.getElementById('cnWheelPhases').textContent = '● ● ● ● ● ● ● ●';
   /* the keys, as they really are: BACK is the ○ EDGE, which on a keyboard
      is Escape and not ○'s sprint key — so this pair is written out */
-  document.getElementById('cnWheelKeys').textContent =
-    kbdMode() ? 'J CHOOSE · ESC BACK' : '✕ CHOOSE · ○ BACK';
+  document.getElementById('cnWheelKeys').innerHTML =
+    kbdMode() ? 'J CHOOSE · ESC BACK' : PADG['✕'] + ' CHOOSE · ' + PADG['○'] + ' BACK';
   const card = cnWheelCardEl();
   if (showCard) {
     card.style.display = 'block';
