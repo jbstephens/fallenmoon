@@ -453,8 +453,16 @@ physics come from one function. Solidity = `worldSolidAt` /
 
 ## Other standing conventions
 
+- **One heart cap, one grant path.** `HEART_CAP = 10` and `gainHeart(big,
+  small, y)` live in p2; every heart container in the game calls it. It
+  never shrinks the row, and at the cap it pays the Emberwaste
+  compensation (full heal + 8 salt + its own caption). Ten containers
+  exist against a base of five, so five of them land at the cap by
+  design. `loadSave` clamps `mh` upward-only into `[5, HEART_CAP]`.
 - **Frame budget: ≤80 draw calls, ≤120k triangles**, asserted by
-  `perf`, `fperf`, `flow`, `sail`. Held by squared-distance culling in
+  `perf`, `fperf`, `flow`, `sail`. The END-STATE world is over that
+  budget today (see `test/probes/postgame-perf.mjs`) and is held to a
+  documented interim ceiling instead. Held by squared-distance culling in
   `updateVisuals` and per-chunk visibility.
 - **No assets.** All geometry built in code, light baked per-vertex
   (`bakeCol` 1808), one shared `WORLD_MAT`.
@@ -557,6 +565,16 @@ failures as `<suite>-FAIL.png`). `test/shots-probe/` is gitignored.
 
 Nearly every suite ends with a `zero console errors` gate and a
 catch-all that fails on any thrown exception.
+
+`test/probes/postgame-perf.mjs` is the END-STATE census: 54 vistas across
+the post-game world (sky 8, moonHome) and the full day cycle, printed as a
+call/triangle table. It GATES only against a generous interim ceiling (140
+calls / 125k tris) and prints WARN lines between 80 and 140, so the drift
+stays visible without blocking a branch. Worst as of the sweep: 117 calls
+at the quay, 121k tris at the falls forecourt. The remaining 80-call work
+is named in its header as deliberate backlog (humanoid LOD, star merge,
+general far-cull). Its vantages are wet-checked: three of the early-game
+village stations are 1–2 m under water once the tide is home.
 
 Deeper phase-3 coverage (102 gates) lives in `test/probes/p6e-*.mjs` and
 `test/probes/seadiag.mjs`, run directly with node. Two hard-won rules for
