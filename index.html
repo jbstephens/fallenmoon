@@ -6758,6 +6758,7 @@ function popWisp(w) {
    hits during slam-recovery windows do 5x (10). Phases at 60 / 30 HP.
    Proximity always wakes it — no quest-state excuses. */
 const BOSS_HP = 90;
+const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 60%
 const BOSS = {
   c: null, mark: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
   hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
@@ -6775,35 +6776,6 @@ function initBoss() {
   BOSS.c = buildKingCrab();
   BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
   scene.add(BOSS.c.root);
-}
-/* ── the boss HP bar — standing convention for every boss to come ── */
-const bossBarEl = el('bossBar'), bossFillEl = el('bossFill'), bossNameEl = el('bossName');
-let bossBarShown = false, bossBarW = -1, bossFlashTimer = 0;
-function refreshBossBar(hitFlash) {
-  const B = BOSS;
-  const want = B.active && !B.defeated;
-  if (want !== bossBarShown) {
-    bossBarShown = want;
-    bossBarEl.classList.toggle('on', want);
-    if (want) bossNameEl.textContent = 'THE SUNSTRUCK KING-CRAB';
-const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 60%
-    if (!want) bossBarEl.classList.remove('hit');
-  }
-  if (!want) return;
-  const w = Math.round(clamp(B.hp / B.hpMax, 0, 1) * 1000) / 10;
-  if (w !== bossBarW) {
-    bossBarW = w;
-    bossFillEl.style.width = `calc((100% - 4px) * ${w / 100})`;
-  }
-  if (hitFlash) {
-    bossBarEl.classList.add('hit');
-    clearTimeout(bossFlashTimer);
-    bossFlashTimer = setTimeout(() => bossBarEl.classList.remove('hit'), 130);
-  }
-}
-function calmBossEyes(t) {
-  const colA = BOSS.c.eyeGlow.geometry.attributes.color;
-  for (let i = 0; i < colA.count; i++) {
   if (!BOSS.mark) BOSS.mark = buildSlamMark();
 }
 /* THE SLAM MARK — a baked ground ring burning at the COMMITTED strike point,
@@ -6827,6 +6799,34 @@ function buildSlamMark() {
   m.visible = false;
   scene.add(m);
   return m;
+}
+/* ── the boss HP bar — standing convention for every boss to come ── */
+const bossBarEl = el('bossBar'), bossFillEl = el('bossFill'), bossNameEl = el('bossName');
+let bossBarShown = false, bossBarW = -1, bossFlashTimer = 0;
+function refreshBossBar(hitFlash) {
+  const B = BOSS;
+  const want = B.active && !B.defeated;
+  if (want !== bossBarShown) {
+    bossBarShown = want;
+    bossBarEl.classList.toggle('on', want);
+    if (want) bossNameEl.textContent = 'THE SUNSTRUCK KING-CRAB';
+    if (!want) bossBarEl.classList.remove('hit');
+  }
+  if (!want) return;
+  const w = Math.round(clamp(B.hp / B.hpMax, 0, 1) * 1000) / 10;
+  if (w !== bossBarW) {
+    bossBarW = w;
+    bossFillEl.style.width = `calc((100% - 4px) * ${w / 100})`;
+  }
+  if (hitFlash) {
+    bossBarEl.classList.add('hit');
+    clearTimeout(bossFlashTimer);
+    bossFlashTimer = setTimeout(() => bossBarEl.classList.remove('hit'), 130);
+  }
+}
+function calmBossEyes(t) {
+  const colA = BOSS.c.eyeGlow.geometry.attributes.color;
+  for (let i = 0; i < colA.count; i++) {
     colA.setXYZ(i, lerp(1.0, 0.15, t), lerp(0.62, 0.12, t), lerp(0.2, 0.1, t));
   }
   colA.needsUpdate = true;
@@ -7489,6 +7489,25 @@ function animateBoss(dtv, now) {
   const bdx = B.x - camera.position.x, bdz = B.z - camera.position.z;
   B.c.root.visible = !(B.st === 'burrow' && B.t > 0.7) && (bdx * bdx + bdz * bdz < 8100);
   B.c.shadow.scale.setScalar(1 + shadeGrow * 0.2);
+  /* the slam mark: it draws itself on the sand through the windup, brightest
+     once the crab has committed — the ring you have to be outside of */
+  if (B.mark) {
+    const tele = B.active && !B.defeated && B.st === 'slamTele' && B.c.root.visible;
+    B.mark.visible = tele;
+    if (tele) {
+      const k = clamp(B.t / BOSS_SLAM_TELE, 0, 1);
+      const mx = B.slamPos[0], mz = B.slamPos[1];
+      /* seat the band on the LOWEST ground it covers so a slope never eats it */
+      let lo = groundH(mx, mz);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * TAU;
+        lo = Math.min(lo, groundH(mx + Math.cos(a) * 2.5, mz + Math.sin(a) * 2.5));
+      }
+      B.mark.position.set(mx, lo - 0.05, mz);
+      B.mark.scale.set(2.5, 1, 2.5);
+      B.mark.material.opacity = 0.25 + k * 0.55 + Math.sin(now / 70) * 0.08 * k;
+    }
+  }
   const w = now / 1000;
   // legs scuttle
   const moving = B.st === 'track' || B.st === 'charge';
@@ -7533,25 +7552,6 @@ function animateEnemies(dtv, now) {
   const near2 = (x, z, r) => { const dx = x - ccx, dz = z - ccz; return dx * dx + dz * dz < r * r; };
   for (const cr of crabs) {
     if (cr.dead) continue;
-  /* the slam mark: it draws itself on the sand through the windup, brightest
-     once the crab has committed — the ring you have to be outside of */
-  if (B.mark) {
-    const tele = B.active && !B.defeated && B.st === 'slamTele' && B.c.root.visible;
-    B.mark.visible = tele;
-    if (tele) {
-      const k = clamp(B.t / BOSS_SLAM_TELE, 0, 1);
-      const mx = B.slamPos[0], mz = B.slamPos[1];
-      /* seat the band on the LOWEST ground it covers so a slope never eats it */
-      let lo = groundH(mx, mz);
-      for (let i = 0; i < 8; i++) {
-        const a = i / 8 * TAU;
-        lo = Math.min(lo, groundH(mx + Math.cos(a) * 2.5, mz + Math.sin(a) * 2.5));
-      }
-      B.mark.position.set(mx, lo - 0.05, mz);
-      B.mark.scale.set(2.5, 1, 2.5);
-      B.mark.material.opacity = 0.25 + k * 0.55 + Math.sin(now / 70) * 0.08 * k;
-    }
-  }
     const cdx = cr.x - ccx, cdz = cr.z - ccz;
     const cd2 = cdx * cdx + cdz * cdz;
     const vis = cd2 < 33 * 33;   // v3: fog haze owns everything past ~33 m
@@ -18321,9 +18321,6 @@ function buildHourTortoise() {
 }
 
 const TORT_HP = 84;
-/* no phantom orb over the casting pit — the guardian IS the answer in here */
-window.__BEACON_MUTE = window.__BEACON_MUTE || [];
-window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 const TORT = {
   c: null, active: false, defeated: false, bellTaken: false,
   phase: 0, st: 'sleep', t: 0, hp: TORT_HP, hpMax: TORT_HP,
@@ -18334,6 +18331,9 @@ const TORT = {
 };
 TORT.c = buildHourTortoise();
 function tortPhaseHp(ph) { return ph <= 1 ? TORT_HP : ph === 2 ? 56 : 28; }
+/* no phantom orb over the casting pit — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 
 /* the standing boss bar — the notches at 33.3% / 66.7% already line up
    with 28 / 56 of 84, exactly as they do for the crab and the wyrm */
@@ -40110,7 +40110,7 @@ const CN_MENU = ['THE KEEPSAKE', 'WATCH THE RISING', 'WATCH THE END FLIGHT', 'GO
     '<div id="cnWheelPhases" style="font-size:19px;letter-spacing:0.34em;color:#cfd8f2;margin-bottom:14px"></div>' +
     '<div id="cnWheelCard" style="display:none;font-size:16px;line-height:2;color:#d8d4c2;margin-bottom:12px"></div>' +
     '<div id="cnWheelList" style="font-size:16px;line-height:2.2;letter-spacing:0.1em"></div>' +
-    '<div id="cnWheelKeys" style="margin-top:12px;font-size:12.5px;color:#8a86a0;letter-spacing:0.14em"></div>';
+    '<div id="cnWheelKeys" style="margin-top:12px;font-size:12.5px;color:#cfcbdd;letter-spacing:0.14em"></div>';
   cnWheelUI.appendChild(panel);
   stage.appendChild(cnWheelUI);
   cnWheelList = () => document.getElementById('cnWheelList');
@@ -41338,6 +41338,9 @@ function syncTelemetry() {
   TL.dlg = DS.id; TL.dlgLine = DS.line;
   TL.bossActive = BOSS.active; TL.bossPhase = BOSS.phase;
   TL.bossState = BOSS.st; TL.clawHits = BOSS.clawHits;
+  TL.bossT = BOSS.t;
+  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
+  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.skyStep = SAVE ? SAVE.sky : 0; TL.skyT = SKY.t;
   TL.shade = P.shade; TL.inGrotto = inGrottoAt(P.x, P.z);
   TL.healTicks = P.healTicks; TL.sunstruck = P.sunstruckCount;
@@ -41345,9 +41348,6 @@ function syncTelemetry() {
   TL.wallBurned = wallBurned(); TL.kelpDoorCut = kelpDoorCut;
   TL.chestOpened = chest.opened; TL.heartContainers = P.maxHearts - 5;
   TL.crabsAlive = crabs.filter(c => !c.dead).length;
-  TL.bossT = BOSS.t;
-  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
-  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.wispsAlive = wisps.filter(w => !w.dead).length;
   const pr = state === 'play' ? currentInteract() : null;
   TL.prompt = pr ? pr.id : null;

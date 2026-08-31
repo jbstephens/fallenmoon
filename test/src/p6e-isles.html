@@ -1663,9 +1663,6 @@ function buildHourTortoise() {
 }
 
 const TORT_HP = 84;
-/* no phantom orb over the casting pit — the guardian IS the answer in here */
-window.__BEACON_MUTE = window.__BEACON_MUTE || [];
-window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 const TORT = {
   c: null, active: false, defeated: false, bellTaken: false,
   phase: 0, st: 'sleep', t: 0, hp: TORT_HP, hpMax: TORT_HP,
@@ -1676,6 +1673,9 @@ const TORT = {
 };
 TORT.c = buildHourTortoise();
 function tortPhaseHp(ph) { return ph <= 1 ? TORT_HP : ph === 2 ? 56 : 28; }
+/* no phantom orb over the casting pit — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 
 /* the standing boss bar — the notches at 33.3% / 66.7% already line up
    with 28 / 56 of 84, exactly as they do for the crab and the wyrm */

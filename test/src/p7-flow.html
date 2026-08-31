@@ -486,6 +486,9 @@ function syncTelemetry() {
   TL.dlg = DS.id; TL.dlgLine = DS.line;
   TL.bossActive = BOSS.active; TL.bossPhase = BOSS.phase;
   TL.bossState = BOSS.st; TL.clawHits = BOSS.clawHits;
+  TL.bossT = BOSS.t;
+  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
+  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.skyStep = SAVE ? SAVE.sky : 0; TL.skyT = SKY.t;
   TL.shade = P.shade; TL.inGrotto = inGrottoAt(P.x, P.z);
   TL.healTicks = P.healTicks; TL.sunstruck = P.sunstruckCount;
@@ -493,9 +496,6 @@ function syncTelemetry() {
   TL.wallBurned = wallBurned(); TL.kelpDoorCut = kelpDoorCut;
   TL.chestOpened = chest.opened; TL.heartContainers = P.maxHearts - 5;
   TL.crabsAlive = crabs.filter(c => !c.dead).length;
-  TL.bossT = BOSS.t;
-  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
-  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.wispsAlive = wisps.filter(w => !w.dead).length;
   const pr = state === 'play' ? currentInteract() : null;
   TL.prompt = pr ? pr.id : null;
