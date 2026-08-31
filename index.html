@@ -13963,7 +13963,11 @@ let moonMesh = null, moonSiltMesh = null, moonChainMesh = null;
   const cols = [];
   for (let i = 0; i < rows.length; i++) {
     const k = i / (rows.length - 1);                 // 0 = buried pole, 1 = crown
-    cols.push(k < 0.34 ? grey : k < 0.5 ? pale2 : pale);
+    /* the RISING sees her from BELOW — the old silt-grey base coat owned
+       the whole visible face of the risen moon (a dark ball over her own
+       silver sea). Only the true buried pole keeps the silt; the rest of
+       her is moon-pale everywhere, so both reveals read right. */
+    cols.push(k < 0.12 ? grey : k < 0.5 ? pale2 : pale);
   }
   latheW(md, rows, { seg: 40, x: 0, y: 0, z: 0, segJitter: 0.05, col: pale, cols: cols });
   moonMesh = mdMesh(md, new THREE.MeshBasicMaterial({ vertexColors: true }), false);
@@ -13973,8 +13977,12 @@ let moonMesh = null, moonSiltMesh = null, moonChainMesh = null;
   {
     const rnd = mulberry32(20260817);
     const cra = [];
-    for (let i = 0; i < 11; i++) {
-      const th = 0.10 + rnd() * 1.20, ph2 = rnd() * TAU;
+    /* the RISING taught us: the seabed reveal looks down at her CROWN, but
+       the finale stares at her EQUATOR from a boat — craters only in the
+       top cap left the rising face a smooth egg. Her whole face says MOON:
+       dishes to ~137°, sparing only the buried pole. */
+    for (let i = 0; i < 23; i++) {
+      const th = 0.10 + rnd() * 2.30, ph2 = rnd() * TAU;
       // wider (0.13-0.34 rad) and deeper: at the old size and contrast they
       // simply did not survive the fog out here
       cra.push({ x: Math.sin(th) * Math.cos(ph2), y: Math.cos(th), z: Math.sin(th) * Math.sin(ph2),
@@ -13994,6 +14002,25 @@ let moonMesh = null, moonSiltMesh = null, moonChainMesh = null;
         const k3 = t2 < 0.22 ? lerp(1.12, c3.deep, t2 / 0.22) : c3.deep + (t2 - 0.22) * 0.22;
         col2.setXYZ(i, Math.min(1, col2.getX(i) * k3), Math.min(1, col2.getY(i) * k3), Math.min(1, col2.getZ(i) * k3));
         break;
+      }
+    }
+    /* TWO SOFT MARIA — the dark seas a kid draws first (the telescope's own
+       trick, painted here too so the risen moon and Pearl's eyepiece agree).
+       Broad, gentle multipliers; they read at 2km and vanish into the low-
+       poly style up close. */
+    const seas = [
+      { x: Math.sin(1.9) * Math.cos(0.7), y: Math.cos(1.9), z: Math.sin(1.9) * Math.sin(0.7), c: Math.cos(0.55), k: 0.82 },
+      { x: Math.sin(1.3) * Math.cos(3.6), y: Math.cos(1.3), z: Math.sin(1.3) * Math.sin(3.6), c: Math.cos(0.42), k: 0.87 },
+    ];
+    for (let i = 0; i < pos2.count; i++) {
+      const px2 = pos2.getX(i), py2 = pos2.getY(i), pz2 = pos2.getZ(i);
+      const l2 = Math.hypot(px2, py2, pz2) || 1;
+      for (const m of seas) {
+        const dot = (px2 * m.x + py2 * m.y + pz2 * m.z) / l2;
+        if (dot < m.c) continue;
+        const t2 = Math.min(1, (dot - m.c) / (1 - m.c) * 1.6);
+        const k3 = lerp(1, m.k, t2);
+        col2.setXYZ(i, col2.getX(i) * k3, col2.getY(i) * k3, col2.getZ(i) * k3);
       }
     }
     col2.needsUpdate = true;
@@ -30578,6 +30605,14 @@ function nmTickNightClock() {
   const want = nmNightTarget();
   nmNightK += (want - nmNightK) * Math.min(1, DT * 0.55);
   if (Math.abs(want - nmNightK) < 0.004) nmNightK = want;
+  /* test/setup override: __nightForce pins nightK absolutely (the old
+     one-shot nightNow lost every fight with the per-frame re-derivation —
+     and p6n's star repaint made the loss instant). Pins the VALUE only:
+     the surge clock and everything else below keeps ticking. Cleared by
+     nightNow(null). */
+  if (window.__nightForce !== undefined && window.__nightForce !== null) {
+    nmNightK = window.__nightForce;
+  }
   window.__nightK = nmNightK;
   if (nmArcQ() >= 18) nmSurgeT += DT;
 }
@@ -31084,7 +31119,10 @@ function nmExtendDebugOnce() {
     },
     /* setup only — forces the clock, never the beats */
     nightNow(k) {
-      nmNightK = clamp(k === undefined ? 1 : k, 0, 1);
+      /* sticky: pins the clock until nightNow(null) releases it */
+      if (k === null) { window.__nightForce = undefined; return 'released'; }
+      window.__nightForce = clamp(k === undefined ? 1 : k, 0, 1);
+      nmNightK = window.__nightForce;
       window.__nightK = nmNightK;
       nmDomeSig = -999;
       return +nmNightK.toFixed(2);
@@ -38769,6 +38807,11 @@ const cnNightLightsOn = () => (cnRisen() || cnMoonHome());
 
 /* ── the rising itself ── */
 function cnRisingWrites() {
+  /* the moon is never a thing in the fog — from the rising on, she is her
+     own light source and the night dims around her, not over her. (The
+     phase-3 drowned reveal keeps its fogged depth: this flips only here,
+     and the flag stays flipped for every nightly rise after.) */
+  if (moonMesh.material.fog) { moonMesh.material.fog = false; moonMesh.material.needsUpdate = true; }
   if (CN_RISING.replay || !SAVE) return;
   SAVE.medley = [true, true, true, true];
   SAVE.moonRisen = true;
@@ -38875,12 +38918,17 @@ function cnTickRising(t) {
     }
     moonMesh.position.y = my;
     moonMesh.updateMatrix();
+    if (moonMesh.material.fog) { moonMesh.material.fog = false; moonMesh.material.needsUpdate = true; }
     moonMesh.visible = true;
   }
   CN_RISING.moonY = my;
   /* moonlight is DIM light: her material color follows the falling night
      so the silver (falls, collar, beams, stars) can own the frame */
-  moonMesh.material.color.setRGB(lerp(1, 0.58, nmNightK), lerp(1, 0.63, nmNightK), lerp(1, 0.76, nmNightK));
+  /* she is the LIGHT, not a thing in the dark: the old tint dimmed her to
+     0.58 grey at full night — a void ball over her own silver sea (t23
+     proved it). The moon stays luminous with a faint cool cast; the
+     painted craters/maria finally read against a bright face. */
+  moonMesh.material.color.setRGB(lerp(1, 0.97, nmNightK), lerp(1, 0.98, nmNightK), lerp(1, 1.0, nmNightK));
   const crownY = my + R * 0.93;
   const breached = crownY > CN_WL + 4;
   /* the chains do not follow her up — they burst in the medley */

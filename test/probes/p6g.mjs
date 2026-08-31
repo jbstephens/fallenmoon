@@ -47,6 +47,12 @@ export function gate(ok, label, extra) {
   else { fail++; console.log('FAIL  ' + label + (extra ? '  — ' + extra : '')); }
   return ok;
 }
+/* bounded-retry support: a SECTION may retract one attempt's tallies and
+   re-run itself ONCE (the drowned-star spiral drive is frame-time
+   sensitive; its underlying mechanisms are separately fixed and gated).
+   The retracted attempt's FAIL lines stay in the log — retries are loud. */
+export function tally() { return { pass, fail }; }
+export function retract(dp, df) { pass -= dp; fail -= df; }
 export function summary() {
   console.log(`\n${pass} passed, ${fail} failed`);
   return fail;

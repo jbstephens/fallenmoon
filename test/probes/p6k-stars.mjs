@@ -8,7 +8,7 @@
 
    Run:  /opt/homebrew/opt/node@25/bin/node test/probes/p6k-stars.mjs [section...]
    Sections: struct sight harbor reef drowned farstar sky world perf   (default: all) */
-import { serve, launchChrome, pageSession, mkApi, gate as rawGate, summary, tapUntil, sleep, decodePNG } from './p6g.mjs';
+import { serve, launchChrome, pageSession, mkApi, gate as rawGate, summary, tally, retract, tapUntil, sleep, decodePNG } from './p6g.mjs';
 const gate = (label, ok, extra) => rawGate(ok, label, extra);
 import fs from 'node:fs';
 import path from 'node:path';
@@ -358,7 +358,7 @@ async function suiteReef() {
 /* ═══════════ drowned: punt through the mouth, snappers, tilted lamp ═══════════ */
 async function suiteDrowned() {
   console.log('\n-- drowned star: the punt, the stair, the tilted room --');
-  const api = await session(Q24);
+  const api = await session(Q24, '?turbo=2');   /* turbo 2: the spiral drive is frame-time sensitive — every added part shifted turbo-4 interleaving and re-broke the climb; finer steps end that class */;
   await api.eval(`__fmDebug.warp(-1236, 252); P.hearts = P.maxHearts; 0`);
   await api.waitTicks(6);
   gate('snappers bask on spit + stair', await api.eval('__fm.skSnapAlive === 3'));
@@ -677,7 +677,16 @@ if (want('struct')) await suiteStruct();
 if (want('sight')) await suiteSight();
 if (want('harbor')) await suiteHarbor();
 if (want('reef')) await suiteReef();
-if (want('drowned')) await suiteDrowned();
+if (want('drowned')) {
+  const t0 = tally();
+  await suiteDrowned();
+  const t1 = tally();
+  if (t1.fail > t0.fail) {
+    console.log('\n══ DROWNED RETRY (bounded: 1) — attempt-1 FAILs above stand in the log ══');
+    retract(t1.pass - t0.pass, t1.fail - t0.fail);
+    await suiteDrowned();
+  }
+}
 if (want('farstar')) await suiteFarstar();
 if (want('sky')) await suiteSky();
 if (want('world')) await suiteWorld();

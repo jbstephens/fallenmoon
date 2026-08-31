@@ -199,7 +199,13 @@ if (want('journey')) {
   await sleep(1200);
   await api.shot('arc-10-tbc6');
   await tapUntil(api, () => api.tap(0), `__fm.state === 'play'`, 14, 'out of the card');
-  gate('after the card: free play, no stale beacon', (await jget(api, '(objectivePoint() || null)')) === null);
+  { /* since the p6m seam, the card leads ON (south, phase 7) instead of
+       resting — the gate now asserts a LIVE answer, not a stale phase-6
+       beacon (the four are lit; none may be pointed at again). */
+    const op = await jget(api, '(objectivePoint() || null)');
+    const stale = op && [[-197,108],[-902,318],[-1252,238],[-2298,-1005]].some(b2 => Math.hypot(op.x-b2[0], op.z-b2[1]) < 30);
+    gate('after the card: the story leads on (no stale beacon)', op !== null && !stale, JSON.stringify(op));
+  }
   gate('journey: zero console errors', api.errs.length === 0, api.errs.slice(0, 3).join(' | '));
   api.close();
 }
@@ -218,7 +224,7 @@ if (want('derive')) {
       { ...PHASE5_DONE, starsSeen: true, starLantern: true, spyglass: true,
         beaconLit: [true, true, true, true], mothDone: true },
       `__fm.quest === 26 && __fm.lantern6 && __fm.carry6`],
-    ['sky 6 derives at least q27 + the seen card (p6m's seam may carry it to 28 — phase 7 begins)',
+    ['sky 6 derives at least q27 + the seen card (the p6m seam may carry it to 28 — phase 7 begins)',
       { ...PHASE5_DONE, starsSeen: true, starLantern: true, spyglass: true,
         beaconLit: [true, true, true, true], mothDone: true, lantern6: true, sky: 6, ph: 6 },
       `__fm.quest >= 27 && __fm.tbc6Seen`],

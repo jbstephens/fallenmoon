@@ -809,6 +809,11 @@ const cnNightLightsOn = () => (cnRisen() || cnMoonHome());
 
 /* ── the rising itself ── */
 function cnRisingWrites() {
+  /* the moon is never a thing in the fog — from the rising on, she is her
+     own light source and the night dims around her, not over her. (The
+     phase-3 drowned reveal keeps its fogged depth: this flips only here,
+     and the flag stays flipped for every nightly rise after.) */
+  if (moonMesh.material.fog) { moonMesh.material.fog = false; moonMesh.material.needsUpdate = true; }
   if (CN_RISING.replay || !SAVE) return;
   SAVE.medley = [true, true, true, true];
   SAVE.moonRisen = true;
@@ -915,12 +920,17 @@ function cnTickRising(t) {
     }
     moonMesh.position.y = my;
     moonMesh.updateMatrix();
+    if (moonMesh.material.fog) { moonMesh.material.fog = false; moonMesh.material.needsUpdate = true; }
     moonMesh.visible = true;
   }
   CN_RISING.moonY = my;
   /* moonlight is DIM light: her material color follows the falling night
      so the silver (falls, collar, beams, stars) can own the frame */
-  moonMesh.material.color.setRGB(lerp(1, 0.58, nmNightK), lerp(1, 0.63, nmNightK), lerp(1, 0.76, nmNightK));
+  /* she is the LIGHT, not a thing in the dark: the old tint dimmed her to
+     0.58 grey at full night — a void ball over her own silver sea (t23
+     proved it). The moon stays luminous with a faint cool cast; the
+     painted craters/maria finally read against a bright face. */
+  moonMesh.material.color.setRGB(lerp(1, 0.97, nmNightK), lerp(1, 0.98, nmNightK), lerp(1, 1.0, nmNightK));
   const crownY = my + R * 0.93;
   const breached = crownY > CN_WL + 4;
   /* the chains do not follow her up — they burst in the medley */

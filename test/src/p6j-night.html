@@ -2194,6 +2194,14 @@ function nmTickNightClock() {
   const want = nmNightTarget();
   nmNightK += (want - nmNightK) * Math.min(1, DT * 0.55);
   if (Math.abs(want - nmNightK) < 0.004) nmNightK = want;
+  /* test/setup override: __nightForce pins nightK absolutely (the old
+     one-shot nightNow lost every fight with the per-frame re-derivation —
+     and p6n's star repaint made the loss instant). Pins the VALUE only:
+     the surge clock and everything else below keeps ticking. Cleared by
+     nightNow(null). */
+  if (window.__nightForce !== undefined && window.__nightForce !== null) {
+    nmNightK = window.__nightForce;
+  }
   window.__nightK = nmNightK;
   if (nmArcQ() >= 18) nmSurgeT += DT;
 }
@@ -2700,7 +2708,10 @@ function nmExtendDebugOnce() {
     },
     /* setup only — forces the clock, never the beats */
     nightNow(k) {
-      nmNightK = clamp(k === undefined ? 1 : k, 0, 1);
+      /* sticky: pins the clock until nightNow(null) releases it */
+      if (k === null) { window.__nightForce = undefined; return 'released'; }
+      window.__nightForce = clamp(k === undefined ? 1 : k, 0, 1);
+      nmNightK = window.__nightForce;
       window.__nightK = nmNightK;
       nmDomeSig = -999;
       return +nmNightK.toFixed(2);
