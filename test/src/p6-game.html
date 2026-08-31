@@ -825,7 +825,7 @@ function popWisp(w) {
    hits during slam-recovery windows do 5x (10). Phases at 60 / 30 HP.
    Proximity always wakes it — no quest-state excuses. */
 const BOSS_HP = 90;
-const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 60%
+const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 40%
 const BOSS = {
   c: null, mark: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
   hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
@@ -945,10 +945,12 @@ function tickBoss() {
       break;
     }
     case 'slamTele':
-      /* it tracks you for the first 60% and then COMMITS: after that the
+      /* it tracks you for the first 40% and then COMMITS: after that the
          mark is burned into the sand and walking off it is the answer.
-         (It used to chase you all the way to impact — undodgeable.) */
-      if (B.t < BOSS_SLAM_TELE * 0.6) {
+         (It used to chase you all the way to impact — undodgeable; at a
+         60% commit a walker cleared the 2.5 m ring by 9 cm — measured —
+         which is frame-perfect, and frame-perfect is banned.) */
+      if (B.t < BOSS_SLAM_TELE * 0.4) {
         B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
       }
       if (B.t > BOSS_SLAM_TELE) {

@@ -140,9 +140,13 @@ if (want('crab')) {
           if (window.__slam === undefined) return;
           requestAnimationFrame(w);
           const S = window.__slam, st = BOSS.st;
+          if (S.armed) {   /* keep the crab rendered: dmg-vis must not score the trial */
+            const ca = Math.atan2(BOSS.x - P.x, BOSS.z - P.z);
+            __fmDebug.camYaw(ca + Math.PI);
+          }
           if (st === 'slamTele') {
             if (BOSS.mark && BOSS.mark.visible) S.markSeen = true;
-            if (BOSS.t >= BOSS_SLAM_TELE * 0.6) {
+            if (BOSS.t >= BOSS_SLAM_TELE * 0.5) {   /* commit is at 40% — check with buffer */
               if (!S.frozen) S.frozen = [BOSS.slamPos[0], BOSS.slamPos[1]];
               else S.drift = Math.max(S.drift, Math.hypot(BOSS.slamPos[0] - S.frozen[0],
                                                           BOSS.slamPos[1] - S.frozen[1]));
@@ -151,8 +155,15 @@ if (want('crab')) {
               S.armed = true; S.h0 = P.hearts;
               if (S.mode === 'walk') {
                 const dx = P.x - BOSS.x, dz = P.z - BOSS.z, d = Math.hypot(dx, dz) || 1;
+                let tx = P.x + dx / d * 9, tz = P.z + dz / d * 9;
+                /* the arena wall pins an outward flee (a kid with a wall at
+                   their back walks the other way) — if the flee leaves the
+                   arena, walk for the middle instead */
+                if (Math.hypot(tx - GROTTO_B.x, tz - GROTTO_B.z) > GROTTO_B.r - 2.5) {
+                  tx = GROTTO_B.x; tz = GROTTO_B.z;
+                }
                 window.__fmBot.tol = 0.2; window.__fmBot.noWiggle = true;
-                window.__fmBot.target = [P.x + dx / d * 9, P.z + dz / d * 9];
+                window.__fmBot.target = [tx, tz];
               } else { window.__fmBot.target = null; window.__fakePad.axes(0, 0); }
             }
           } else if (S.prev === 'slamTele') {
@@ -187,7 +198,7 @@ if (want('crab')) {
     await api.eval('clearInterval(window.__topUp); 0');
     const walked = await slamRun('walk', 6);
     await teleGate(api, 'kingCrabSlam', 'king-crab slam', 2);
-    gate('king-crab: the slam point FREEZES after 60% of the windup — it commits',
+    gate('king-crab: the slam point FREEZES after 40% of the windup — it commits',
       walked.drift >= 0 && walked.drift < 0.01, 'max drift after commit = ' + walked.drift.toFixed(4) + ' m');
     gate('king-crab: a baked ground RING marks the committed strike point', walked.markSeen === true);
     gate('king-crab: walking away when the claws go up ESCAPES the slam (≥5 clean)',

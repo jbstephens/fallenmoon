@@ -533,13 +533,23 @@ async function suiteWorld() {
     const qmin = await api.eval(`(function(){
       const s = JSON.parse(JSON.stringify(SAVE));
       s.q = 17; s.mouthOpen = true; s.sluiceG = 0;
+      /* isolate mouthOpen's OWN drag: the live probe save carries the
+         refit (paddleWheel), whose derivation legitimately closes the
+         chapter at 20 — strip the later-stage flags for this seed */
+      s.paddleWheel = false; s.poleFound = false;
       localStorage.setItem('fallenmoon_save_v1', JSON.stringify(s));
       const back = loadSave();
+      const s2 = JSON.parse(JSON.stringify(s));
+      s2.paddleWheel = true;
+      localStorage.setItem('fallenmoon_save_v1', JSON.stringify(s2));
+      const back2 = loadSave();
       localStorage.setItem('fallenmoon_save_v1', JSON.stringify(SAVE));
-      return { q: back.q, g: back.sluiceG };
+      return { q: back.q, g: back.sluiceG, qRefit: back2.q };
     })()`);
-    gate('world: forward derivation — mouthOpen drags q to 19 and sets all gates',
+    gate('world: forward derivation — mouthOpen alone drags q to 19 and sets all gates',
       qmin.q === 19 && qmin.g === 3, JSON.stringify(qmin));
+    gate('world: forward derivation — mouthOpen + refit closes the chapter at 20',
+      qmin.qRefit === 20, JSON.stringify(qmin));
     /* NEW GAME: everything un-derives (the REAL path — beginNewGame;
        a reload would only re-run the probe's own seed script) */
     await api.eval('beginNewGame(); 0');
