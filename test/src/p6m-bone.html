@@ -1847,10 +1847,10 @@ function obTickWheel7(t) {
 }
 
 /* ═══ THE END CARD — 7/8: the dark twin, and the drowned moon waiting ═══ */
-const OB_TBC7_SUB = 'Seven phases ride the wheel. Far in the south the Emberwaste sleeps under glass — ' +
-  'black fields that glint like a second sky, and a warm brown hound asleep at the Moonwheel. ' +
-  'One socket stands empty… and tonight it began to GLOW — pointing at no mountain, no shore, no tower. ' +
-  'Pointing DOWN, at the sea. The drowned moon is waiting.';
+/* two lines, like every other card — four lines of scene-setting buried
+   the only sentence that matters (the sibling cards run ~170 chars) */
+const OB_TBC7_SUB = 'Seven phases ride the wheel, and the last socket has begun to GLOW — ' +
+  'pointing at no mountain, no shore, no tower. Pointing DOWN, at the sea. The drowned moon is waiting.';
 function obDrawTBCArt7() {
   const cv = el('tbcArt'), g = cv.getContext('2d');
   const W = cv.width, H = cv.height;
@@ -2351,14 +2351,24 @@ function obBoatPoint() {
   const bz = (SAVE && SAVE.boatZ != null) ? SAVE.boatZ : BOAT.z;
   return { x: bx, z: bz };
 }
+/* ASHORE ANYWHERE, THE FIRST ANSWER IS THE BOAT (p6d's viaBoat law).
+   The old test was `P.x > -30`, which only covered the village side of
+   the bay: stand on Gannet Stack, the Long Strand or Watchstone at q29
+   and the compass pointed straight down the seaway — over water a player
+   on foot cannot walk, with the hull moored somewhere behind them. Any
+   dry foot outside the Emberwaste now gets the hull first. */
+function obAshoreBoat() {
+  if (P.sailing || obInRegion(P.x, P.z)) return null;
+  return obBoatPoint();
+}
 function obSeaSouth() {
-  if (!P.sailing && P.x > -30) {
-    const b = obBoatPoint();
-    if (b) return b;
-  }
+  const b = obAshoreBoat();
+  if (b) return b;
   return obChainNext(OB_SEAWAY.slice(0, -1), OB_SEAWAY[OB_SEAWAY.length - 1], 26, 8);
 }
 function obSeaHome() {
+  const b = obAshoreBoat();
+  if (b) return b;
   const pts = OB_SEAWAY.slice(0, -1).reverse();
   return obChainNext(pts, { x: WHEEL_POS.x, z: WHEEL_POS.z }, 26, 8);
 }

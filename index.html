@@ -443,7 +443,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P8-MOONHOME-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-SWEEP-B1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ── THE HEART ROW HAS ONE CAP (sweep C). Nine containers were each
@@ -511,10 +511,28 @@ const promptEl = el('prompt'), questEl = el('questLine');
 const heartsCv = el('hearts'), heartsCx = heartsCv.getContext('2d');
 const glareEl = el('glare'), fadeBlackEl = el('fadeBlack');
 const floatEl = el('floatLine');
+/* ── THE BUTTON NAMES ARE MODE-AWARE ──
+   On a keyboard there is no ✕. Only the ✕ inside the ✕-prompt was ever
+   translated, so a keyboard player read "HOLD △ to raise it" and
+   "press △ and the sword points" with no idea which key that meant.
+   ONE mapper now owns every button glyph that reaches the screen —
+   prompt, captions, item toasts, dialogue — so no line can drift out of
+   truth again. The keys are p2's own input map (see gatherInput):
+   ✕ = J, ○ = K (Shift also sprints), □ = Space, △ = L. A modal's BACK is
+   Escape, NOT ○'s sprint key, so those two lines are written by hand. */
+const KBD_GLYPH = { '✕': 'J', '○': 'K', '□': 'SPACE', '△': 'L' };
+function kbdMode() {
+  return !!(window.ArcadeController && ArcadeController.currentInputSource &&
+            ArcadeController.currentInputSource() === 'keyboard');
+}
+function padGlyphs(s) {
+  if (s == null || !kbdMode()) return s;
+  return String(s).replace(/[✕○□△]/g, g => KBD_GLYPH[g]);
+}
 /* one-line floating caption (v3: the moon compass first-use hint) */
 let captionTimer = 0;
 function showCaption(text, ms) {
-  floatEl.textContent = text;
+  floatEl.textContent = padGlyphs(text);
   floatEl.classList.add('on');
   clearTimeout(captionTimer);
   captionTimer = setTimeout(() => floatEl.classList.remove('on'), ms || 3000);
@@ -6009,7 +6027,8 @@ function startDialog(id, npc) {
 }
 function tickDialog() {
   const d = DLG[DS.id];
-  const full = d.lines[DS.line];
+  /* button glyphs in spoken lines become key names on a keyboard */
+  const full = padGlyphs(d.lines[DS.line]);
   if (DS.chars < full.length) {
     DS.chars = Math.min(full.length, DS.chars + 2);
     dlgText.textContent = full.slice(0, DS.chars);
@@ -6040,8 +6059,8 @@ function markTalked(id) {
 /* ── item toast ── */
 function itemToast(big, small) {
   const t = el('itemToast');
-  t.querySelector('.it1').textContent = big;
-  t.querySelector('.it2').textContent = small;
+  t.querySelector('.it1').textContent = padGlyphs(big);
+  t.querySelector('.it2').textContent = padGlyphs(small);
   t.classList.remove('show');
   void t.offsetWidth;
   t.classList.add('show');
@@ -6444,6 +6463,44 @@ function tickSalt() {
   }
 }
 
+/* ── THE SHELL LATCH — shared by every mirror-shell in the game (the
+   grotto shell here, both hollow water-glyphs in p6c, the Foundry's in
+   p6e; page scope makes one definition enough).
+
+   The prompt says "HOLD ✕ — TURN THE SHELL", so a HOLD must be able to
+   finish the job. It could not: while held the shell swept at 0.75 rad/s
+   and the magnetic settle applied only on RELEASE, so a continuous hold
+   crossed the 0.34 rad aim window in 0.45 s and the 1.0 s burn could
+   never complete. Now the settle applies WHILE HELD too — the moment the
+   shell comes inside the window the sweep stops and it seats itself on
+   the mark and stays there for as long as you hold. The wind organ's
+   auto-latch (p6g) is the reference feel. Release-turning is untouched:
+   let go inside the window and the same settle seats it. */
+const SHELL_RATE = 0.75, SHELL_SETTLE = 0.4;
+function shellDelta(a, t) {
+  let da = (a - t) % TAU;
+  da = ((da % TAU) + TAU) % TAU;
+  if (da > Math.PI) da -= TAU;
+  return da;
+}
+function tickShellAim(sh, held, live) {
+  /* sh = { angle, target, group }. `live` false = the puzzle is already
+     solved: turn freely, never settle. Returns the signed delta. */
+  let da = shellDelta(sh.angle, sh.target);
+  const latch = live && Math.abs(da) < SHELL_SETTLE;
+  if (held && !latch) {
+    sh.angle += SHELL_RATE * DT;
+    if (sh.angle > TAU) sh.angle -= TAU;
+    da = shellDelta(sh.angle, sh.target);
+  }
+  if (live && Math.abs(da) < SHELL_SETTLE) {
+    sh.angle = angLerp(sh.angle, sh.target, 0.05);
+    da = shellDelta(sh.angle, sh.target);
+  }
+  sh.group.rotation.y = -sh.angle;
+  return da;
+}
+
 /* ── the mirror-shell puzzle ── */
 let burnT = 0, beamOn = false, wallBurnAnim = -1, mirrorDelta = 9;
 function tickMirror() {
@@ -6457,20 +6514,8 @@ function tickMirror() {
   const dmx = P.x - MIRROR_POS.x, dmz = P.z - MIRROR_POS.z;
   const ctx = (dmx * dmx + dmz * dmz < 60 * 60) ? currentInteract() : null;
   const nearMirror = ctx && ctx.id === 'mirror';
-  if (nearMirror && IN.atkHeld && state === 'play') {
-    mirror.angle += 0.75 * DT;
-    if (mirror.angle > TAU) mirror.angle -= TAU;
-    mirror.group.rotation.y = -mirror.angle;
-  }
-  let da = mirror.angle - mirror.target;
-  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  // magnetic settle: release near the mark and the shell seats itself
-  if (!(nearMirror && IN.atkHeld) && Math.abs(da) < 0.4 && !wallBurned()) {
-    mirror.angle = angLerp(mirror.angle, mirror.target, 0.05);
-    mirror.group.rotation.y = -mirror.angle;
-    da = mirror.angle - mirror.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  }
+  const held = !!(nearMirror && IN.atkHeld && state === 'play');
+  const da = tickShellAim(mirror, held, !wallBurned());
   mirrorDelta = da;
   beamOn = !wallBurned() && Math.abs(da) < 0.17;
   beamOut.rotation.y = -mirror.angle;
@@ -6726,6 +6771,7 @@ function initBoss() {
   // spot) now lives in applyWorldState(), which runs at boot AND on every
   // save transition. John's field bug: a completed save configured the boss
   // at boot, then NEW GAME kept the cured boss — unfightable fresh game.
+  bossHinted = [false, false, false, false];
   BOSS.c = buildKingCrab();
   BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
   scene.add(BOSS.c.root);
@@ -6969,6 +7015,15 @@ function hitBossClaw() {
   if (B.st === 'stuck' || B.st === 'dizzy') B.t = Math.min(B.t, 1.2);   // brief extra window
   dealBossDamage(12);            // 6x — the telegraphed weakness pays off decisively
 }
+/* one hint per PHASE, and each one names what that phase actually does.
+   Phase 1 keeps its save flag (so it stays a once-ever line); 2 and 3 are
+   per-session, re-armed by initBoss. */
+const BOSS_HINT = {
+  1: 'Hit the CLAW when it slams!',
+  2: 'It CHARGES now — hit it while it’s dizzy!',
+  3: 'Hit the CLAW — when it slams, and when it crashes!',
+};
+let bossHinted = [false, false, false, false];
 /* v4: body hits ALWAYS chip — small but real, with FULL feedback. A kid
    who only ever slashes the shell still wins this fight. */
 function hitBossBody() {
@@ -6982,9 +7037,16 @@ function hitBossBody() {
   const d = Math.hypot(P.x - B.x, P.z - B.z) || 1;
   const ex = B.x + (P.x - B.x) / d * 1.7, ez = B.z + (P.z - B.z) / d * 1.7;
   burst(psSpark, ex, groundH(ex, ez) + 1.0, ez, 10, 2.0, 1.5, 0.4);
-  if (SAVE && !SAVE.bossHint) {
-    SAVE.bossHint = true; storeSave();
-    showCaption('Hit the CLAW when it slams!', 3600);
+  /* THE HINT MUST BE TRUE OF THE FIGHT YOU ARE IN. "Hit the CLAW when it
+     slams!" is a lie in phase two — `wantSlam = B.phase !== 2`, so it
+     never slams there: it burrows, charges, and crashes into the wall
+     dizzy. One hint per phase, each one true of that phase. */
+  const ph = clamp(B.phase | 0, 1, 3);
+  const seen = ph === 1 ? !!(SAVE && SAVE.bossHint) : bossHinted[ph];
+  if (!seen) {
+    bossHinted[ph] = true;
+    if (ph === 1 && SAVE) { SAVE.bossHint = true; storeSave(); }
+    showCaption(BOSS_HINT[ph], 3600);
   }
   dealBossDamage(2);
 }
@@ -7397,7 +7459,7 @@ function drawTBCArt() {
 }
 function tickTBC() {
   tbcT += DT;
-  if (tbcT > 1.6) el('tbcGo').textContent = '✕ CONTINUE';
+  if (tbcT > 1.6) el('tbcGo').textContent = padGlyphs('✕ CONTINUE');
   if (tbcT > 1.6 && IN.confirm) {
     el('tbc').classList.remove('on');
     endCine();
@@ -12682,19 +12744,9 @@ function tickHollowMirrors() {
   for (const HM of HMIRRORS) {
     if (SAVE && SAVE[HM.key]) { HM.delta = 0; continue; }
     const nearM = ctx && ctx.id === HM.id;
-    if (nearM && IN.atkHeld && state === 'play') {
-      HM.m.angle += 0.75 * DT;
-      if (HM.m.angle > TAU) HM.m.angle -= TAU;
-      HM.m.group.rotation.y = -HM.m.angle;
-    }
-    let da = HM.m.angle - HM.m.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-      HM.m.angle = angLerp(HM.m.angle, HM.m.target, 0.05);
-      HM.m.group.rotation.y = -HM.m.angle;
-      da = HM.m.angle - HM.m.target;
-      da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    }
+    /* the shared shell latch (p6-game): a hold that reaches the window
+       seats itself and STAYS, so the burn can finish under one hold */
+    const da = tickShellAim(HM.m, !!(nearM && IN.atkHeld && state === 'play'), true);
     HM.delta = da;
     const lit = Math.abs(da) < 0.17;
     if (lit) {
@@ -16129,9 +16181,34 @@ respawnLeftBehind = function () {
   }
 };
 /* ── the objective beacon through the phase-3 thread ── */
+/* THE 2/8 SEAM. At q6 the banner reads "2/8 PHASES RESTORED" and the ONLY
+   way forward is Finn's keel conversation — but the seam answered null and
+   the compass went dead in the middle of the village, the one place a kid
+   pulses ✕ hardest. Every sibling quest answers; this one does now too,
+   and it answers along the AUTHORED VILLAGE PATH (p4's `PATHS`: the wheel
+   spur down to the crossroads, then the lighthouse spur) rather than a
+   beeline over the bay and the grotto rocks. */
+const FINN_ROUTE = [
+  { x: WHEEL_POS.x, z: WHEEL_POS.z + 4 },
+  { x: -30, z: -62 }, { x: -14, z: -44 }, { x: 0, z: -24 },
+  { x: 20, z: -20 }, { x: 36, z: -17 },
+  { x: FINN_POS.x, z: FINN_POS.z },
+];
+function finnRouteNext() {
+  const goal = FINN_ROUTE[FINN_ROUTE.length - 1];
+  if (Math.hypot(P.x - goal.x, P.z - goal.z) < 26) return goal;   // his own yard: aim true
+  let ni = 0, nd = 1e9;
+  for (let i = 0; i < FINN_ROUTE.length; i++) {
+    const d = Math.hypot(P.x - FINN_ROUTE[i].x, P.z - FINN_ROUTE[i].z);
+    if (d < nd) { nd = d; ni = i; }
+  }
+  /* hand over the node you are walking to; step on it and you get the next */
+  return FINN_ROUTE[Math.min(ni + (nd < 9 ? 1 : 0), FINN_ROUTE.length - 1)];
+}
 const _n2ObjPoint = objectivePoint;
 objectivePoint = function () {
   if (SAVE) {
+    if (QUEST.q === 6) return finnRouteNext();
     /* EVERY sea-bound objective goes through the boat, so when you are
        ASHORE the compass must lead you to HER first — not out over open
        water you cannot cross. John stood beside a mastless decorative bay
@@ -17842,19 +17919,9 @@ function fResPermanent() { return !!(SAVE && SAVE.fGlyph3); }
 function tickFoundryShell(ctx) {
   if (SAVE && SAVE.fGlyph1) { FPZ.delta = 0; return; }
   const nearM = ctx && ctx.id === 'foundryShell';
-  if (nearM && IN.atkHeld && state === 'play') {
-    fShell.angle += 0.75 * DT;
-    if (fShell.angle > TAU) fShell.angle -= TAU;
-    fShell.group.rotation.y = -fShell.angle;
-  }
-  let da = fShell.angle - fShell.target;
-  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-    fShell.angle = angLerp(fShell.angle, fShell.target, 0.05);
-    fShell.group.rotation.y = -fShell.angle;
-    da = fShell.angle - fShell.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  }
+  /* the shared shell latch (p6-game): holding ✕ into the aim window
+     seats the shell and holds it there, so the glyph can come true */
+  const da = tickShellAim(fShell, !!(nearM && IN.atkHeld && state === 'play'), true);
   FPZ.delta = da;
   const lit = Math.abs(da) < 0.17;
   if (lit) {
@@ -23089,7 +23156,7 @@ function tickGlint() {
 
 DLG.warden4 = { name: 'THE FIRE WARDEN', lines: [
   'That light’s off the old watch-garden, up on the Crown.',
-  'Nothing has caught the sun up there since the wind died.',
+  'Nothing has caught the sun up there since the wind stopped.',
 ], onDone: () => { SAVE.wardenTalked = 4; storeSave(); } };
 
 /* ── interactions ── */
@@ -23333,6 +23400,36 @@ function hollowSpineNext(toForest) {
   }
   return ch[Math.min(ni + (nd < 7 ? 1 : 0), ch.length - 1)];
 }
+/* THE WAY OUT OF THE MOUNTAIN, as ONE reusable answer. Every later part
+   that wants to send the player home from up here needs the same chain:
+   on the garden walkway hand the next pad toward the ledge, in the stair
+   descend landing by landing, in the Hollow walk the spine — and out in
+   the open return null, so the caller may aim at its own goal. (Phase 8's
+   q35/q36 pointed point-blank through two kilometres of rock until this
+   was shared out; the q16 carry home is the same chain and still uses it.) */
+function crownStageHome() {
+  if (P.sailing) return null;
+  if (inGardenWalkQ(P.x, P.z)) {
+    /* on the ledge pad (and the throat it owns) the answer is the landing
+       INSIDE: the motes stream through the doorway, and the pointer never
+       yanks back to a door already behind you */
+    return crownRouteNext(P.x, P.z, 'ledge') || { x: S_NODE.b.x, z: S_NODE.b.z };
+  }
+  if (stairMode) {
+    /* descend landing by landing — one beeline to the mouth points
+       through five flights of rock */
+    const chain = [S_NODE.out, S_NODE.b, S_NODE.a, S_NODE.l3, S_NODE.l2, S_NODE.l1, S_NODE.mouth];
+    let ni = 0, nd = 1e9;
+    for (let i = 0; i < chain.length; i++) {
+      const d = Math.hypot(P.x - chain[i].x, P.z - chain[i].z);
+      if (d < nd) { nd = d; ni = i; }
+    }
+    const next = chain[Math.min(ni + (nd < 7 ? 1 : 0), chain.length - 1)];
+    return { x: next.x, z: next.z };
+  }
+  if (_preCrownInHollowAt(P.x, P.z)) return hollowSpineNext(true);
+  return null;
+}
 const _preCrownObjPoint = objectivePoint;
 objectivePoint = function () {
   if (SAVE) {
@@ -23375,25 +23472,8 @@ objectivePoint = function () {
       return toDoor();
     }
     if (QUEST.q >= 16) {
-      if (inGardenWalkQ(P.x, P.z)) {
-        /* on the ledge pad (and the throat it owns) the answer is the
-           landing INSIDE: the motes stream through the doorway, and the
-           pointer never yanks back to a door already behind you */
-        return crownRouteNext(P.x, P.z, 'ledge') || { x: S_NODE.b.x, z: S_NODE.b.z };
-      }
-      if (stairMode) {
-        /* descend landing by landing — one beeline to the mouth points
-           through five flights of rock */
-        const chain = [S_NODE.out, S_NODE.b, S_NODE.a, S_NODE.l3, S_NODE.l2, S_NODE.l1, S_NODE.mouth];
-        let ni = 0, nd = 1e9;
-        for (let i = 0; i < chain.length; i++) {
-          const d = Math.hypot(P.x - chain[i].x, P.z - chain[i].z);
-          if (d < nd) { nd = d; ni = i; }
-        }
-        const next = chain[Math.min(ni + (nd < 7 ? 1 : 0), chain.length - 1)];
-        return { x: next.x, z: next.z };
-      }
-      if (inHol) return hollowSpineNext(true);
+      const st = crownStageHome();
+      if (st) return st;
       return { x: WHEEL_POS.x, z: WHEEL_POS.z };
     }
   }
@@ -27338,6 +27418,45 @@ let moPropMesh = null, moSurgeMesh = null, moSurgeMat = null;
       scene.add(glow);
       G.glow = glow; G.glowMat = mat;
     }
+    /* THE COUNT, CARRIED BY THE GATE'S OWN ARMS — one cut pip per turn
+       this gate needs, climbing the jambs, dark until earned. Gate three's
+       three-in-a-row stops being a secret you can only infer from a
+       shudder. They sit at the height of the wheel you are standing at,
+       on BOTH jambs and BOTH faces so the count reads from either bank.
+       One mesh, one draw call, colours rewritten in place per frame — no
+       per-pip material, no per-pip draw. */
+    {
+      const mdP = MD();
+      const need = g.need;
+      const R = 0.19;
+      for (let i = 0; i < need; i++) {
+        const Y = sillY + 1.45 + i * 0.62;
+        for (const ns of [-1, 1]) {            // both arms
+          const cx = g.x + g.nx * ns * 3.1, cz = g.z + g.nz * ns * 3.1;
+          for (const fs of [-1, 1]) {          // both faces of the arm
+            const fx = g.fx * fs * 1.45, fz = g.fz * fs * 1.45;
+            pushQuad(mdP,
+              [cx - g.nx * R + fx, Y - R, cz - g.nz * R + fz],
+              [cx + g.nx * R + fx, Y - R, cz + g.nz * R + fz],
+              [cx + g.nx * R + fx, Y + R, cz + g.nz * R + fz],
+              [cx - g.nx * R + fx, Y + R, cz - g.nz * R + fz], [1, 1, 1]);
+          }
+        }
+      }
+      const pmat = new THREE.MeshBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+      });
+      const pips = mdMesh(mdP, pmat, false);
+      pips.frustumCulled = false;
+      pips.matrixAutoUpdate = false; pips.updateMatrix();
+      pips.visible = false;
+      scene.add(pips);
+      G.pips = pips;
+      G.pipCol = pips.geometry.attributes.color;
+      G.pipVerts = 24;                        // 2 arms x 2 faces x 6 verts
+      G.pipState = -1;
+    }
     /* jamb colliders (walls read as walls; the opening is the slab's) */
     addColl(g.x + g.nx * 3.1, g.z + g.nz * 3.1, 1.1);
     addColl(g.x - g.nx * 3.1, g.z - g.nz * 3.1, 1.1);
@@ -27427,10 +27546,12 @@ SFX.riverRush = function () {
 /* ── the rhythm check itself ──
    HOLD or PRESS ✕ at the wheel: a press while the surge stands in the
    gate = the river turns the wheel with you (a HIT). A press against
-   slack water = the wheel shudders back and the count starts over —
-   never punished, only waited. A hold begun just before the surge
-   counts when the surge arrives (kid grace); a stale grip only strains.
-   Gate 1 gives on one hit, gate 2 on two in a row, gate 3 on three. */
+   slack water = the wheel shudders and NOTHING ELSE — the count stands
+   and simply waits for the next surge. A hold begun just before the
+   surge counts when it arrives (kid grace); a stale grip only strains.
+   Gate 1 gives on one hit, gate 2 on two, gate 3 on three — and each
+   gate's lintel carries one pip per turn needed, lit as they are earned,
+   so the count is never a secret. */
 const MOP = {
   engaged: -1, holdT: 0, pressAge: 999, windowUsed: false,
   hits: 0, shudders: 0, opens: 0, capT: 0,
@@ -27464,18 +27585,39 @@ function moGateHit(G) {
   }
 }
 function moGateShudder(G) {
-  if (G.progress > 0 || true) {
-    /* a slip costs ONE turn, not the whole run — zeroing twelve seconds
-       of held rhythm on gate three was adult-hard (John, live, night one) */
-    G.progress = Math.max(0, G.progress - 1);
-    MOP.shudders++;
-    SFX.wheelSlip();
-    rumble({ duration: 90, strong: 0.12, weak: 0.3 }, 'wheel-slip');
-    G.spinV = Math.min(G.spinV, -1.4);
-  }
+  /* THE LAW (DESIGN.md): "a missed beat just waits for the next surge."
+     An off-beat press costs NOTHING — the wheel shrugs, the water slips
+     past under it, and the count STANDS. (The finale's rhythm call is
+     written the same way.) Feedback yes; punishment never. */
+  MOP.shudders++;
+  SFX.wheelSlip();
+  rumble({ duration: 90, strong: 0.12, weak: 0.3 }, 'wheel-slip');
+  G.spinV = Math.min(G.spinV, -1.4);
 }
 function moSluiceReady() {
   return !!(SAVE && riverWet() && !SAVE.mouthOpen);
+}
+/* the lintel pips: earned turns stand lit, the NEXT one breathes with the
+   surge (so the pip row teaches the beat as well as the count) */
+function moPaintPips(G) {
+  if (!G.pipCol) return;
+  const lit = clamp(G.progress | 0, 0, G.g.need);
+  const pulse = window.__sluicePulseK();
+  const key = lit * 1000 + Math.round(pulse * 40);
+  if (key === G.pipState) return;
+  G.pipState = key;
+  const arr = G.pipCol.array;
+  for (let i = 0; i < G.g.need; i++) {
+    let r, gr, b;
+    if (i < lit) { r = 0.50; gr = 0.74; b = 0.90; }
+    else if (i === lit) { const k = 0.055 + pulse * 0.40; r = k * 0.7; gr = k; b = k * 1.1; }
+    else { r = 0.030; gr = 0.046; b = 0.058; }
+    const s = i * G.pipVerts * 3;
+    for (let v = 0; v < G.pipVerts; v++) {
+      arr[s + v * 3] = r; arr[s + v * 3 + 1] = gr; arr[s + v * 3 + 2] = b;
+    }
+  }
+  G.pipCol.needsUpdate = true;
 }
 function tickSluice() {
   if (MOP.earlyTick === undefined) MOP.earlyTick = 0;
@@ -27505,7 +27647,11 @@ function tickSluice() {
   P.heading = angLerp(P.heading, Math.atan2(G.g.x - P.x, G.g.z - P.z), 0.2);
   if (pressed) {
     if (on && !MOP.windowUsed) { MOP.earlyTick = 0; MOP.windowUsed = true; moGateHit(G); }
-    else if (!on) {
+    else if (on) {
+      /* the surge is already spent on this turn — mashing still MOVES the
+         wheel under your hands, so no press is ever a dead press */
+      G.spinV = Math.max(G.spinV, 0.7);
+    } else if (!on) {
       /* the HUMAN error is the EARLY press — anticipation. Within a third
          of a second of the surge it is a grip taken in time: buffer it,
          the wheel gives WITH the water (the sword's press-buffer law). */
@@ -27528,8 +27674,10 @@ function tickSluice() {
   if (on && !wasOn && !MOP.windowUsed && IN.atkHeld && MOP.holdT > 0 && MOP.holdT <= 60) {
     MOP.windowUsed = true;
     moGateHit(G);
-  } else if (on && !wasOn && IN.atkHeld && MOP.holdT > 90) {
-    G.spinV = Math.min(G.spinV, -0.8);      // the stale grip strains, teaches, waits
+  } else if (on && !wasOn && IN.atkHeld && MOP.holdT > 60) {
+    /* a stale grip strains, teaches and waits — and it does so from the
+       tick the grace expires, never through a silent 61–90 dead zone */
+    G.spinV = Math.min(G.spinV, -0.8);
     SFX.creak();
   }
 }
@@ -28221,6 +28369,8 @@ function moDeriveWorld(S) {
     G.giving = false;
     G.slabK = open > k ? 1 : 0;
     G.progress = 0;
+    G.pipState = -1;
+    if (G.pips) G.pips.visible = false;
     G.grp.position.y = G.sillY - G.slabK * 4.15;
   }
   moFill[0] = open >= 1 ? 1 : 0;
@@ -28390,6 +28540,8 @@ cullChunks = function (ccx, ccz) {
     G.grp.visible = dg < 80 * 80 && G.slabK < 0.98;   // a sunk slab is a buried draw call
     G.wheel.visible = dg < 55 * 55;
     G.glow.visible = dg < 80 * 80 && moSluiceReady() && moActiveGate() === G;
+    G.pips.visible = dg < 60 * 60 && moSluiceReady() && moActiveGate() === G;
+    if (G.pips.visible) moPaintPips(G);
     moAnimGate(G, SIM_FREEZE ? 0 : dtv);
   }
   /* the surge, seen and heard: the band runs at the active gate */
@@ -28479,6 +28631,8 @@ window.__telemetryHooks.push(function (T) {
   T.moSurgeNow = moSurgeOn();
   T.moSurgePh = +moSurgePh().toFixed(3);
   T.moProgress = (moActiveGate() || { progress: -1 }).progress;
+  T.moNeed = (moActiveGate() || { g: { need: -1 } }).g.need;
+  T.moPips = (moActiveGate() || { pips: { visible: false } }).pips.visible;
   T.moHits = MOP.hits; T.moShudders = MOP.shudders; T.moOpens = MOP.opens;
   T.moEngaged = MOP.engaged;
   T.moSlabs = MOGATES.map(G => +G.slabK.toFixed(2)).join(',');
@@ -29080,7 +29234,7 @@ nmTrader.char.root.visible = false;
 
 DLG.nmTrader1 = { name: 'THE LANTERN TRADER', lines: [
   'Four phases is moon enough to steer by. So we came back. We ALWAYS come back at four.',
-  'But the river took our berth when it died — the mouth is stone now. The old sluice knows.',
+  'But the river took our berth when it dried — the mouth is stone now. The old sluice knows.',
 ], onDone: () => { if (SAVE && SAVE.q < 19) setQuest(19); } };
 DLG.nmTraderWait = { name: 'THE LANTERN TRADER', lines: [
   'The mouth is stone. Open it, and we will light the whole run home behind you.',
@@ -30607,8 +30761,15 @@ currentInteract = function () {
     /* a rocket outranks the hop-out once ✕ belongs to the pole (□ still
        steps ashore through the base chain) — but only from a calm hull:
        a pressed ✕ in a snapper fight is a whack, never a spent rocket */
-    if (SAVE && SAVE.poleFound && (SAVE.fireworks | 0) > 0 && nmNightK > 0.4 && SKF.spd < 1.2) {
-      return { id: 'nmFirework', label: '✕ LAUNCH FIREWORK (' + SAVE.fireworks + ' ABOARD)' };
+    if (SAVE && SAVE.poleFound && (SAVE.fireworks | 0) > 0 && SKF.spd < 1.2) {
+      if (nmNightK > 0.4) {
+        return { id: 'nmFirework', label: '✕ LAUNCH FIREWORK (' + SAVE.fireworks + ' ABOARD)' };
+      }
+      /* DAYLIGHT: the rockets are still aboard, so the prompt still
+         answers — it just tells the truth instead of vanishing and
+         leaving a kid to wonder where his three salt went (Pearl's
+         telescope pattern: the verb stays, the line explains). */
+      return { id: 'nmFireDay', label: '✕ FIREWORKS (' + SAVE.fireworks + ' ABOARD)' };
     }
     const base = _nmPrevInteract();
     /* once the pole owns ✕, stepping ashore moves to □ — a hop-out that
@@ -30651,6 +30812,7 @@ doInteract = function (ctx) {
   if (ctx.id === 'nmTrader') nmTraderTalk();
   else if (ctx.id === 'nmPole') nmTakePole();
   else if (ctx.id === 'nmFirework') nmLaunchFirework();
+  else if (ctx.id === 'nmFireDay') showCaption('Fireworks want a dark sky — come back at dusk.', 3400);
   else if (ctx.id === 'nmWheel5') startCine('nmWheel5');
   else if (ctx.id === 'nmHeart') startDialog(SAVE.marketHeart ? 'nmHeartSold' : (P.salt >= 60 ? 'nmHeartBuy' : 'nmHeartTalk'), null);
   else if (ctx.id === 'nmGlass') startDialog(SAVE.spyglass ? 'nmGlassSold' : (P.salt >= 25 ? 'nmGlassBuy' : 'nmGlassTalk'), null);
@@ -30738,8 +30900,13 @@ SFX.nmSurgeSfx = function () {
 let nmSkiffFollowT = 0;
 function nmTickSkiffFollows() {
   if (!riverWet() || P.skiffing) return;
+  /* THE MERCY DOES NOT EXPIRE. The window closed at q22, so a post-game
+     family who walked home from the market found the skiff still tied
+     three kilometres up the river with no way to call her. riverWet()
+     is the real gate — the river has to be running for a skiff to nose
+     anywhere — and it stays true forever after phase 4. */
   const q = nmArcQ();
-  if (q < 20 || q > 22) return;
+  if (q < 20) return;
   nmSkiffFollowT += DT;
   if (nmSkiffFollowT < 5) return;
   nmSkiffFollowT = 0;
@@ -30815,9 +30982,25 @@ tickPlayer = function () {
       const jc = _nmPrevInteract();          // the base chain: □ always steps ashore
       if (jc && jc.id === 'skiffOff') { doInteract(jc); IN.jump = false; }
     }
-    if (P.skiffing && IN.atk && NPOLE.t <= 0 && NPOLE.cd <= 0) {
+    if (P.skiffing && IN.atk) {
       const ctx = currentInteract();
-      if (!ctx || ctx.id === 'skiffOff') { nmStartPoleSwing(NPOLE); IN.atk = false; }
+      /* THE POLE OWNS ✕ ABOARD, and it owns it whether or not it is ready.
+         Two ways it did not:
+         (1) during a swing's own 0.73 s (0.55 s arc + 0.18 s cooldown) the
+             press fell THROUGH to the base chain's ✕ HOP OUT and stood the
+             player in the river in the middle of a snapper fight — a busy
+             pole now SWALLOWS the press instead;
+         (2) within the brazier context's 6.2 m the brazier claimed ✕ and
+             the pole went dead in exactly the water the snappers patrol.
+             Lighting a brazier is a HOLD (nmTickBrazierHold reads atkHeld
+             and is not routed through doInteract), so the TAP belongs to
+             the pole and the hold still lights the fire.
+         □ remains the way ashore — which is what its label says. */
+      const braz = !!(ctx && ctx.id.indexOf('nmBraz') === 0);
+      if (!ctx || ctx.id === 'skiffOff' || braz) {
+        if (NPOLE.t <= 0 && NPOLE.cd <= 0) nmStartPoleSwing(NPOLE);
+        IN.atk = false;
+      }
     }
   }
   _nmPrevTickPlayer();
@@ -37317,10 +37500,10 @@ function obTickWheel7(t) {
 }
 
 /* ═══ THE END CARD — 7/8: the dark twin, and the drowned moon waiting ═══ */
-const OB_TBC7_SUB = 'Seven phases ride the wheel. Far in the south the Emberwaste sleeps under glass — ' +
-  'black fields that glint like a second sky, and a warm brown hound asleep at the Moonwheel. ' +
-  'One socket stands empty… and tonight it began to GLOW — pointing at no mountain, no shore, no tower. ' +
-  'Pointing DOWN, at the sea. The drowned moon is waiting.';
+/* two lines, like every other card — four lines of scene-setting buried
+   the only sentence that matters (the sibling cards run ~170 chars) */
+const OB_TBC7_SUB = 'Seven phases ride the wheel, and the last socket has begun to GLOW — ' +
+  'pointing at no mountain, no shore, no tower. Pointing DOWN, at the sea. The drowned moon is waiting.';
 function obDrawTBCArt7() {
   const cv = el('tbcArt'), g = cv.getContext('2d');
   const W = cv.width, H = cv.height;
@@ -37821,14 +38004,24 @@ function obBoatPoint() {
   const bz = (SAVE && SAVE.boatZ != null) ? SAVE.boatZ : BOAT.z;
   return { x: bx, z: bz };
 }
+/* ASHORE ANYWHERE, THE FIRST ANSWER IS THE BOAT (p6d's viaBoat law).
+   The old test was `P.x > -30`, which only covered the village side of
+   the bay: stand on Gannet Stack, the Long Strand or Watchstone at q29
+   and the compass pointed straight down the seaway — over water a player
+   on foot cannot walk, with the hull moored somewhere behind them. Any
+   dry foot outside the Emberwaste now gets the hull first. */
+function obAshoreBoat() {
+  if (P.sailing || obInRegion(P.x, P.z)) return null;
+  return obBoatPoint();
+}
 function obSeaSouth() {
-  if (!P.sailing && P.x > -30) {
-    const b = obBoatPoint();
-    if (b) return b;
-  }
+  const b = obAshoreBoat();
+  if (b) return b;
   return obChainNext(OB_SEAWAY.slice(0, -1), OB_SEAWAY[OB_SEAWAY.length - 1], 26, 8);
 }
 function obSeaHome() {
+  const b = obAshoreBoat();
+  if (b) return b;
   const pts = OB_SEAWAY.slice(0, -1).reverse();
   return obChainNext(pts, { x: WHEEL_POS.x, z: WHEEL_POS.z }, 26, 8);
 }
@@ -38376,8 +38569,16 @@ function cnNightWant() {
 }
 function cnSunWant() {
   const c = cnCycleC();
-  if (c >= 0.55) return 1;
-  return 0.5 + 0.5 * Math.cos((c / 0.55) * TAU);
+  /* THE SUN ACTUALLY SETS. This used to pin fSunK at 1 — full low gold —
+     for the whole of the night: the Crown's gold-hour glint stayed armed
+     at midnight (its test is fSunK > 0.55) and Wick threw a long gold
+     evening shadow under a full moon. The gold now burns DOWN through
+     dusk, true night has no sun at all, and it comes back UP through
+     dawn into the day's own arc — every edge continuous. */
+  if (c < 0.55) return 0.5 + 0.5 * Math.cos((c / 0.55) * TAU);   // day: noon → low gold
+  if (c < 0.60) return 1 - smoothstep((c - 0.55) / 0.05);        // dusk: the gold burns out
+  if (c < 0.95) return 0;                                        // TRUE NIGHT: no sun
+  return smoothstep((c - 0.95) / 0.05);                          // dawn: the gold returns
 }
 /* the night authority: p6j's clock keeps ticking; only its TARGET is
    wrapped. THE FIRST NIGHT holds from the rising to the wheel; the sky
@@ -39729,13 +39930,20 @@ function cnFinishEnd() {
   CN_RISING.shot = -1;
   fadeBlackEl.style.opacity = '1';
   markCineSeen('cnEnd');
-  /* the first true dawn: the post-game clock wakes just before sunrise */
-  cnCycleT = CN_CYCLE_LEN * 0.965;
+  /* A MEMORY IS NOT AN ENDING. The keepsake menu's WATCH THE END FLIGHT
+     runs the same cine, and this tail used to end it the way the story
+     ends it: the world clock jumped to just-before-sunrise and lastPos
+     was rewritten. Watch it at noon and you came back to a dawn you had
+     not walked to. Only the REAL ending sets the clock and the save. */
+  if (!replay) {
+    /* the first true dawn: the post-game clock wakes just before sunrise */
+    cnCycleT = CN_CYCLE_LEN * 0.965;
+  }
   P.x = WHEEL_POS.x + 4; P.z = WHEEL_POS.z + 5;
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI * 0.75;
   P.area = areaAt(P.x, P.z);
-  if (SAVE) { SAVE.lastPos = [P.x, P.z]; SAVE.resumeAboard = false; storeSave(); }
+  if (SAVE && !replay) { SAVE.lastPos = [P.x, P.z]; SAVE.resumeAboard = false; storeSave(); }
   try { el('hud').style.display = ''; } catch (e) {}
   if (typeof wick !== 'undefined' && wick.root) wick.root.visible = true;
   CAM.mode = 'follow'; CAM.ready = false;
@@ -39878,7 +40086,7 @@ function cnTickCards(u, instant) {
     if ((S2.t > 2.0 && IN.confirm) || S2.t > 21) { S2.st = 4; S2.t = 0; }
   } else {
     cnCardGo.style.opacity = '1';
-    cnCardGo.textContent = '✕ — GOODNIGHT';
+    cnCardGo.textContent = padGlyphs('✕ — GOODNIGHT');
     if (S2.t > 0.6 && IN.confirm) { SFX.confirm(); cnFinishEnd(); }
   }
 }
@@ -39902,7 +40110,7 @@ const CN_MENU = ['THE KEEPSAKE', 'WATCH THE RISING', 'WATCH THE END FLIGHT', 'GO
     '<div id="cnWheelPhases" style="font-size:19px;letter-spacing:0.34em;color:#cfd8f2;margin-bottom:14px"></div>' +
     '<div id="cnWheelCard" style="display:none;font-size:16px;line-height:2;color:#d8d4c2;margin-bottom:12px"></div>' +
     '<div id="cnWheelList" style="font-size:16px;line-height:2.2;letter-spacing:0.1em"></div>' +
-    '<div style="margin-top:12px;font-size:12.5px;color:#8a86a0;letter-spacing:0.14em">✕ CHOOSE · ○ BACK</div>';
+    '<div id="cnWheelKeys" style="margin-top:12px;font-size:12.5px;color:#8a86a0;letter-spacing:0.14em"></div>';
   cnWheelUI.appendChild(panel);
   stage.appendChild(cnWheelUI);
   cnWheelList = () => document.getElementById('cnWheelList');
@@ -39915,6 +40123,10 @@ function cnPlaytimeStr() {
 }
 function cnRefreshWheelMenu(showCard) {
   document.getElementById('cnWheelPhases').textContent = '● ● ● ● ● ● ● ●';
+  /* the keys, as they really are: BACK is the ○ EDGE, which on a keyboard
+     is Escape and not ○'s sprint key — so this pair is written out */
+  document.getElementById('cnWheelKeys').textContent =
+    kbdMode() ? 'J CHOOSE · ESC BACK' : '✕ CHOOSE · ○ BACK';
   const card = cnWheelCardEl();
   if (showCard) {
     card.style.display = 'block';
@@ -40197,8 +40409,16 @@ objectivePoint = function () {
   if (SAVE) {
     const q = QUEST.q;
     if (cnMoonHome() || cnSky() >= 8) return null;          // free play rests (the pulse still finds a far boat)
-    if (q === 36 && cnCarryCoin()) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+    /* THE MOUNTAIN COMES FIRST. q35/q36 answered point-blank: standing on
+       the Crown or deep in the Falls Hollow the pointer aimed through two
+       kilometres of rock at the surf or the wheel — the very fault the
+       family walked into at q13 ("we had to walk through the side of the
+       mountain"). Delegate to phase 4's own path spine while the player is
+       inside the staged regions; it answers null out in the open. */
+    const staged = (typeof crownStageHome === 'function') ? crownStageHome() : null;
+    if (q === 36 && cnCarryCoin()) return staged || { x: WHEEL_POS.x, z: WHEEL_POS.z };
     if (q === 35 && cnRisen() && !cnCoinGiven()) {
+      if (staged) return staged;
       if (P.sailing) return { x: 8.5, z: 6.0 };
       return { x: cnSurf.x, z: cnSurf.z };
     }
@@ -40651,6 +40871,12 @@ function refreshTitleMenu() {
   el('ti0').classList.toggle('sel', titleFocus === 0);
   el('ti1').classList.toggle('sel', titleFocus === 1);
   el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)';
+  /* the overwrite guard names the REAL buttons. On a keyboard ✕ is J and
+     "keep my save" is the BACK edge, which is Escape — not ○'s sprint key,
+     so this line is written out rather than run through padGlyphs. */
+  el('ngRow').innerHTML = kbdMode()
+    ? '<b>J</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>ESC</b> KEEP MY SAVE'
+    : '<b>&#10005;</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>&#9675;</b> KEEP MY SAVE';
 }
 function beginNewGame() {
   SFX.confirm();
@@ -40825,6 +41051,7 @@ function tickTitle() {
     if (titleFocus === 0 && SAVE) {
       // a save exists — ask before erasing the family's adventure
       titleMode = 'confirm';
+      refreshTitleMenu();            // the guard names the keys you are holding
       el('ngGuard').classList.add('on');
       SFX.menu();
       return;
@@ -40997,16 +41224,16 @@ function updatePrompt() {
   if (state !== 'play') { promptEl.classList.remove('on'); hudLastPrompt = ''; return; }
   const ctx = currentInteract();
   if (ctx) {
-    let label = ctx.label;
-    if (window.ArcadeController && ArcadeController.currentInputSource && ArcadeController.currentInputSource() === 'keyboard') {
-      label = label.replace('✕', 'J');
-    }
+    /* EVERY glyph, not only ✕ — shell, organ, pole and spyglass prompts
+       carry ○ □ △ too, and a keyboard player owns none of them. p2's
+       `padGlyphs` is the one map (✕=J, ○=K, □=SPACE, △=L). */
+    const label = padGlyphs(ctx.label);
     /* the same change-gate drawHearts keeps just above: an innerHTML write
        re-parses and re-lays-out the prompt EVERY frame, and the label is
        the same string for whole minutes at a time */
     if (label !== hudLastPrompt) {
       hudLastPrompt = label;
-      promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+      promptEl.innerHTML = label.replace(/(✕|○|□|△|SPACE|\bJ\b|\bK\b|\bL\b|HOLD)/g, '<b>$1</b>');
     }
     promptEl.classList.add('on');
   } else { promptEl.classList.remove('on'); hudLastPrompt = ''; }

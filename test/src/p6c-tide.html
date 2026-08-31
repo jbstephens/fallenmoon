@@ -2467,19 +2467,9 @@ function tickHollowMirrors() {
   for (const HM of HMIRRORS) {
     if (SAVE && SAVE[HM.key]) { HM.delta = 0; continue; }
     const nearM = ctx && ctx.id === HM.id;
-    if (nearM && IN.atkHeld && state === 'play') {
-      HM.m.angle += 0.75 * DT;
-      if (HM.m.angle > TAU) HM.m.angle -= TAU;
-      HM.m.group.rotation.y = -HM.m.angle;
-    }
-    let da = HM.m.angle - HM.m.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-      HM.m.angle = angLerp(HM.m.angle, HM.m.target, 0.05);
-      HM.m.group.rotation.y = -HM.m.angle;
-      da = HM.m.angle - HM.m.target;
-      da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    }
+    /* the shared shell latch (p6-game): a hold that reaches the window
+       seats itself and STAYS, so the burn can finish under one hold */
+    const da = tickShellAim(HM.m, !!(nearM && IN.atkHeld && state === 'play'), true);
     HM.delta = da;
     const lit = Math.abs(da) < 0.17;
     if (lit) {

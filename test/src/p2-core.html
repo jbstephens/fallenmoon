@@ -24,7 +24,7 @@ try {
 const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0));
 
 const SAVE_KEY = 'fallenmoon_save_v1';
-const BUILD_TAG = 'FM-P8-MOONHOME-1';   // deploy marker (build-unique)
+const BUILD_TAG = 'FM-SWEEP-B1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
 /* ── THE HEART ROW HAS ONE CAP (sweep C). Nine containers were each
@@ -92,10 +92,28 @@ const promptEl = el('prompt'), questEl = el('questLine');
 const heartsCv = el('hearts'), heartsCx = heartsCv.getContext('2d');
 const glareEl = el('glare'), fadeBlackEl = el('fadeBlack');
 const floatEl = el('floatLine');
+/* ── THE BUTTON NAMES ARE MODE-AWARE ──
+   On a keyboard there is no ✕. Only the ✕ inside the ✕-prompt was ever
+   translated, so a keyboard player read "HOLD △ to raise it" and
+   "press △ and the sword points" with no idea which key that meant.
+   ONE mapper now owns every button glyph that reaches the screen —
+   prompt, captions, item toasts, dialogue — so no line can drift out of
+   truth again. The keys are p2's own input map (see gatherInput):
+   ✕ = J, ○ = K (Shift also sprints), □ = Space, △ = L. A modal's BACK is
+   Escape, NOT ○'s sprint key, so those two lines are written by hand. */
+const KBD_GLYPH = { '✕': 'J', '○': 'K', '□': 'SPACE', '△': 'L' };
+function kbdMode() {
+  return !!(window.ArcadeController && ArcadeController.currentInputSource &&
+            ArcadeController.currentInputSource() === 'keyboard');
+}
+function padGlyphs(s) {
+  if (s == null || !kbdMode()) return s;
+  return String(s).replace(/[✕○□△]/g, g => KBD_GLYPH[g]);
+}
 /* one-line floating caption (v3: the moon compass first-use hint) */
 let captionTimer = 0;
 function showCaption(text, ms) {
-  floatEl.textContent = text;
+  floatEl.textContent = padGlyphs(text);
   floatEl.classList.add('on');
   clearTimeout(captionTimer);
   captionTimer = setTimeout(() => floatEl.classList.remove('on'), ms || 3000);

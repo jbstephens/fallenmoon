@@ -1261,19 +1261,9 @@ function fResPermanent() { return !!(SAVE && SAVE.fGlyph3); }
 function tickFoundryShell(ctx) {
   if (SAVE && SAVE.fGlyph1) { FPZ.delta = 0; return; }
   const nearM = ctx && ctx.id === 'foundryShell';
-  if (nearM && IN.atkHeld && state === 'play') {
-    fShell.angle += 0.75 * DT;
-    if (fShell.angle > TAU) fShell.angle -= TAU;
-    fShell.group.rotation.y = -fShell.angle;
-  }
-  let da = fShell.angle - fShell.target;
-  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-    fShell.angle = angLerp(fShell.angle, fShell.target, 0.05);
-    fShell.group.rotation.y = -fShell.angle;
-    da = fShell.angle - fShell.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  }
+  /* the shared shell latch (p6-game): holding ✕ into the aim window
+     seats the shell and holds it there, so the glyph can come true */
+  const da = tickShellAim(fShell, !!(nearM && IN.atkHeld && state === 'play'), true);
   FPZ.delta = da;
   const lit = Math.abs(da) < 0.17;
   if (lit) {

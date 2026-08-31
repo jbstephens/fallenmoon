@@ -2782,7 +2782,7 @@ function tickGlint() {
 
 DLG.warden4 = { name: 'THE FIRE WARDEN', lines: [
   'That light’s off the old watch-garden, up on the Crown.',
-  'Nothing has caught the sun up there since the wind died.',
+  'Nothing has caught the sun up there since the wind stopped.',
 ], onDone: () => { SAVE.wardenTalked = 4; storeSave(); } };
 
 /* ── interactions ── */
@@ -3026,6 +3026,36 @@ function hollowSpineNext(toForest) {
   }
   return ch[Math.min(ni + (nd < 7 ? 1 : 0), ch.length - 1)];
 }
+/* THE WAY OUT OF THE MOUNTAIN, as ONE reusable answer. Every later part
+   that wants to send the player home from up here needs the same chain:
+   on the garden walkway hand the next pad toward the ledge, in the stair
+   descend landing by landing, in the Hollow walk the spine — and out in
+   the open return null, so the caller may aim at its own goal. (Phase 8's
+   q35/q36 pointed point-blank through two kilometres of rock until this
+   was shared out; the q16 carry home is the same chain and still uses it.) */
+function crownStageHome() {
+  if (P.sailing) return null;
+  if (inGardenWalkQ(P.x, P.z)) {
+    /* on the ledge pad (and the throat it owns) the answer is the landing
+       INSIDE: the motes stream through the doorway, and the pointer never
+       yanks back to a door already behind you */
+    return crownRouteNext(P.x, P.z, 'ledge') || { x: S_NODE.b.x, z: S_NODE.b.z };
+  }
+  if (stairMode) {
+    /* descend landing by landing — one beeline to the mouth points
+       through five flights of rock */
+    const chain = [S_NODE.out, S_NODE.b, S_NODE.a, S_NODE.l3, S_NODE.l2, S_NODE.l1, S_NODE.mouth];
+    let ni = 0, nd = 1e9;
+    for (let i = 0; i < chain.length; i++) {
+      const d = Math.hypot(P.x - chain[i].x, P.z - chain[i].z);
+      if (d < nd) { nd = d; ni = i; }
+    }
+    const next = chain[Math.min(ni + (nd < 7 ? 1 : 0), chain.length - 1)];
+    return { x: next.x, z: next.z };
+  }
+  if (_preCrownInHollowAt(P.x, P.z)) return hollowSpineNext(true);
+  return null;
+}
 const _preCrownObjPoint = objectivePoint;
 objectivePoint = function () {
   if (SAVE) {
@@ -3068,25 +3098,8 @@ objectivePoint = function () {
       return toDoor();
     }
     if (QUEST.q >= 16) {
-      if (inGardenWalkQ(P.x, P.z)) {
-        /* on the ledge pad (and the throat it owns) the answer is the
-           landing INSIDE: the motes stream through the doorway, and the
-           pointer never yanks back to a door already behind you */
-        return crownRouteNext(P.x, P.z, 'ledge') || { x: S_NODE.b.x, z: S_NODE.b.z };
-      }
-      if (stairMode) {
-        /* descend landing by landing — one beeline to the mouth points
-           through five flights of rock */
-        const chain = [S_NODE.out, S_NODE.b, S_NODE.a, S_NODE.l3, S_NODE.l2, S_NODE.l1, S_NODE.mouth];
-        let ni = 0, nd = 1e9;
-        for (let i = 0; i < chain.length; i++) {
-          const d = Math.hypot(P.x - chain[i].x, P.z - chain[i].z);
-          if (d < nd) { nd = d; ni = i; }
-        }
-        const next = chain[Math.min(ni + (nd < 7 ? 1 : 0), chain.length - 1)];
-        return { x: next.x, z: next.z };
-      }
-      if (inHol) return hollowSpineNext(true);
+      const st = crownStageHome();
+      if (st) return st;
       return { x: WHEEL_POS.x, z: WHEEL_POS.z };
     }
   }

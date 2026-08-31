@@ -146,8 +146,16 @@ function cnNightWant() {
 }
 function cnSunWant() {
   const c = cnCycleC();
-  if (c >= 0.55) return 1;
-  return 0.5 + 0.5 * Math.cos((c / 0.55) * TAU);
+  /* THE SUN ACTUALLY SETS. This used to pin fSunK at 1 — full low gold —
+     for the whole of the night: the Crown's gold-hour glint stayed armed
+     at midnight (its test is fSunK > 0.55) and Wick threw a long gold
+     evening shadow under a full moon. The gold now burns DOWN through
+     dusk, true night has no sun at all, and it comes back UP through
+     dawn into the day's own arc — every edge continuous. */
+  if (c < 0.55) return 0.5 + 0.5 * Math.cos((c / 0.55) * TAU);   // day: noon → low gold
+  if (c < 0.60) return 1 - smoothstep((c - 0.55) / 0.05);        // dusk: the gold burns out
+  if (c < 0.95) return 0;                                        // TRUE NIGHT: no sun
+  return smoothstep((c - 0.95) / 0.05);                          // dawn: the gold returns
 }
 /* the night authority: p6j's clock keeps ticking; only its TARGET is
    wrapped. THE FIRST NIGHT holds from the rising to the wheel; the sky
@@ -1499,13 +1507,20 @@ function cnFinishEnd() {
   CN_RISING.shot = -1;
   fadeBlackEl.style.opacity = '1';
   markCineSeen('cnEnd');
-  /* the first true dawn: the post-game clock wakes just before sunrise */
-  cnCycleT = CN_CYCLE_LEN * 0.965;
+  /* A MEMORY IS NOT AN ENDING. The keepsake menu's WATCH THE END FLIGHT
+     runs the same cine, and this tail used to end it the way the story
+     ends it: the world clock jumped to just-before-sunrise and lastPos
+     was rewritten. Watch it at noon and you came back to a dawn you had
+     not walked to. Only the REAL ending sets the clock and the save. */
+  if (!replay) {
+    /* the first true dawn: the post-game clock wakes just before sunrise */
+    cnCycleT = CN_CYCLE_LEN * 0.965;
+  }
   P.x = WHEEL_POS.x + 4; P.z = WHEEL_POS.z + 5;
   P.fy = groundH(P.x, P.z); P.air = false; P.jvy = 0;
   P.heading = Math.PI * 0.75;
   P.area = areaAt(P.x, P.z);
-  if (SAVE) { SAVE.lastPos = [P.x, P.z]; SAVE.resumeAboard = false; storeSave(); }
+  if (SAVE && !replay) { SAVE.lastPos = [P.x, P.z]; SAVE.resumeAboard = false; storeSave(); }
   try { el('hud').style.display = ''; } catch (e) {}
   if (typeof wick !== 'undefined' && wick.root) wick.root.visible = true;
   CAM.mode = 'follow'; CAM.ready = false;
@@ -1648,7 +1663,7 @@ function cnTickCards(u, instant) {
     if ((S2.t > 2.0 && IN.confirm) || S2.t > 21) { S2.st = 4; S2.t = 0; }
   } else {
     cnCardGo.style.opacity = '1';
-    cnCardGo.textContent = '✕ — GOODNIGHT';
+    cnCardGo.textContent = padGlyphs('✕ — GOODNIGHT');
     if (S2.t > 0.6 && IN.confirm) { SFX.confirm(); cnFinishEnd(); }
   }
 }
@@ -1672,7 +1687,7 @@ const CN_MENU = ['THE KEEPSAKE', 'WATCH THE RISING', 'WATCH THE END FLIGHT', 'GO
     '<div id="cnWheelPhases" style="font-size:19px;letter-spacing:0.34em;color:#cfd8f2;margin-bottom:14px"></div>' +
     '<div id="cnWheelCard" style="display:none;font-size:16px;line-height:2;color:#d8d4c2;margin-bottom:12px"></div>' +
     '<div id="cnWheelList" style="font-size:16px;line-height:2.2;letter-spacing:0.1em"></div>' +
-    '<div style="margin-top:12px;font-size:12.5px;color:#8a86a0;letter-spacing:0.14em">✕ CHOOSE · ○ BACK</div>';
+    '<div id="cnWheelKeys" style="margin-top:12px;font-size:12.5px;color:#8a86a0;letter-spacing:0.14em"></div>';
   cnWheelUI.appendChild(panel);
   stage.appendChild(cnWheelUI);
   cnWheelList = () => document.getElementById('cnWheelList');
@@ -1685,6 +1700,10 @@ function cnPlaytimeStr() {
 }
 function cnRefreshWheelMenu(showCard) {
   document.getElementById('cnWheelPhases').textContent = '● ● ● ● ● ● ● ●';
+  /* the keys, as they really are: BACK is the ○ EDGE, which on a keyboard
+     is Escape and not ○'s sprint key — so this pair is written out */
+  document.getElementById('cnWheelKeys').textContent =
+    kbdMode() ? 'J CHOOSE · ESC BACK' : '✕ CHOOSE · ○ BACK';
   const card = cnWheelCardEl();
   if (showCard) {
     card.style.display = 'block';
@@ -1967,8 +1986,16 @@ objectivePoint = function () {
   if (SAVE) {
     const q = QUEST.q;
     if (cnMoonHome() || cnSky() >= 8) return null;          // free play rests (the pulse still finds a far boat)
-    if (q === 36 && cnCarryCoin()) return { x: WHEEL_POS.x, z: WHEEL_POS.z };
+    /* THE MOUNTAIN COMES FIRST. q35/q36 answered point-blank: standing on
+       the Crown or deep in the Falls Hollow the pointer aimed through two
+       kilometres of rock at the surf or the wheel — the very fault the
+       family walked into at q13 ("we had to walk through the side of the
+       mountain"). Delegate to phase 4's own path spine while the player is
+       inside the staged regions; it answers null out in the open. */
+    const staged = (typeof crownStageHome === 'function') ? crownStageHome() : null;
+    if (q === 36 && cnCarryCoin()) return staged || { x: WHEEL_POS.x, z: WHEEL_POS.z };
     if (q === 35 && cnRisen() && !cnCoinGiven()) {
+      if (staged) return staged;
       if (P.sailing) return { x: 8.5, z: 6.0 };
       return { x: cnSurf.x, z: cnSurf.z };
     }

@@ -2732,9 +2732,34 @@ respawnLeftBehind = function () {
   }
 };
 /* ── the objective beacon through the phase-3 thread ── */
+/* THE 2/8 SEAM. At q6 the banner reads "2/8 PHASES RESTORED" and the ONLY
+   way forward is Finn's keel conversation — but the seam answered null and
+   the compass went dead in the middle of the village, the one place a kid
+   pulses ✕ hardest. Every sibling quest answers; this one does now too,
+   and it answers along the AUTHORED VILLAGE PATH (p4's `PATHS`: the wheel
+   spur down to the crossroads, then the lighthouse spur) rather than a
+   beeline over the bay and the grotto rocks. */
+const FINN_ROUTE = [
+  { x: WHEEL_POS.x, z: WHEEL_POS.z + 4 },
+  { x: -30, z: -62 }, { x: -14, z: -44 }, { x: 0, z: -24 },
+  { x: 20, z: -20 }, { x: 36, z: -17 },
+  { x: FINN_POS.x, z: FINN_POS.z },
+];
+function finnRouteNext() {
+  const goal = FINN_ROUTE[FINN_ROUTE.length - 1];
+  if (Math.hypot(P.x - goal.x, P.z - goal.z) < 26) return goal;   // his own yard: aim true
+  let ni = 0, nd = 1e9;
+  for (let i = 0; i < FINN_ROUTE.length; i++) {
+    const d = Math.hypot(P.x - FINN_ROUTE[i].x, P.z - FINN_ROUTE[i].z);
+    if (d < nd) { nd = d; ni = i; }
+  }
+  /* hand over the node you are walking to; step on it and you get the next */
+  return FINN_ROUTE[Math.min(ni + (nd < 9 ? 1 : 0), FINN_ROUTE.length - 1)];
+}
 const _n2ObjPoint = objectivePoint;
 objectivePoint = function () {
   if (SAVE) {
+    if (QUEST.q === 6) return finnRouteNext();
     /* EVERY sea-bound objective goes through the boat, so when you are
        ASHORE the compass must lead you to HER first — not out over open
        water you cannot cross. John stood beside a mastless decorative bay
