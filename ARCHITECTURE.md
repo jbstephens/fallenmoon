@@ -453,8 +453,44 @@ physics come from one function. Solidity = `worldSolidAt` /
 
 ## Other standing conventions
 
+- **The telegraph law, and the ledger that proves it.** Nothing hostile may
+  touch the player without **≥ 0.9 s (≥ 54 sim ticks)** of visible windup.
+  `window.__fmTele` (p5, next to `updateBeacon`) is the shared recorder:
+  the hostile stamps `fmTeleStart(o)` when the windup begins and
+  `fmTeleFire('name', o)` on the frame it commits, so the ledger measures
+  the real mechanic instead of standing in for it. Suites read it and
+  assert `ticks >= 54`; `test/probes/sweep-a-combat.mjs` gates all
+  thirteen. A new hostile adds its two calls and its own gate.
+  Pair attacks stagger with a **negative** start `t` (t counts UP toward
+  the threshold, so negative = later): `-HORNET_PAIR_STAGGER`, `-0.42` for
+  the sea gulls. A positive value fires the partner EARLY.
+- **The roar never refunds.** Phase transitions do
+  `hp = Math.min(hp, phaseHp(phase))`, never `hp = phaseHp(phase)` — hits
+  landed during the roar are the ones a masher can actually reach.
+- **A committed attack marks its ground.** Tracked strike points freeze at
+  60 % of the windup (`BOSS_SLAM_TELE`), draw a baked ring at the committed
+  spot, and honour jump clearance. Ground markers are standing BANDS, not
+  flat discs — a disc buries itself in sloping terrain.
+- **`window.__BEACON_MUTE`** — boss arenas push `{x, z, r, live()}` and the
+  quest beacon ORB hides inside them (the guardian is the answer; a bobbing
+  orb over its head reads as a phantom will-o'-wisp). The △ compass keeps
+  its answer — this is deliberately NOT the `objectivePoint() → null` shape
+  p6l/p6m use, which also kills the compass mid-fight.
+- **An arena you can enter is an arena you can leave.** Never clamp the
+  PLAYER inside a radius that a doorway crosses (the Kiln Hound's caldera
+  was a trap for exactly this reason); clamp only where the rim is solid
+  geometry, and let walking out re-arm the fight at its phase. An arena far
+  from its region's rescue anchor overrides `nearestShadeSpot` for itself.
+- **One heart cap, one grant path.** `HEART_CAP = 10` and `gainHeart(big,
+  small, y)` live in p2; every heart container in the game calls it. It
+  never shrinks the row, and at the cap it pays the Emberwaste
+  compensation (full heal + 8 salt + its own caption). Ten containers
+  exist against a base of five, so five of them land at the cap by
+  design. `loadSave` clamps `mh` upward-only into `[5, HEART_CAP]`.
 - **Frame budget: ≤80 draw calls, ≤120k triangles**, asserted by
-  `perf`, `fperf`, `flow`, `sail`. Held by squared-distance culling in
+  `perf`, `fperf`, `flow`, `sail`. The END-STATE world is over that
+  budget today (see `test/probes/postgame-perf.mjs`) and is held to a
+  documented interim ceiling instead. Held by squared-distance culling in
   `updateVisuals` and per-chunk visibility.
 - **No assets.** All geometry built in code, light baked per-vertex
   (`bakeCol` 1808), one shared `WORLD_MAT`.
@@ -557,6 +593,16 @@ failures as `<suite>-FAIL.png`). `test/shots-probe/` is gitignored.
 
 Nearly every suite ends with a `zero console errors` gate and a
 catch-all that fails on any thrown exception.
+
+`test/probes/postgame-perf.mjs` is the END-STATE census: 54 vistas across
+the post-game world (sky 8, moonHome) and the full day cycle, printed as a
+call/triangle table. It GATES only against a generous interim ceiling (140
+calls / 125k tris) and prints WARN lines between 80 and 140, so the drift
+stays visible without blocking a branch. Worst as of the sweep: 117 calls
+at the quay, 121k tris at the falls forecourt. The remaining 80-call work
+is named in its header as deliberate backlog (humanoid LOD, star merge,
+general far-cull). Its vantages are wet-checked: three of the early-game
+village stations are 1–2 m under water once the tide is home.
 
 Deeper phase-3 coverage (102 gates) lives in `test/probes/p6e-*.mjs` and
 `test/probes/seadiag.mjs`, run directly with node. Two hard-won rules for

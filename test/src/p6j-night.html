@@ -499,7 +499,7 @@ nmTrader.char.root.visible = false;
 
 DLG.nmTrader1 = { name: 'THE LANTERN TRADER', lines: [
   'Four phases is moon enough to steer by. So we came back. We ALWAYS come back at four.',
-  'But the river took our berth when it died — the mouth is stone now. The old sluice knows.',
+  'But the river took our berth when it dried — the mouth is stone now. The old sluice knows.',
 ], onDone: () => { if (SAVE && SAVE.q < 19) setQuest(19); } };
 DLG.nmTraderWait = { name: 'THE LANTERN TRADER', lines: [
   'The mouth is stone. Open it, and we will light the whole run home behind you.',
@@ -1484,12 +1484,7 @@ function nmGrantHeart() {
   if (!SAVE || SAVE.marketHeart || P.salt < 60) return;
   P.salt -= 60; SAVE.salt = P.salt;
   SAVE.marketHeart = true;
-  P.maxHearts = Math.min(9, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemToast('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.', groundH(P.x, P.z) + 1.4);
 }
 function nmGrantGlass() {
   if (!SAVE || SAVE.spyglass || P.salt < 25) return;
@@ -2031,8 +2026,15 @@ currentInteract = function () {
     /* a rocket outranks the hop-out once ✕ belongs to the pole (□ still
        steps ashore through the base chain) — but only from a calm hull:
        a pressed ✕ in a snapper fight is a whack, never a spent rocket */
-    if (SAVE && SAVE.poleFound && (SAVE.fireworks | 0) > 0 && nmNightK > 0.4 && SKF.spd < 1.2) {
-      return { id: 'nmFirework', label: '✕ LAUNCH FIREWORK (' + SAVE.fireworks + ' ABOARD)' };
+    if (SAVE && SAVE.poleFound && (SAVE.fireworks | 0) > 0 && SKF.spd < 1.2) {
+      if (nmNightK > 0.4) {
+        return { id: 'nmFirework', label: '✕ LAUNCH FIREWORK (' + SAVE.fireworks + ' ABOARD)' };
+      }
+      /* DAYLIGHT: the rockets are still aboard, so the prompt still
+         answers — it just tells the truth instead of vanishing and
+         leaving a kid to wonder where his three salt went (Pearl's
+         telescope pattern: the verb stays, the line explains). */
+      return { id: 'nmFireDay', label: '✕ FIREWORKS (' + SAVE.fireworks + ' ABOARD)' };
     }
     const base = _nmPrevInteract();
     /* once the pole owns ✕, stepping ashore moves to □ — a hop-out that
@@ -2075,6 +2077,7 @@ doInteract = function (ctx) {
   if (ctx.id === 'nmTrader') nmTraderTalk();
   else if (ctx.id === 'nmPole') nmTakePole();
   else if (ctx.id === 'nmFirework') nmLaunchFirework();
+  else if (ctx.id === 'nmFireDay') showCaption('Fireworks want a dark sky — come back at dusk.', 3400);
   else if (ctx.id === 'nmWheel5') startCine('nmWheel5');
   else if (ctx.id === 'nmHeart') startDialog(SAVE.marketHeart ? 'nmHeartSold' : (P.salt >= 60 ? 'nmHeartBuy' : 'nmHeartTalk'), null);
   else if (ctx.id === 'nmGlass') startDialog(SAVE.spyglass ? 'nmGlassSold' : (P.salt >= 25 ? 'nmGlassBuy' : 'nmGlassTalk'), null);
@@ -2162,8 +2165,13 @@ SFX.nmSurgeSfx = function () {
 let nmSkiffFollowT = 0;
 function nmTickSkiffFollows() {
   if (!riverWet() || P.skiffing) return;
+  /* THE MERCY DOES NOT EXPIRE. The window closed at q22, so a post-game
+     family who walked home from the market found the skiff still tied
+     three kilometres up the river with no way to call her. riverWet()
+     is the real gate — the river has to be running for a skiff to nose
+     anywhere — and it stays true forever after phase 4. */
   const q = nmArcQ();
-  if (q < 20 || q > 22) return;
+  if (q < 20) return;
   nmSkiffFollowT += DT;
   if (nmSkiffFollowT < 5) return;
   nmSkiffFollowT = 0;
@@ -2239,9 +2247,25 @@ tickPlayer = function () {
       const jc = _nmPrevInteract();          // the base chain: □ always steps ashore
       if (jc && jc.id === 'skiffOff') { doInteract(jc); IN.jump = false; }
     }
-    if (P.skiffing && IN.atk && NPOLE.t <= 0 && NPOLE.cd <= 0) {
+    if (P.skiffing && IN.atk) {
       const ctx = currentInteract();
-      if (!ctx || ctx.id === 'skiffOff') { nmStartPoleSwing(NPOLE); IN.atk = false; }
+      /* THE POLE OWNS ✕ ABOARD, and it owns it whether or not it is ready.
+         Two ways it did not:
+         (1) during a swing's own 0.73 s (0.55 s arc + 0.18 s cooldown) the
+             press fell THROUGH to the base chain's ✕ HOP OUT and stood the
+             player in the river in the middle of a snapper fight — a busy
+             pole now SWALLOWS the press instead;
+         (2) within the brazier context's 6.2 m the brazier claimed ✕ and
+             the pole went dead in exactly the water the snappers patrol.
+             Lighting a brazier is a HOLD (nmTickBrazierHold reads atkHeld
+             and is not routed through doInteract), so the TAP belongs to
+             the pole and the hold still lights the fire.
+         □ remains the way ashore — which is what its label says. */
+      const braz = !!(ctx && ctx.id.indexOf('nmBraz') === 0);
+      if (!ctx || ctx.id === 'skiffOff' || braz) {
+        if (NPOLE.t <= 0 && NPOLE.cd <= 0) nmStartPoleSwing(NPOLE);
+        IN.atk = false;
+      }
     }
   }
   _nmPrevTickPlayer();
@@ -2631,6 +2655,20 @@ window.__worldStateHooks.push(function (S) {
 });
 
 /* ═══ RULES registrations ═══ */
+/* RULE 1: p6j wraps the forest's SOLID authority to open the ferry-yard
+   clearing (the pines over it are parked out of the chunk meshes and
+   __forestSolid answers false inside the rect), and for three phases it
+   declared nothing — so the conformance sweep judged that footprint as
+   plain forest and never saw the owner that actually carved it. The ground
+   under the market is still the forest's field, exactly as the grotto's
+   entry re-declares the bay's: what p6j owns here is the carve. */
+const __regNightGround = groundH;    // the chain as it stands at p6j, captured
+window.__WORLD_REG.push({
+  name: 'night-market', kind: 'ground', over: ['forest'],
+  owns: (x, z) => nmMarketClearQ(x, z),
+  ground: (x, z) => __regNightGround(x, z),
+  note: 'the ferry-yard clearing (nmMarketClearQ footprint) — the forest heightfield stands, but __forestSolid is wrapped open here and the pines are parked out of the bakes; the quay and stalls add their own colliders',
+});
 window.__PORTALS.push({
   name: 'market-gate',
   x: NM_MARKET.gate.x, z: NM_MARKET.gate.z,

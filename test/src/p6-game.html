@@ -94,7 +94,8 @@ function startDialog(id, npc) {
 }
 function tickDialog() {
   const d = DLG[DS.id];
-  const full = d.lines[DS.line];
+  /* button glyphs in spoken lines become key names on a keyboard */
+  const full = padGlyphs(d.lines[DS.line]);
   if (DS.chars < full.length) {
     DS.chars = Math.min(full.length, DS.chars + 2);
     dlgText.textContent = full.slice(0, DS.chars);
@@ -125,8 +126,8 @@ function markTalked(id) {
 /* ── item toast ── */
 function itemToast(big, small) {
   const t = el('itemToast');
-  t.querySelector('.it1').textContent = big;
-  t.querySelector('.it2').textContent = small;
+  t.querySelector('.it1').textContent = padGlyphs(big);
+  t.querySelector('.it2').textContent = padGlyphs(small);
   t.classList.remove('show');
   void t.offsetWidth;
   t.classList.add('show');
@@ -137,13 +138,7 @@ function itemToast(big, small) {
 function grantFinnHeart() {
   if (SAVE.finnHeart) return;
   SAVE.finnHeart = true;
-  P.maxHearts = Math.min(8, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemGetT = 0;
-  itemToast('HEART CONTAINER', 'Finn kept it safe through the long noon.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Finn kept it safe through the long noon.', groundH(P.x, P.z) + 1.4);
 }
 
 /* ── interactions — v2: nothing is quest-gated; prompts appear only when
@@ -433,13 +428,7 @@ function tickLightChest() {
     } else {
       lightChest.heart.visible = false;
       lightChestAnimT = -1; lightHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'Kept polished for a night worth lighting.');
-      SFX.heart();
-      burst(psSparkle, P.x, 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'Kept polished for a night worth lighting.', 1.4);
     }
   }
 }
@@ -517,13 +506,7 @@ function tickChest() {
     } else {
       chest.heart.visible = false;
       chestAnimT = -1; heartFloatT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The old sea kept one safe for you.');
-      SFX.heart();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The old sea kept one safe for you.', groundH(P.x, P.z) + 1.4);
     }
   }
 }
@@ -547,25 +530,59 @@ function tickSalt() {
   }
 }
 
+/* ── THE SHELL LATCH — shared by every mirror-shell in the game (the
+   grotto shell here, both hollow water-glyphs in p6c, the Foundry's in
+   p6e; page scope makes one definition enough).
+
+   The prompt says "HOLD ✕ — TURN THE SHELL", so a HOLD must be able to
+   finish the job. It could not: while held the shell swept at 0.75 rad/s
+   and the magnetic settle applied only on RELEASE, so a continuous hold
+   crossed the 0.34 rad aim window in 0.45 s and the 1.0 s burn could
+   never complete. Now the settle applies WHILE HELD too — the moment the
+   shell comes inside the window the sweep stops and it seats itself on
+   the mark and stays there for as long as you hold. The wind organ's
+   auto-latch (p6g) is the reference feel. Release-turning is untouched:
+   let go inside the window and the same settle seats it. */
+const SHELL_RATE = 0.75, SHELL_SETTLE = 0.4;
+function shellDelta(a, t) {
+  let da = (a - t) % TAU;
+  da = ((da % TAU) + TAU) % TAU;
+  if (da > Math.PI) da -= TAU;
+  return da;
+}
+function tickShellAim(sh, held, live) {
+  /* sh = { angle, target, group }. `live` false = the puzzle is already
+     solved: turn freely, never settle. Returns the signed delta. */
+  let da = shellDelta(sh.angle, sh.target);
+  const latch = live && Math.abs(da) < SHELL_SETTLE;
+  if (held && !latch) {
+    sh.angle += SHELL_RATE * DT;
+    if (sh.angle > TAU) sh.angle -= TAU;
+    da = shellDelta(sh.angle, sh.target);
+  }
+  if (live && Math.abs(da) < SHELL_SETTLE) {
+    sh.angle = angLerp(sh.angle, sh.target, 0.05);
+    da = shellDelta(sh.angle, sh.target);
+  }
+  sh.group.rotation.y = -sh.angle;
+  return da;
+}
+
 /* ── the mirror-shell puzzle ── */
 let burnT = 0, beamOn = false, wallBurnAnim = -1, mirrorDelta = 9;
 function tickMirror() {
-  const ctx = currentInteract();
+  /* the shell is a PLACE. Resolving the ✕ prompt walks every region's
+     interact chain in the game — the whole world's worth of proximity
+     tests — and this asked for it every single frame from anywhere,
+     including two kilometres away on the Crown. Gate it on the mirror's
+     own footprint (p6e's foundry pattern); everything below still runs
+     unchanged, so the beam, the magnetic settle and the burn are
+     byte-identical wherever they could ever be watched. */
+  const dmx = P.x - MIRROR_POS.x, dmz = P.z - MIRROR_POS.z;
+  const ctx = (dmx * dmx + dmz * dmz < 60 * 60) ? currentInteract() : null;
   const nearMirror = ctx && ctx.id === 'mirror';
-  if (nearMirror && IN.atkHeld && state === 'play') {
-    mirror.angle += 0.75 * DT;
-    if (mirror.angle > TAU) mirror.angle -= TAU;
-    mirror.group.rotation.y = -mirror.angle;
-  }
-  let da = mirror.angle - mirror.target;
-  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  // magnetic settle: release near the mark and the shell seats itself
-  if (!(nearMirror && IN.atkHeld) && Math.abs(da) < 0.4 && !wallBurned()) {
-    mirror.angle = angLerp(mirror.angle, mirror.target, 0.05);
-    mirror.group.rotation.y = -mirror.angle;
-    da = mirror.angle - mirror.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  }
+  const held = !!(nearMirror && IN.atkHeld && state === 'play');
+  const da = tickShellAim(mirror, held, !wallBurned());
   mirrorDelta = da;
   beamOn = !wallBurned() && Math.abs(da) < 0.17;
   beamOut.rotation.y = -mirror.angle;
@@ -676,13 +693,13 @@ function tickCrab(cr) {
     // v3: leashed to the patrol ground — no kiting crab trains to the village
     if (d2p > 13 || Math.hypot(cr.x - cr.sx, cr.z - cr.sz) > 28) { cr.st = 'patrol'; cr.t = 0; }
     else if (d2p < 3.6 && cr.lungeCD <= 0) {
-      cr.st = 'tele'; cr.t = 0;
+      cr.st = 'tele'; cr.t = 0; fmTeleStart(cr);
       SFX.click();
     }
   } else if (cr.st === 'tele') {
-    // claws up, rattling — the read
-    if (cr.t > 0.55) {
-      cr.st = 'lunge'; cr.t = 0;
+    // claws up, rattling — the read (a full 0.9 s of it)
+    if (cr.t > 0.90) {
+      cr.st = 'lunge'; cr.t = 0; fmTeleFire('scorchCrab', cr);
       const d = Math.hypot(P.x - cr.x, P.z - cr.z) || 1;
       cr.dir = [(P.x - cr.x) / d, (P.z - cr.z) / d];
       SFX.click();
@@ -695,9 +712,9 @@ function tickCrab(cr) {
     cr.x = lr[0]; cr.z = lr[1];
     // v3: a well-timed jump sails over the pinch
     if (Math.hypot(P.x - cr.x, P.z - cr.z) < 1.3 && P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, cr.x, cr.z, cr.c.root);
-    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.8; }
+    if (cr.t > 0.42) { cr.st = 'recover'; cr.t = 0; cr.lungeCD = 1.45; }
   } else if (cr.st === 'recover') {
-    if (cr.t > 0.85) { cr.st = 'aggro'; cr.t = 0; }
+    if (cr.t > 0.50) { cr.st = 'aggro'; cr.t = 0; }   // recovery shaved to pay for the windup
   }
   // soft push so it never overlaps the player standing still
   if (d2p < 1.35 && cr.st !== 'lunge') {
@@ -772,12 +789,12 @@ function tickWisp(w) {   // — the SUN IMP brain (name kept from v1)
       w.z += (P.z - w.z) / d * 1.25 * DT;
       faceP();
     }
-    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; SFX.chirp(); }   // rear-up + chirp
+    if (d2p < 4.6) { w.st = 'tele'; w.t = 0; fmTeleStart(w); SFX.chirp(); }   // rear-up + chirp
   } else if (w.st === 'tele') {
     faceP();
     w.y = gy + 2.15 + Math.sin(w.t * 18) * 0.06;
-    if (w.t > 0.55) {
-      w.st = 'dive'; w.t = 0;
+    if (w.t > 0.90) {           // a full 0.9 s reared up before it stoops
+      w.st = 'dive'; w.t = 0; fmTeleFire('sunImp', w);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - w.x, dy = ty - w.y, dz = P.z - w.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -808,8 +825,9 @@ function popWisp(w) {
    hits during slam-recovery windows do 5x (10). Phases at 60 / 30 HP.
    Proximity always wakes it — no quest-state excuses. */
 const BOSS_HP = 90;
+const BOSS_SLAM_TELE = 0.95;   // ≥54 ticks of claw-up warning; commits at 40%
 const BOSS = {
-  c: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
+  c: null, mark: null, active: false, phase: 0, clawHits: 0, st: 'idle', t: 0,
   hp: BOSS_HP, hpMax: BOSS_HP, bodyHits: 0,
   x: GROTTO_B.x, z: GROTTO_B.z - 2, ang: Math.PI,
   slamPos: [0, 0], chargeDir: [0, 0], chargeN: 0,
@@ -821,9 +839,33 @@ function initBoss() {
   // spot) now lives in applyWorldState(), which runs at boot AND on every
   // save transition. John's field bug: a completed save configured the boss
   // at boot, then NEW GAME kept the cured boss — unfightable fresh game.
+  bossHinted = [false, false, false, false];
   BOSS.c = buildKingCrab();
   BOSS.c.root.position.set(BOSS.x, groundH(BOSS.x, BOSS.z), BOSS.z);
   scene.add(BOSS.c.root);
+  if (!BOSS.mark) BOSS.mark = buildSlamMark();
+}
+/* THE SLAM MARK — a baked ground ring burning at the COMMITTED strike point,
+   so the slam is a place you can walk out of instead of a place you already
+   are. One pooled annulus, unit radius, scaled per frame. No shadowBlur. */
+function buildSlamMark() {
+  /* a standing band, not a flat disc: the arena floor slopes, and a disc at
+     one Y buries itself in the sand (caught in the staged screenshot) */
+  const md = MD();
+  for (let i = 0; i < 20; i++) {
+    const a0 = i / 20 * TAU, a1 = (i + 1) / 20 * TAU;
+    pushQuad(md, [Math.cos(a0), 0, Math.sin(a0)], [Math.cos(a1), 0, Math.sin(a1)],
+      [Math.cos(a1) * 1.1, 0.55, Math.sin(a1) * 1.1], [Math.cos(a0) * 1.1, 0.55, Math.sin(a0) * 1.1],
+      i % 2 ? [1, 0.72, 0.34] : [1, 0.5, 0.18]);
+  }
+  const m = mdMesh(md, new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.7,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+  }), false);
+  m.frustumCulled = false;
+  m.visible = false;
+  scene.add(m);
+  return m;
 }
 /* ── the boss HP bar — standing convention for every boss to come ── */
 const bossBarEl = el('bossBar'), bossFillEl = el('bossFill'), bossNameEl = el('bossName');
@@ -896,25 +938,34 @@ function tickBoss() {
       keepInArena(B, 3.2);
       const wantSlam = B.phase !== 2;
       if (B.t > (B.phase === 3 ? 1.6 : 2.2)) {
-        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; SFX.click(); }
+        if (wantSlam && d2p < 7.5) { B.st = 'slamTele'; B.t = 0; B.slamPos = [P.x, P.z]; fmTeleStart(B); SFX.click(); }
         else if (!wantSlam || (B.phase === 3 && B.chargeN % 2 === 1)) { B.st = 'burrow'; B.t = 0; SFX.burrow(); }
         else B.t = 1.2;
       }
       break;
     }
     case 'slamTele':
-      B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
-      if (B.t > 0.75) {
-        B.st = 'slam'; B.t = 0;
+      /* it tracks you for the first 40% and then COMMITS: after that the
+         mark is burned into the sand and walking off it is the answer.
+         (It used to chase you all the way to impact — undodgeable; at a
+         60% commit a walker cleared the 2.5 m ring by 9 cm — measured —
+         which is frame-perfect, and frame-perfect is banned.) */
+      if (B.t < BOSS_SLAM_TELE * 0.4) {
+        B.slamPos = [lerp(B.slamPos[0], P.x, 0.06), lerp(B.slamPos[1], P.z, 0.06)];
+      }
+      if (B.t > BOSS_SLAM_TELE) {
+        B.st = 'slam'; B.t = 0; fmTeleFire('kingCrabSlam', B);
         SFX.thump(true);
         CAM.shake = 0.5;
         rumble({ duration: 280, strong: 0.9, weak: 0.6 });
         burst(psDust, B.slamPos[0], groundH(B.slamPos[0], B.slamPos[1]) + 0.3, B.slamPos[1], 22, 2.6, 2.2, 0.8);
-        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5) hurtPlayer(1, B.x, B.z, B.c.root);
+        // and a well-timed jump sails over the shockwave (the scorch-crab rule)
+        if (Math.hypot(P.x - B.slamPos[0], P.z - B.slamPos[1]) < 2.5 &&
+            P.fy - groundH(P.x, P.z) < 0.7) hurtPlayer(1, B.x, B.z, B.c.root);
       }
       break;
     case 'slam':
-      if (B.t > 0.35) { B.st = 'stuck'; B.t = 0; }
+      if (B.t > 0.25) { B.st = 'stuck'; B.t = 0; }   // recovery shaved for the windup
       break;
     case 'stuck':   // the claw is down — HIT IT
       if (B.t > 2.3) { B.st = 'track'; B.t = 0; }
@@ -933,12 +984,12 @@ function tickBoss() {
       break;
     case 'emerge':
       faceP();
-      if (B.t > 0.7) { B.st = 'chargeTele'; B.t = 0; SFX.click(); }
+      if (B.t > 0.45) { B.st = 'chargeTele'; B.t = 0; fmTeleStart(B); SFX.click(); }   // shaved for the windup
       break;
     case 'chargeTele':
       faceP();
-      if (B.t > 0.65) {
-        B.st = 'charge'; B.t = 0;
+      if (B.t > 0.90) {          // reared and aimed for a full 0.9 s
+        B.st = 'charge'; B.t = 0; fmTeleFire('kingCrabCharge', B);
         const d = d2p || 1;
         B.chargeDir = [(P.x - B.x) / d, (P.z - B.z) / d];
         B.chargeN++;
@@ -1031,8 +1082,19 @@ function hitBossClaw() {
   const cp = B.st === 'stuck' ? B.slamPos : bossClawPos();
   burst(psSpark, cp[0], groundH(cp[0], cp[1]) + 0.8, cp[1], 12, 2.2, 1.8, 0.5);
   if (B.st === 'stuck' || B.st === 'dizzy') B.t = Math.min(B.t, 1.2);   // brief extra window
-  dealBossDamage(12);            // 6x — the telegraphed weakness pays off decisively
+  dealBossDamage(16);            // 8x — the telegraphed weakness pays off decisively
+  // (was 6x: the 40%-commit slam mercy sped the mashing kid up ~7%, which
+  //  erased the aimer's lead — the reward scales with the mercy)
 }
+/* one hint per PHASE, and each one names what that phase actually does.
+   Phase 1 keeps its save flag (so it stays a once-ever line); 2 and 3 are
+   per-session, re-armed by initBoss. */
+const BOSS_HINT = {
+  1: 'Hit the CLAW when it slams!',
+  2: 'It CHARGES now — hit it while it’s dizzy!',
+  3: 'Hit the CLAW — when it slams, and when it crashes!',
+};
+let bossHinted = [false, false, false, false];
 /* v4: body hits ALWAYS chip — small but real, with FULL feedback. A kid
    who only ever slashes the shell still wins this fight. */
 function hitBossBody() {
@@ -1046,9 +1108,16 @@ function hitBossBody() {
   const d = Math.hypot(P.x - B.x, P.z - B.z) || 1;
   const ex = B.x + (P.x - B.x) / d * 1.7, ez = B.z + (P.z - B.z) / d * 1.7;
   burst(psSpark, ex, groundH(ex, ez) + 1.0, ez, 10, 2.0, 1.5, 0.4);
-  if (SAVE && !SAVE.bossHint) {
-    SAVE.bossHint = true; storeSave();
-    showCaption('Hit the CLAW when it slams!', 3600);
+  /* THE HINT MUST BE TRUE OF THE FIGHT YOU ARE IN. "Hit the CLAW when it
+     slams!" is a lie in phase two — `wantSlam = B.phase !== 2`, so it
+     never slams there: it burrows, charges, and crashes into the wall
+     dizzy. One hint per phase, each one true of that phase. */
+  const ph = clamp(B.phase | 0, 1, 3);
+  const seen = ph === 1 ? !!(SAVE && SAVE.bossHint) : bossHinted[ph];
+  if (!seen) {
+    bossHinted[ph] = true;
+    if (ph === 1 && SAVE) { SAVE.bossHint = true; storeSave(); }
+    showCaption(BOSS_HINT[ph], 3600);
   }
   dealBossDamage(2);
 }
@@ -1461,7 +1530,7 @@ function drawTBCArt() {
 }
 function tickTBC() {
   tbcT += DT;
-  if (tbcT > 1.6) el('tbcGo').textContent = '✕ CONTINUE';
+  if (tbcT > 1.6) el('tbcGo').textContent = padGlyphs('✕ CONTINUE');
   if (tbcT > 1.6 && IN.confirm) {
     el('tbc').classList.remove('on');
     endCine();
@@ -1491,6 +1560,25 @@ function animateBoss(dtv, now) {
   const bdx = B.x - camera.position.x, bdz = B.z - camera.position.z;
   B.c.root.visible = !(B.st === 'burrow' && B.t > 0.7) && (bdx * bdx + bdz * bdz < 8100);
   B.c.shadow.scale.setScalar(1 + shadeGrow * 0.2);
+  /* the slam mark: it draws itself on the sand through the windup, brightest
+     once the crab has committed — the ring you have to be outside of */
+  if (B.mark) {
+    const tele = B.active && !B.defeated && B.st === 'slamTele' && B.c.root.visible;
+    B.mark.visible = tele;
+    if (tele) {
+      const k = clamp(B.t / BOSS_SLAM_TELE, 0, 1);
+      const mx = B.slamPos[0], mz = B.slamPos[1];
+      /* seat the band on the LOWEST ground it covers so a slope never eats it */
+      let lo = groundH(mx, mz);
+      for (let i = 0; i < 8; i++) {
+        const a = i / 8 * TAU;
+        lo = Math.min(lo, groundH(mx + Math.cos(a) * 2.5, mz + Math.sin(a) * 2.5));
+      }
+      B.mark.position.set(mx, lo - 0.05, mz);
+      B.mark.scale.set(2.5, 1, 2.5);
+      B.mark.material.opacity = 0.25 + k * 0.55 + Math.sin(now / 70) * 0.08 * k;
+    }
+  }
   const w = now / 1000;
   // legs scuttle
   const moving = B.st === 'track' || B.st === 'charge';

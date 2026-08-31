@@ -880,6 +880,45 @@ let moPropMesh = null, moSurgeMesh = null, moSurgeMat = null;
       scene.add(glow);
       G.glow = glow; G.glowMat = mat;
     }
+    /* THE COUNT, CARRIED BY THE GATE'S OWN ARMS — one cut pip per turn
+       this gate needs, climbing the jambs, dark until earned. Gate three's
+       three-in-a-row stops being a secret you can only infer from a
+       shudder. They sit at the height of the wheel you are standing at,
+       on BOTH jambs and BOTH faces so the count reads from either bank.
+       One mesh, one draw call, colours rewritten in place per frame — no
+       per-pip material, no per-pip draw. */
+    {
+      const mdP = MD();
+      const need = g.need;
+      const R = 0.19;
+      for (let i = 0; i < need; i++) {
+        const Y = sillY + 1.45 + i * 0.62;
+        for (const ns of [-1, 1]) {            // both arms
+          const cx = g.x + g.nx * ns * 3.1, cz = g.z + g.nz * ns * 3.1;
+          for (const fs of [-1, 1]) {          // both faces of the arm
+            const fx = g.fx * fs * 1.45, fz = g.fz * fs * 1.45;
+            pushQuad(mdP,
+              [cx - g.nx * R + fx, Y - R, cz - g.nz * R + fz],
+              [cx + g.nx * R + fx, Y - R, cz + g.nz * R + fz],
+              [cx + g.nx * R + fx, Y + R, cz + g.nz * R + fz],
+              [cx - g.nx * R + fx, Y + R, cz - g.nz * R + fz], [1, 1, 1]);
+          }
+        }
+      }
+      const pmat = new THREE.MeshBasicMaterial({
+        vertexColors: true, transparent: true, opacity: 0.95,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+      });
+      const pips = mdMesh(mdP, pmat, false);
+      pips.frustumCulled = false;
+      pips.matrixAutoUpdate = false; pips.updateMatrix();
+      pips.visible = false;
+      scene.add(pips);
+      G.pips = pips;
+      G.pipCol = pips.geometry.attributes.color;
+      G.pipVerts = 24;                        // 2 arms x 2 faces x 6 verts
+      G.pipState = -1;
+    }
     /* jamb colliders (walls read as walls; the opening is the slab's) */
     addColl(g.x + g.nx * 3.1, g.z + g.nz * 3.1, 1.1);
     addColl(g.x - g.nx * 3.1, g.z - g.nz * 3.1, 1.1);
@@ -969,10 +1008,12 @@ SFX.riverRush = function () {
 /* ── the rhythm check itself ──
    HOLD or PRESS ✕ at the wheel: a press while the surge stands in the
    gate = the river turns the wheel with you (a HIT). A press against
-   slack water = the wheel shudders back and the count starts over —
-   never punished, only waited. A hold begun just before the surge
-   counts when the surge arrives (kid grace); a stale grip only strains.
-   Gate 1 gives on one hit, gate 2 on two in a row, gate 3 on three. */
+   slack water = the wheel shudders and NOTHING ELSE — the count stands
+   and simply waits for the next surge. A hold begun just before the
+   surge counts when it arrives (kid grace); a stale grip only strains.
+   Gate 1 gives on one hit, gate 2 on two, gate 3 on three — and each
+   gate's lintel carries one pip per turn needed, lit as they are earned,
+   so the count is never a secret. */
 const MOP = {
   engaged: -1, holdT: 0, pressAge: 999, windowUsed: false,
   hits: 0, shudders: 0, opens: 0, capT: 0,
@@ -1006,18 +1047,39 @@ function moGateHit(G) {
   }
 }
 function moGateShudder(G) {
-  if (G.progress > 0 || true) {
-    /* a slip costs ONE turn, not the whole run — zeroing twelve seconds
-       of held rhythm on gate three was adult-hard (John, live, night one) */
-    G.progress = Math.max(0, G.progress - 1);
-    MOP.shudders++;
-    SFX.wheelSlip();
-    rumble({ duration: 90, strong: 0.12, weak: 0.3 }, 'wheel-slip');
-    G.spinV = Math.min(G.spinV, -1.4);
-  }
+  /* THE LAW (DESIGN.md): "a missed beat just waits for the next surge."
+     An off-beat press costs NOTHING — the wheel shrugs, the water slips
+     past under it, and the count STANDS. (The finale's rhythm call is
+     written the same way.) Feedback yes; punishment never. */
+  MOP.shudders++;
+  SFX.wheelSlip();
+  rumble({ duration: 90, strong: 0.12, weak: 0.3 }, 'wheel-slip');
+  G.spinV = Math.min(G.spinV, -1.4);
 }
 function moSluiceReady() {
   return !!(SAVE && riverWet() && !SAVE.mouthOpen);
+}
+/* the lintel pips: earned turns stand lit, the NEXT one breathes with the
+   surge (so the pip row teaches the beat as well as the count) */
+function moPaintPips(G) {
+  if (!G.pipCol) return;
+  const lit = clamp(G.progress | 0, 0, G.g.need);
+  const pulse = window.__sluicePulseK();
+  const key = lit * 1000 + Math.round(pulse * 40);
+  if (key === G.pipState) return;
+  G.pipState = key;
+  const arr = G.pipCol.array;
+  for (let i = 0; i < G.g.need; i++) {
+    let r, gr, b;
+    if (i < lit) { r = 0.50; gr = 0.74; b = 0.90; }
+    else if (i === lit) { const k = 0.055 + pulse * 0.40; r = k * 0.7; gr = k; b = k * 1.1; }
+    else { r = 0.030; gr = 0.046; b = 0.058; }
+    const s = i * G.pipVerts * 3;
+    for (let v = 0; v < G.pipVerts; v++) {
+      arr[s + v * 3] = r; arr[s + v * 3 + 1] = gr; arr[s + v * 3 + 2] = b;
+    }
+  }
+  G.pipCol.needsUpdate = true;
 }
 function tickSluice() {
   if (MOP.earlyTick === undefined) MOP.earlyTick = 0;
@@ -1047,7 +1109,11 @@ function tickSluice() {
   P.heading = angLerp(P.heading, Math.atan2(G.g.x - P.x, G.g.z - P.z), 0.2);
   if (pressed) {
     if (on && !MOP.windowUsed) { MOP.earlyTick = 0; MOP.windowUsed = true; moGateHit(G); }
-    else if (!on) {
+    else if (on) {
+      /* the surge is already spent on this turn — mashing still MOVES the
+         wheel under your hands, so no press is ever a dead press */
+      G.spinV = Math.max(G.spinV, 0.7);
+    } else if (!on) {
       /* the HUMAN error is the EARLY press — anticipation. Within a third
          of a second of the surge it is a grip taken in time: buffer it,
          the wheel gives WITH the water (the sword's press-buffer law). */
@@ -1070,8 +1136,10 @@ function tickSluice() {
   if (on && !wasOn && !MOP.windowUsed && IN.atkHeld && MOP.holdT > 0 && MOP.holdT <= 60) {
     MOP.windowUsed = true;
     moGateHit(G);
-  } else if (on && !wasOn && IN.atkHeld && MOP.holdT > 90) {
-    G.spinV = Math.min(G.spinV, -0.8);      // the stale grip strains, teaches, waits
+  } else if (on && !wasOn && IN.atkHeld && MOP.holdT > 60) {
+    /* a stale grip strains, teaches and waits — and it does so from the
+       tick the grace expires, never through a silent 61–90 dead zone */
+    G.spinV = Math.min(G.spinV, -0.8);
     SFX.creak();
   }
 }
@@ -1763,6 +1831,8 @@ function moDeriveWorld(S) {
     G.giving = false;
     G.slabK = open > k ? 1 : 0;
     G.progress = 0;
+    G.pipState = -1;
+    if (G.pips) G.pips.visible = false;
     G.grp.position.y = G.sillY - G.slabK * 4.15;
   }
   moFill[0] = open >= 1 ? 1 : 0;
@@ -1932,6 +2002,8 @@ cullChunks = function (ccx, ccz) {
     G.grp.visible = dg < 80 * 80 && G.slabK < 0.98;   // a sunk slab is a buried draw call
     G.wheel.visible = dg < 55 * 55;
     G.glow.visible = dg < 80 * 80 && moSluiceReady() && moActiveGate() === G;
+    G.pips.visible = dg < 60 * 60 && moSluiceReady() && moActiveGate() === G;
+    if (G.pips.visible) moPaintPips(G);
     moAnimGate(G, SIM_FREEZE ? 0 : dtv);
   }
   /* the surge, seen and heard: the band runs at the active gate */
@@ -2021,6 +2093,8 @@ window.__telemetryHooks.push(function (T) {
   T.moSurgeNow = moSurgeOn();
   T.moSurgePh = +moSurgePh().toFixed(3);
   T.moProgress = (moActiveGate() || { progress: -1 }).progress;
+  T.moNeed = (moActiveGate() || { g: { need: -1 } }).g.need;
+  T.moPips = (moActiveGate() || { pips: { visible: false } }).pips.visible;
   T.moHits = MOP.hits; T.moShudders = MOP.shudders; T.moOpens = MOP.opens;
   T.moEngaged = MOP.engaged;
   T.moSlabs = MOGATES.map(G => +G.slabK.toFixed(2)).join(',');

@@ -83,6 +83,13 @@ const obInRegion = (x, z) => obRegionT(x, z) < 1;
 function obInKiln(x, z) {
   return Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r;
 }
+/* THE GATEWAY: the one arc of the crest that is a doorway and not a wall.
+   Same 0.42 rad the solid ring and the collider studs cut out of themselves —
+   if it looks like you can walk out there, you can. */
+const OB_GATE_HALF = 0.42;
+function obInGateArc(x, z) {
+  return skAngDiff(skAngTo(OB_KILN.x, OB_KILN.z, x, z), 0) < OB_GATE_HALF;
+}
 
 /* ── the arc holds its dusk (the phase-5/6 precedent: the glow reads at
    dusk; nights are when arcs run) ── */
@@ -457,6 +464,21 @@ ISLE_SHADE.push(
   { x: -1360, z: -1140, r: 5 },                   /* far-west crust (heart chest) */
   { x: -1085, z: -1140, r: 5 },                   /* east crust (heart chest) */
 );
+/* THE CALDERA MOUTH — the caldera's OWN rescue spot, inside the bowl at the
+   foot of the gate ramp. The isle-anchor sweep answered with the landing
+   beach 219 m away, so fainting on the last notch of the hound fight walked
+   a kid the whole trail back on three hearts. Faint here, wake here, facing
+   her, with the fight re-armed at the phase you left (the checkpoint law —
+   `startCine('sunstruck')` already calls obResetFight(true)).
+   Same wrap shape p6l uses for the lamp room. */
+const OB_KILN_MOUTH = { x: OB_KILN.x, z: OB_KILN.z + 13.2 };
+const _obPrevNearShade = nearestShadeSpot;
+nearestShadeSpot = function (x, z) {
+  if (Math.hypot(x - OB_KILN.x, z - OB_KILN.z) < OB_KILN.r + 14) {
+    return { x: OB_KILN_MOUTH.x, z: OB_KILN_MOUTH.z };
+  }
+  return _obPrevNearShade(x, z);
+};
 
 /* ── the swell yields to the coast (the charted-isle law) ── */
 const _obSeaShoal = seaShoalAt;
@@ -473,9 +495,17 @@ seaShoalAt = function (x, z) {
 /* ═══ RULES registrations ═══ */
 window.__WORLD_REG.push({
   name: 'emberwaste', kind: 'ground', over: ['sea'],
-  owns: (x, z) => obInRegion(x, z),
+  /* the rect INCLUSIVE of its own rim. obInRegion is a strict t < 1 — the
+     right answer for the live wraps, whose skirt has already blended to
+     zero by then — but it left the boundary line itself declared by
+     nobody: south of the sea box's z floor (-1184) there is no other
+     owner, so the extended rules sweep found open air with no authority.
+     obGroundAt answers with the captured chain at t >= 1, which is
+     exactly what the live groundH answers there, so this declares the
+     truth rather than changing it. */
+  owns: (x, z) => obRegionT(x, z) <= 1,
   ground: (x, z) => obGroundAt(x, z),
-  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge)',
+  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge); the rim line is declared here too, since nothing else reaches south of the sea box',
 });
 window.__PORTALS.push({
   name: 'kiln-gate',
@@ -924,17 +954,7 @@ function obTickChests() {
       } else {
         a.e.ch.heart.visible = false;
         obChestAnims.splice(i, 1);
-        const before = P.maxHearts;
-        P.maxHearts = Math.min(10, P.maxHearts + 1);
-        P.hearts = P.maxHearts;
-        SAVE.mh = P.maxHearts; storeSave();
-        if (P.maxHearts === before) {
-          /* a full row already: the container gives its warmth instead */
-          P.salt += 8; SAVE.salt = P.salt; storeSave();
-          itemToast('A FULL HEART ROW', 'It fills every heart you have — and leaves eight salt behind.');
-        } else itemToast(a.e.big, a.e.small);
-        SFX.heart();
-        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+        gainHeart(a.e.big, a.e.small, P.fy + 1.4);
       }
     }
   }
@@ -1297,8 +1317,13 @@ function obTickFight() {
     }
     return;
   }
-  if (!inK && Math.hypot(P.x - OB_KILN.x, P.z - OB_KILN.z) > OB_KILN.r + 7) {
-    /* stepping out re-arms her at the phase you left (the stag rule) */
+  if (!inK) {
+    /* WALKING OUT IS ALLOWED, and it re-arms her at the phase you left (the
+       stag/moth rule). This used to read `> OB_KILN.r + 7` — d > 24 — while
+       a hard clamp pinned the player at r 16, so the branch could never fire
+       and the open north gateway was a painted door. The gate arc is the ONE
+       way out; the rest of the rim is solid geometry and colliders, which is
+       what keeps her in — no clamp needed, and nothing to fall off. */
     obResetFight(true);
     return;
   }
@@ -1306,8 +1331,9 @@ function obTickFight() {
   const gy = obGroundAt(H.x, H.z);
   const distP = Math.hypot(P.x - H.x, P.z - H.z);
   const faceP = () => { H.ang = Math.atan2(P.x - H.x, P.z - H.z); };
-  /* the caldera rim knocks the PLAYER back inward too — no fall fail */
-  if (state === 'play' && obKeepIn(P, 1.0)) {
+  /* the SOLID part of the rim knocks the player back inward — but never
+     across the gate arc, which has to stay walkable */
+  if (state === 'play' && !obInGateArc(P.x, P.z) && obKeepIn(P, 1.0)) {
     P.fy = obGroundAt(P.x, P.z);
     P.vx *= 0.3; P.vz *= 0.3;
   }
@@ -1821,10 +1847,10 @@ function obTickWheel7(t) {
 }
 
 /* ═══ THE END CARD — 7/8: the dark twin, and the drowned moon waiting ═══ */
-const OB_TBC7_SUB = 'Seven phases ride the wheel. Far in the south the Emberwaste sleeps under glass — ' +
-  'black fields that glint like a second sky, and a warm brown hound asleep at the Moonwheel. ' +
-  'One socket stands empty… and tonight it began to GLOW — pointing at no mountain, no shore, no tower. ' +
-  'Pointing DOWN, at the sea. The drowned moon is waiting.';
+/* two lines, like every other card — four lines of scene-setting buried
+   the only sentence that matters (the sibling cards run ~170 chars) */
+const OB_TBC7_SUB = 'Seven phases ride the wheel, and the last socket has begun to GLOW — ' +
+  'pointing at no mountain, no shore, no tower. Pointing DOWN, at the sea. The drowned moon is waiting.';
 function obDrawTBCArt7() {
   const cv = el('tbcArt'), g = cv.getContext('2d');
   const W = cv.width, H = cv.height;
@@ -2325,14 +2351,24 @@ function obBoatPoint() {
   const bz = (SAVE && SAVE.boatZ != null) ? SAVE.boatZ : BOAT.z;
   return { x: bx, z: bz };
 }
+/* ASHORE ANYWHERE, THE FIRST ANSWER IS THE BOAT (p6d's viaBoat law).
+   The old test was `P.x > -30`, which only covered the village side of
+   the bay: stand on Gannet Stack, the Long Strand or Watchstone at q29
+   and the compass pointed straight down the seaway — over water a player
+   on foot cannot walk, with the hull moored somewhere behind them. Any
+   dry foot outside the Emberwaste now gets the hull first. */
+function obAshoreBoat() {
+  if (P.sailing || obInRegion(P.x, P.z)) return null;
+  return obBoatPoint();
+}
 function obSeaSouth() {
-  if (!P.sailing && P.x > -30) {
-    const b = obBoatPoint();
-    if (b) return b;
-  }
+  const b = obAshoreBoat();
+  if (b) return b;
   return obChainNext(OB_SEAWAY.slice(0, -1), OB_SEAWAY[OB_SEAWAY.length - 1], 26, 8);
 }
 function obSeaHome() {
+  const b = obAshoreBoat();
+  if (b) return b;
   const pts = OB_SEAWAY.slice(0, -1).reverse();
   return obChainNext(pts, { x: WHEEL_POS.x, z: WHEEL_POS.z }, 26, 8);
 }
@@ -2558,7 +2594,14 @@ cullChunks = function (ccx, ccz) {
         if (!nw && obSeat7Shown) obBone.visible = false;
         obSeat7Shown = nw;
       } else if (obSeatK >= 0) obSeat7(obSeatK);
-    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7') {
+    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7' &&
+               !(SAVE.sky >= 8 && typeof cnSeat8 === 'function')) {
+      /* ...and at 8/8 the bone belongs entirely to the sibling. The branch
+         above already yields the SEATING at sky 8, but this one went on
+         hiding obBone every frame while p6n only re-seats it every ninety
+         ticks — so THE OLD BONE was missing from the finished moonwheel
+         eighty-nine frames out of ninety (found by counting the relics at
+         the wheel while gating them). One owner or the other, never both. */
       obBone.visible = false;
     }
   }

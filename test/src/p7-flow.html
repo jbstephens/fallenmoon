@@ -19,6 +19,12 @@ function refreshTitleMenu() {
   el('ti0').classList.toggle('sel', titleFocus === 0);
   el('ti1').classList.toggle('sel', titleFocus === 1);
   el('tHint').textContent = 'LEFT STICK MOVE · RIGHT STICK CAMERA · ✕ SWORD · ○ SPRINT · □ JUMP · △ MOON COMPASS · START PAUSE      (WASD · MOUSE/ARROWS · J · SHIFT · SPACE · L · P)';
+  /* the overwrite guard names the REAL buttons. On a keyboard ✕ is J and
+     "keep my save" is the BACK edge, which is Escape — not ○'s sprint key,
+     so this line is written out rather than run through padGlyphs. */
+  el('ngRow').innerHTML = kbdMode()
+    ? '<b>J</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>ESC</b> KEEP MY SAVE'
+    : '<b>&#10005;</b> START FRESH &nbsp;&nbsp;&middot;&nbsp;&nbsp; <b>&#9675;</b> KEEP MY SAVE';
 }
 function beginNewGame() {
   SFX.confirm();
@@ -193,6 +199,7 @@ function tickTitle() {
     if (titleFocus === 0 && SAVE) {
       // a save exists — ask before erasing the family's adventure
       titleMode = 'confirm';
+      refreshTitleMenu();            // the guard names the keys you are holding
       el('ngGuard').classList.add('on');
       SFX.menu();
       return;
@@ -360,17 +367,24 @@ function drawHearts() {
     g.shadowOffsetY = 0;
   }
 }
+let hudLastPrompt = '';
 function updatePrompt() {
-  if (state !== 'play') { promptEl.classList.remove('on'); return; }
+  if (state !== 'play') { promptEl.classList.remove('on'); hudLastPrompt = ''; return; }
   const ctx = currentInteract();
   if (ctx) {
-    let label = ctx.label;
-    if (window.ArcadeController && ArcadeController.currentInputSource && ArcadeController.currentInputSource() === 'keyboard') {
-      label = label.replace('✕', 'J');
+    /* EVERY glyph, not only ✕ — shell, organ, pole and spyglass prompts
+       carry ○ □ △ too, and a keyboard player owns none of them. p2's
+       `padGlyphs` is the one map (✕=J, ○=K, □=SPACE, △=L). */
+    const label = padGlyphs(ctx.label);
+    /* the same change-gate drawHearts keeps just above: an innerHTML write
+       re-parses and re-lays-out the prompt EVERY frame, and the label is
+       the same string for whole minutes at a time */
+    if (label !== hudLastPrompt) {
+      hudLastPrompt = label;
+      promptEl.innerHTML = label.replace(/(✕|○|□|△|SPACE|\bJ\b|\bK\b|\bL\b|HOLD)/g, '<b>$1</b>');
     }
-    promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
     promptEl.classList.add('on');
-  } else promptEl.classList.remove('on');
+  } else { promptEl.classList.remove('on'); hudLastPrompt = ''; }
 }
 
 /* ── portrait mode (art review screenshots only) ── */
@@ -472,6 +486,9 @@ function syncTelemetry() {
   TL.dlg = DS.id; TL.dlgLine = DS.line;
   TL.bossActive = BOSS.active; TL.bossPhase = BOSS.phase;
   TL.bossState = BOSS.st; TL.clawHits = BOSS.clawHits;
+  TL.bossT = BOSS.t;
+  TL.bossSlamX = BOSS.slamPos[0]; TL.bossSlamZ = BOSS.slamPos[1];
+  TL.bossMarkOn = !!(BOSS.mark && BOSS.mark.visible);
   TL.skyStep = SAVE ? SAVE.sky : 0; TL.skyT = SKY.t;
   TL.shade = P.shade; TL.inGrotto = inGrottoAt(P.x, P.z);
   TL.healTicks = P.healTicks; TL.sunstruck = P.sunstruckCount;

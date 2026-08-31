@@ -620,6 +620,10 @@ let mlVeilEl = null;
    it tires after every pass). HP 84, notch convention 84/56/28. Body
    chips ALWAYS land. Cold-7-year-old telegraphs, ≥0.9 s each. */
 const MOTH_HP = 84;
+/* the wing-gust shove: 0.42 s of carried momentum at 16 m/s under the hit
+   branch's 0.86/tick drag ≈ 1.9 m of ground given up. Enough that the caption
+   ("or lean on the rail and let it catch you") is a true sentence. */
+const ML_GUST_T = 0.42, ML_GUST_V = 16;
 const MOTH = {
   c: null, active: false, defeated: false, phase: 0, st: 'sleep', t: 0,
   hp: MOTH_HP, hpMax: MOTH_HP, x: ML_C.x, y: ML_FLOOR_Y + 2.15, z: ML_C.z,
@@ -629,6 +633,7 @@ const MOTH = {
   wave: { ax: 1, az: 0, s: -99, on: false, hit: false, chimed: false }, waveN: 0,
   spiral: { ax: 1, az: 0, s: -99, on: false }, spiralN: 0,
   gustN: 0, diveN: 0, p2n: 0, p3n: 0, hintGust: false, hintPool: false, hintSpiral: false,
+  gustShoves: 0, gustShoveFrom: null,
   wingK: 0.05, wingT: 0, flapHz: 2.2,
 };
 MOTH.c = mlBuildMoth();
@@ -830,12 +835,23 @@ function mlTickMoth() {
     case 'gust': {
       M.wingK = 1.25;
       M.gustR += DT * 12;
-      /* the shove: jump it, or let the rail catch you — never hearts */
+      /* THE SHOVE: jump it, or let the rail catch you — never hearts.
+         `P.vx +=` alone was a no-op: outside the 'hit' branch tickPlayer
+         RECOMPUTES vx/vz from the stick every tick, so the caption was
+         promising a push that never happened. The integrated shove is the
+         only one the player feels (hurtPlayer / obHeatPuff idiom): take the
+         reins for a beat and let the hit branch carry her outward. */
       if (!M.gustHit && !P.air && Math.abs(distP - M.gustR) < 1.0) {
         M.gustHit = true;
         const d = distP || 1;
-        P.vx += (P.x - M.x) / d * 9.5;
-        P.vz += (P.z - M.z) / d * 9.5;
+        const ux = (P.x - M.x) / d, uz = (P.z - M.z) / d;
+        P.st = 'hit'; P.hitT = ML_GUST_T;         // shove only — hearts untouched
+        P.vx = ux * ML_GUST_V; P.vz = uz * ML_GUST_V;
+        P.queued = false;
+        M.gustShoveFrom = [P.x, P.z];
+        M.gustShoves = (M.gustShoves || 0) + 1;
+        SFX.mothWing();
+        CAM.shake = Math.max(CAM.shake, 0.16);
         rumble({ duration: 160, strong: 0.2, weak: 0.5 });
         if (!M.hintGust && !cineSeen('mlHintGust')) {
           M.hintGust = true; markCineSeen('mlHintGust');
@@ -2010,6 +2026,10 @@ window.__telemetryHooks.push(function (T) {
   T.mothWaveN = MOTH.waveN;
   T.mothSpiralN = MOTH.spiralN;
   T.mothDiveN = MOTH.diveN;
+  T.mothGustN = MOTH.gustN;
+  T.mothGustShoves = MOTH.gustShoves;
+  T.mothGustShoveDist = MOTH.gustShoveFrom
+    ? +Math.hypot(P.x - MOTH.gustShoveFrom[0], P.z - MOTH.gustShoveFrom[1]).toFixed(2) : 0;
   T.poolLive = ML_POOL.live;
   T.poolX = +ML_POOL.x.toFixed(1);
   T.poolZ = +ML_POOL.z.toFixed(1);

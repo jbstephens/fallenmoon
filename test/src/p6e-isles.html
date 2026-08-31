@@ -1261,19 +1261,9 @@ function fResPermanent() { return !!(SAVE && SAVE.fGlyph3); }
 function tickFoundryShell(ctx) {
   if (SAVE && SAVE.fGlyph1) { FPZ.delta = 0; return; }
   const nearM = ctx && ctx.id === 'foundryShell';
-  if (nearM && IN.atkHeld && state === 'play') {
-    fShell.angle += 0.75 * DT;
-    if (fShell.angle > TAU) fShell.angle -= TAU;
-    fShell.group.rotation.y = -fShell.angle;
-  }
-  let da = fShell.angle - fShell.target;
-  da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-    fShell.angle = angLerp(fShell.angle, fShell.target, 0.05);
-    fShell.group.rotation.y = -fShell.angle;
-    da = fShell.angle - fShell.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-  }
+  /* the shared shell latch (p6-game): holding ✕ into the aim window
+     seats the shell and holds it there, so the glyph can come true */
+  const da = tickShellAim(fShell, !!(nearM && IN.atkHeld && state === 'play'), true);
   FPZ.delta = da;
   const lit = Math.abs(da) < 0.17;
   if (lit) {
@@ -1449,12 +1439,12 @@ function tickFGull(g) {
       g.z += (P.z - g.z) / d * 1.45 * DT;
       faceP();
     }
-    if (d2p < 4.8) { g.st = 'tele'; g.t = 0; SFX.gullCry(); }
+    if (d2p < 4.8) { g.st = 'tele'; g.t = 0; fmTeleStart(g); SFX.gullCry(); }
   } else if (g.st === 'tele') {
     faceP();
     g.y = gy + 2.4 + Math.sin(g.t * 18) * 0.07;
-    if (g.t > 0.55) {
-      g.st = 'dive'; g.t = 0;
+    if (g.t > 0.90) {           // a readable hover before the stoop
+      g.st = 'dive'; g.t = 0; fmTeleFire('islesGull', g);
       const ty = groundH(P.x, P.z) + 0.8;
       const dx = P.x - g.x, dy = ty - g.y, dz = P.z - g.z;
       const l = Math.hypot(dx, dy, dz) || 1;
@@ -1683,6 +1673,9 @@ const TORT = {
 };
 TORT.c = buildHourTortoise();
 function tortPhaseHp(ph) { return ph <= 1 ? TORT_HP : ph === 2 ? 56 : 28; }
+/* no phantom orb over the casting pit — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: F3.x, z: F3.z, r: F3.r, live: () => !(SAVE && SAVE.tortoiseDone) });
 
 /* the standing boss bar — the notches at 33.3% / 66.7% already line up
    with 28 / 56 of 84, exactly as they do for the crab and the wyrm */
@@ -1832,8 +1825,8 @@ function tickTortoise() {
       T.x += (P.x - T.x) / d * sp * DT; T.z += (P.z - T.z) / d * sp * DT;
       keepInPit(T, 3.0);
       if (T.t > (T.phase === 3 ? 1.5 : 2.0)) {
-        if (T.phase >= 2 && (T.slamAlt++ & 1) === 0 && d2p < 12) { T.st = 'slamTele'; T.t = 0; SFX.click(); }
-        else { T.st = 'rollTele'; T.t = 0; SFX.tortCry(); }
+        if (T.phase >= 2 && (T.slamAlt++ & 1) === 0 && d2p < 12) { T.st = 'slamTele'; T.t = 0; fmTeleStart(T); SFX.click(); }
+        else { T.st = 'rollTele'; T.t = 0; fmTeleStart(T); SFX.tortCry(); }
       }
       break;
     }
@@ -1850,7 +1843,7 @@ function tickTortoise() {
         const d = d2p || 1;
         T.rollDir = [(P.x - T.x) / d, (P.z - T.z) / d];
         T.ang = Math.atan2(T.rollDir[0], T.rollDir[1]);
-        T.st = 'roll'; T.t = 0;
+        T.st = 'roll'; T.t = 0; fmTeleFire('tortRoll', T);
         SFX.tortRoll();
         rumble({ duration: 240, strong: 0.6, weak: 0.75 });
       }
@@ -1891,8 +1884,8 @@ function tickTortoise() {
     case 'slamTele':
       faceP();
       T.tip = 0;
-      if (T.t > 0.75) {
-        T.st = 'slam'; T.t = 0;
+      if (T.t > 0.95) {          // a full second reared up before the shell drops
+        T.st = 'slam'; T.t = 0; fmTeleFire('tortSlam', T);
         T.ringOn = true; T.ringR = 1.6; T.ringHit = false;
         SFX.thump(true); SFX.shockRing(); SFX.bellTone(110, 1.4);
         CAM.shake = 0.5;
@@ -1901,13 +1894,14 @@ function tickTortoise() {
       }
       break;
     case 'slam':
-      if (T.t > 1.9) { T.st = 'track'; T.t = 0; }
+      if (T.t > 1.7) { T.st = 'track'; T.t = 0; }   // recovery shaved to pay for the windup
       break;
     case 'roar':
       T.tip = Math.max(0, T.tip - DT * 2.4);
       if (T.t > 1.5) {
         T.phase++;
-        T.hp = tortPhaseHp(T.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        T.hp = Math.min(T.hp, tortPhaseHp(T.phase));
         refreshTortBar(false);
         T.st = 'track'; T.t = 0;
         if (T.phase === 3) { SFX.tortCry(); T.toneCD = 2.0; }
@@ -1918,7 +1912,12 @@ function tickTortoise() {
   if (T.ringOn) {
     T.ringR += 8.5 * DT;
     const dr = Math.abs(d2p - T.ringR);
-    if (!T.ringHit && dr < 1.7 && P.fy - groundH(P.x, P.z) < 0.62) {
+    /* THE JUMP HAS TO BE POSSIBLE, not merely arithmetically possible.
+       At the old band (1.7 m) no jump could clear it at all. At 1.1 m the
+       maths works but leaves ~0.1 s of timing tolerance — a frame-perfect
+       ask of a seven-year-old — so the clearance bar comes down with it
+       (0.62 -> 0.45 m of air), widening the window to ~0.18 s. */
+    if (!T.ringHit && dr < 1.1 && P.fy - groundH(P.x, P.z) < 0.45) {
       T.ringHit = true;
       hurtPlayer(1, T.x, T.z, T.c.root);
     }
@@ -2540,13 +2539,7 @@ function tickFMouldChest() {
     } else {
       fMouldChest.heart.visible = false;
       fChestAnimT = -1; fHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'Left in a mould room by someone who meant to come back.');
-      SFX.heart();
-      burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'Left in a mould room by someone who meant to come back.', P.fy + 1.4);
     }
   }
 }

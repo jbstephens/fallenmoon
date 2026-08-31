@@ -840,11 +840,23 @@ const WYRM = {
   phase: 0, st: 'sleep', t: 0, hp: WYRM_HP, hpMax: WYRM_HP,
   x: H3.x + 2, z: H3.z - 3, ang: 2.4, flash: 0,
   bodyHits: 0, browHits: 0, trail: [], slabT: 0, missStreak: 0,
-  eruptX: 0, eruptZ: 0, sweepA: 0, sweepDone: false, devils: [],
+  eruptX: 0, eruptZ: 0, sweepA: 0, sweepDone: false, devils: [], wakeChips: 0,
   cureT: 0, poolWet: false, barShown: false,
 };
 WYRM.c = buildSiltWyrm();
-for (let i = 0; i < 2; i++) WYRM.devils.push({ m: buildDustDevil(), x: 0, z: 0, tx: 0, tz: 0, on: false, t: 0 });
+/* no phantom orb over the Wyrm's coil — the guardian IS the answer in here */
+window.__BEACON_MUTE = window.__BEACON_MUTE || [];
+window.__BEACON_MUTE.push({ x: H3.x, z: H3.z, r: H3.r, live: () => !(SAVE && SAVE.wyrmDone) });
+const WYRM_DEVIL_ARM = 0.95;   // seconds spun up on the rim before it can touch you
+const WYRM_ERUPT_T = 0.95;     // the converging swirl: a full second of warning
+/* where the silt WAKE actually is this tick (the erupt swirl travels) */
+function wyrmWakePos() {
+  const W = WYRM;
+  if (W.st !== 'erupt') return { x: W.x, z: W.z };
+  const ek = clamp(W.t / WYRM_ERUPT_T, 0, 1);
+  return { x: lerp(W.x, W.eruptX, ek), z: lerp(W.z, W.eruptZ, ek) };
+}
+for (let i = 0; i < 2; i++) WYRM.devils.push({ m: buildDustDevil(), x: 0, z: 0, tx: 0, tz: 0, on: false, t: 0, arm: 0 });
 function wyrmPhaseHp(ph) { return ph <= 1 ? WYRM_HP : ph === 2 ? 48 : 24; }
 
 /* the wyrm's own HP bar — the standing boss convention, shared DOM */
@@ -966,8 +978,8 @@ function tickWyrm() {
     case 'wakeup':
       if (W.t > 1.7) { W.st = 'dive'; W.t = 0; }
       break;
-    case 'dive':      // slides under the silt
-      if (W.t > 0.7) { W.st = 'swim'; W.t = 0; W.slabT = 0; SFX.burrow(); }
+    case 'dive':      // slides under the silt (recovery shaved to pay for the longer windups)
+      if (W.t > 0.45) { W.st = 'swim'; W.t = 0; W.slabT = 0; SFX.burrow(); }
       break;
     case 'swim': {
       // the signature: it swims the dry silt like water. Wake = the contract.
@@ -991,7 +1003,7 @@ function tickWyrm() {
       } else {
         W.slabT = 0;
         if (d2p < 1.7 && W.t > 1.1) {
-          W.st = 'erupt'; W.t = 0;
+          W.st = 'erupt'; W.t = 0; fmTeleStart(W);
           W.eruptX = P.x; W.eruptZ = P.z;
           SFX.wyrmRumble();
           rumble({ duration: 200, strong: 0.5, weak: 0.7 });
@@ -1001,13 +1013,14 @@ function tickWyrm() {
       break;
     }
     case 'erupt':
-      // the swirl converges — HALF A SECOND to move or jump
+      // the swirl converges — a FULL SECOND of visible warning to move or jump
       if ((simTick & 1) === 0) {
         const a = Math.random() * TAU;
         psDust.spawn(W.eruptX + Math.cos(a) * 1.4, groundH(W.eruptX, W.eruptZ) + 0.3, W.eruptZ + Math.sin(a) * 1.4,
           -Math.cos(a) * 1.6, 0.8, -Math.sin(a) * 1.6, 0.4);
       }
-      if (W.t > 0.52) {
+      if (W.t > WYRM_ERUPT_T) {
+        fmTeleFire('wyrmErupt', W);
         W.x = W.eruptX; W.z = W.eruptZ;
         // the wake IS the contract: it stands at the strike point, on screen,
         // before any damage may land (matrixWorld fresh for the frustum test)
@@ -1043,14 +1056,14 @@ function tickWyrm() {
       // body out of the silt, slithering — ALWAYS chippable
       if (W.t > (W.missStreak >= 2 ? 0.3 : 2.0)) {
         if (W.missStreak >= 2) { W.st = 'daze'; W.t = 0; W.missStreak = 0; SFX.wyrmCry(); }
-        else if (W.phase >= 2 && !W.sweepDone && d2p < 6) { W.st = 'sweepTele'; W.t = 0; SFX.click(); }
+        else if (W.phase >= 2 && !W.sweepDone && d2p < 6) { W.st = 'sweepTele'; W.t = 0; fmTeleStart(W); SFX.click(); }
         else { W.st = 'dive'; W.t = 0; W.sweepDone = false; }
       }
       break;
     }
     case 'sweepTele':
-      if (W.t > 0.5) {
-        W.st = 'sweep'; W.t = 0;
+      if (W.t > 0.95) {          // a full second of coiled tail before the scythe
+        W.st = 'sweep'; W.t = 0; fmTeleFire('wyrmSweep', W);
         W.sweepA = 0; W.sweepDone = true;
         SFX.wyrmErupt();
         rumble({ duration: 220, strong: 0.6, weak: 0.5 });
@@ -1075,7 +1088,8 @@ function tickWyrm() {
     case 'roar':
       if (W.t > 1.5) {
         W.phase++;
-        W.hp = wyrmPhaseHp(W.phase);
+        // NEVER refund HP: body hits landed during the roar have to stick
+        W.hp = Math.min(W.hp, wyrmPhaseHp(W.phase));
         refreshWyrmBar(false);
         W.st = 'dive'; W.t = 0;
         if (W.phase === 3) SFX.wyrmCry();
@@ -1086,12 +1100,19 @@ function tickWyrm() {
   if (W.phase === 3 && W.st !== 'roar') {
     for (const dv of W.devils) {
       if (!dv.on) {
-        dv.on = true; dv.t = 0;
+        // born ON THE RIM, spinning up in plain sight — it never appears on top of you
+        dv.on = true; dv.t = 0; dv.arm = 0; fmTeleStart(dv);
         const a = Math.random() * TAU;
-        dv.x = H3.x + Math.cos(a) * 9; dv.z = H3.z + Math.sin(a) * 9;
+        dv.x = H3.x + Math.cos(a) * (H3.r - 1.4); dv.z = H3.z + Math.sin(a) * (H3.r - 1.4);
         dv.tx = H3.x + (Math.random() - 0.5) * 18; dv.tz = H3.z + (Math.random() - 0.5) * 18;
       }
       dv.t += DT;
+      if (dv.arm < WYRM_DEVIL_ARM) {
+        // the arm window: visible, spinning, inert — no drift, no contact
+        dv.arm += DT;
+        continue;
+      }
+      fmTeleFire('wyrmDevil', dv);
       const dd = Math.hypot(dv.tx - dv.x, dv.tz - dv.z);
       if (dd < 1) { dv.tx = H3.x + (Math.random() - 0.5) * 20; dv.tz = H3.z + (Math.random() - 0.5) * 20; }
       else { dv.x += (dv.tx - dv.x) / dd * 2.3 * DT; dv.z += (dv.tz - dv.z) / dd * 2.3 * DT; }
@@ -1104,13 +1125,37 @@ function tickWyrm() {
     for (const dv of W.devils) dv.on = false;
   }
 }
+/* the ONE exposed-set expression — the swing chain and the telemetry both read it */
+function wyrmExposedNow() {
+  const W = WYRM;
+  if (!W.active || W.defeated) return false;
+  return W.st === 'surface' || W.st === 'daze' || W.st === 'sweep' || W.st === 'sweepTele' ||
+         W.st === 'wakeup' || W.st === 'roar' || W.st === 'slamRock';
+}
+/* the WAKE-CHIP: swinging at the silt trail is not nothing. Dull, but honest. */
+function hitWyrmWake(wx, wz) {
+  const W = WYRM;
+  W.wakeChips = (W.wakeChips || 0) + 1;
+  W.flash = 0.10;
+  SFX.thump(false);
+  P.hitstop = 2;
+  CAM.shake = 0.06;
+  rumble({ duration: 60, strong: 0.25, weak: 0.2 });
+  burst(psDust, wx, groundH(wx, wz) + 0.5, wz, 12, 1.8, 1.4, 0.55);
+  dealWyrmDamage(1);
+}
 /* what the sword can reach — wired into the master swing chain below */
 function wyrmSwingHits() {
   const W = WYRM;
   if (!W.active || W.defeated) return false;
-  const exposed = W.st === 'surface' || W.st === 'daze' || W.st === 'sweep' || W.st === 'sweepTele' ||
-                  W.st === 'wakeup' || W.st === 'roar' || W.st === 'slamRock';
-  if (!exposed) return false;
+  if (!wyrmExposedNow()) {
+    // buried, but the wake is right there: a dull silt-chip so the swing reads
+    if (W.st === 'swim' || W.st === 'erupt') {
+      const wp = wyrmWakePos();
+      if (inSwingArc(wp.x, wp.z, 3.6, 1.4)) { hitWyrmWake(wp.x, wp.z); return true; }
+    }
+    return false;
+  }
   if (W.st === 'daze' && inSwingArc(W.x, W.z, 3.4, 1.4)) { hitWyrmBrow(); return true; }
   if (inSwingArc(W.x, W.z, 3.6, 1.4)) { hitWyrmBody(); return true; }
   return false;
@@ -1130,8 +1175,9 @@ function animateWyrm(dtv, now) {
   if (wakeOn) {
     if (W.st === 'erupt') {
       // the swirl CONVERGES on the strike point — danger reads at your feet
-      const ek = clamp(W.t / 0.52, 0, 1);
-      W.c.wakeRoot.position.set(lerp(W.x, W.eruptX, ek), gy - 0.12 + ek * 0.25, lerp(W.z, W.eruptZ, ek));
+      const ek = clamp(W.t / WYRM_ERUPT_T, 0, 1);
+      const wp = wyrmWakePos();
+      W.c.wakeRoot.position.set(wp.x, gy - 0.12 + ek * 0.25, wp.z);
     } else {
       W.c.wakeRoot.position.set(W.x, gy - 0.12 + Math.sin(w * 7) * 0.05, W.z);
     }
@@ -1690,6 +1736,12 @@ function rescueStrandedBoat() {
       const px = wk[0] + Math.sin(a) * r, pz = wk[1] + Math.cos(a) * r;
       if (waterDepthAt(px, pz) < 1.3) continue;        // she must float AND sail — 0.4 beached John at his own re-moor
       if (!boatMooringOK(px, pz)) continue;
+      /* sea water only — never up a river. The two later rescues both
+         carry this check; this one, the oldest, did not, so a wake at the
+         river mouth could re-moor her onto the lower river's elevated
+         surface and strand her all over again. */
+      if (typeof window.__boatSurfaceYAt === 'function' &&
+          Math.abs(window.__boatSurfaceYAt(px, pz) - WL) > 0.05) continue;
       BOAT.x = px; BOAT.z = pz;
       sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
       sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
@@ -2403,23 +2455,21 @@ const HMIRRORS = [
   { m: hm2, id: 'hmirror2', door: glyphDoor2, doorPos: HDOOR2, key: 'glyph2', beam: hBeam2, burnT: 0, delta: 9 },
 ];
 function tickHollowMirrors() {
-  const ctx = state === 'play' ? currentInteract() : null;
+  /* both shells live in the hollow; walking the whole ✕ interact chain
+     from the far side of the sea buys nothing (p6e's foundry pattern).
+     The loop below still runs everywhere — it is twenty flops — so the
+     deltas, the settle and the burn are unchanged where anyone can see
+     them; only the world-wide prompt resolve is gated. */
+  const nearShell =
+    (P.x - HM1.x) * (P.x - HM1.x) + (P.z - HM1.z) * (P.z - HM1.z) < 60 * 60 ||
+    (P.x - HM2.x) * (P.x - HM2.x) + (P.z - HM2.z) * (P.z - HM2.z) < 60 * 60;
+  const ctx = (state === 'play' && nearShell) ? currentInteract() : null;
   for (const HM of HMIRRORS) {
     if (SAVE && SAVE[HM.key]) { HM.delta = 0; continue; }
     const nearM = ctx && ctx.id === HM.id;
-    if (nearM && IN.atkHeld && state === 'play') {
-      HM.m.angle += 0.75 * DT;
-      if (HM.m.angle > TAU) HM.m.angle -= TAU;
-      HM.m.group.rotation.y = -HM.m.angle;
-    }
-    let da = HM.m.angle - HM.m.target;
-    da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    if (!(nearM && IN.atkHeld) && Math.abs(da) < 0.4) {
-      HM.m.angle = angLerp(HM.m.angle, HM.m.target, 0.05);
-      HM.m.group.rotation.y = -HM.m.angle;
-      da = HM.m.angle - HM.m.target;
-      da = ((da % TAU) + TAU) % TAU; if (da > Math.PI) da -= TAU;
-    }
+    /* the shared shell latch (p6-game): a hold that reaches the window
+       seats itself and STAYS, so the burn can finish under one hold */
+    const da = tickShellAim(HM.m, !!(nearM && IN.atkHeld && state === 'play'), true);
     HM.delta = da;
     const lit = Math.abs(da) < 0.17;
     if (lit) {
@@ -3018,9 +3068,11 @@ function syncTideTelemetry() {
     lastDmgCheck.vis = sv; lastDmgCheck.frus = sf;
   }
   T.wyrmBodyVis = WYRM.c.root.visible;
-  T.wyrmStrikeable = WYRM.active && !WYRM.defeated &&
-    (WYRM.st === 'swim' || WYRM.st === 'erupt' || WYRM.st === 'slamRock' ||
-     WYRM.st === 'sweep' || WYRM.st === 'sweepTele' || WYRM.st === 'surface' || WYRM.st === 'daze');
+  // the ONE expression the sword actually consults — no more, no less
+  T.wyrmStrikeable = wyrmExposedNow();
+  T.wyrmSt = WYRM.st;
+  T.wyrmWakeChips = WYRM.wakeChips || 0;
+  T.wyrmWakeChippable = WYRM.active && !WYRM.defeated && (WYRM.st === 'swim' || WYRM.st === 'erupt');
   T.onSlab = onSlabAt(P.x, P.z);
   T.carryShield = !!P.carryShield;
   T.flood = flooded();

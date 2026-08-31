@@ -106,6 +106,21 @@ const COLD_BOT = `window.__coldBot = (function () {
   S.stop = () => { S.run = false; clearInterval(S.t); };
   return S;
 })(); 0`;
+/* THE MASHER: no cue-reading at all — ✕ every 170 ms, forever, which is
+   exactly how a five-year-old plays a wheel. Under the mercy law (an
+   off-beat press costs NOTHING) mashing must open every gate, because
+   one of those presses always lands inside the 1.3 s window. */
+const MASH_BOT = `window.__mashBot = (function () {
+  const S = { run: true, presses: 0, t: null };
+  S.t = setInterval(() => {
+    if (!S.run) return;
+    S.presses++;
+    __fakePad.press(0);
+    setTimeout(() => __fakePad.press(), 70);
+  }, 170);
+  S.stop = () => { S.run = false; clearInterval(S.t); __fakePad.press(); };
+  return S;
+})(); 0`;
 
 /* ═══════════════════ 1 — THE SLUICE, BY EAR AND EYE ═══════════════════ */
 async function suiteSluice() {
@@ -150,29 +165,49 @@ async function suiteSluice() {
     await walkTo(api, 260, 44, 3.0, 60000);        // along the south berm, out of the new water
     await walkTo(api, W2.x, W2.z, 2.2, 60000);
     await api.waitFor(`__fm.prompt === 'moWheel'`, 10000, 'gate 2 prompt');
-    /* one on-beat hit, then a deliberate wrong one: progress must reset */
+    /* THE COUNT IS VISIBLE: the gate's own lintel carries one pip per turn */
+    gate('sluice: the active gate shows its count on its arms (need 2 here)',
+      (await api.eval('__fm.moPips')) === true && (await api.eval('__fm.moNeed')) === 2,
+      JSON.stringify(await api.eval('({pips:__fm.moPips, need:__fm.moNeed, prog:__fm.moProgress})')));
+    /* THE SLUICE MERCY (DESIGN.md: "a missed beat just waits for the next
+       surge"). One on-beat hit, then a deliberate wrong one: the wheel
+       shrugs and the COUNT STANDS. It used to cost a turn — twelve seconds
+       of held rhythm undone by one anticipating thumb. */
     await api.eval(COLD_BOT);
     await api.waitFor('__fm.moProgress >= 1', 22000, 'first on-beat hit');
     await api.eval('__coldBot.stop()');
+    const prog0 = await api.eval('__fm.moProgress');
     await api.waitFor('__fm.moSurgeNow === false && __fm.moSurgePh > 0.5', 9000, 'mid-slack');
+    const sh1 = await api.eval('__fm.moShudders');
+    const h1 = await api.eval('P.hearts');
     await api.tap(0);
-    await api.waitFor('__fm.moProgress === 0', 4000, 'the count starts over');
-    gate('sluice: gate 2 counts CONSECUTIVE beats — a wrong press starts the count over',
-      await api.eval('__fm.moGates === 1'));
-    await api.eval(COLD_BOT);
-    await api.waitFor('__fm.moGates >= 2', 45000, 'gate 2 gives (two in a row)');
-    await api.eval('__coldBot.stop()');
-    gate('sluice: gate 2 gives to two consecutive cue-reactions', true);
+    await api.waitFor(`__fm.moShudders > ${sh1}`, 4000, 'the shrug');
+    const prog1 = await api.eval('__fm.moProgress');
+    gate('sluice: THE MERCY — an off-beat press costs NOTHING (count stands, no damage)',
+      prog1 >= prog0 && (await api.eval('__fm.moGates')) === 1 && (await api.eval('P.hearts')) === h1,
+      'progress ' + prog0 + ' → ' + prog1);
+    /* and a pure MASHER — no cue-reading whatever — still opens it */
+    await api.eval(MASH_BOT);
+    await api.waitFor('__fm.moGates >= 2', 45000, 'gate 2 gives to mashing alone');
+    await api.eval('__mashBot.stop()');
+    gate('sluice: gate 2 gives to MASHING alone', true,
+      'presses=' + await api.eval('__mashBot.presses'));
     await api.shot('sluice-gate2-open-1280x720');
     /* gate 3 needs three — and IS the cinematic */
     const W3 = await api.eval('({x: MOGATES[2].wx, z: MOGATES[2].wz})');
     await walkTo(api, 240, 36.5, 3.0, 60000);      // the dry south bank of reach 2
     await walkTo(api, W3.x, W3.z, 2.2, 60000);
     await api.waitFor(`__fm.prompt === 'moWheel'`, 10000, 'gate 3 prompt');
-    await api.eval(COLD_BOT);
-    await api.waitFor(`__fm.state === 'cine'`, 70000, 'three in a row → THE RIVER FALLS');
-    await api.eval('__coldBot.stop()');
-    gate('sluice: gate 3 gives to three consecutive beats and starts the falls', true);
+    gate('sluice: gate 3 shows THREE pips on its arms',
+      (await api.eval('__fm.moPips')) === true && (await api.eval('__fm.moNeed')) === 3,
+      JSON.stringify(await api.eval('({pips:__fm.moPips, need:__fm.moNeed})')));
+    /* the hardest gate in the game, opened by a thumb that never once
+       read the cue — the whole point of the mercy */
+    await api.eval(MASH_BOT);
+    await api.waitFor(`__fm.state === 'cine'`, 90000, 'three turns → THE RIVER FALLS');
+    await api.eval('__mashBot.stop()');
+    gate('sluice: gate 3 gives to MASHING alone and starts the falls', true,
+      'presses=' + await api.eval('__mashBot.presses'));
     await sleep(2500);
     await api.shot('riverfalls-mid-1280x720');
     await api.waitFor(`__fm.state === 'play'`, 25000, 'the cine ends by itself');
@@ -498,13 +533,23 @@ async function suiteWorld() {
     const qmin = await api.eval(`(function(){
       const s = JSON.parse(JSON.stringify(SAVE));
       s.q = 17; s.mouthOpen = true; s.sluiceG = 0;
+      /* isolate mouthOpen's OWN drag: the live probe save carries the
+         refit (paddleWheel), whose derivation legitimately closes the
+         chapter at 20 — strip the later-stage flags for this seed */
+      s.paddleWheel = false; s.poleFound = false;
       localStorage.setItem('fallenmoon_save_v1', JSON.stringify(s));
       const back = loadSave();
+      const s2 = JSON.parse(JSON.stringify(s));
+      s2.paddleWheel = true;
+      localStorage.setItem('fallenmoon_save_v1', JSON.stringify(s2));
+      const back2 = loadSave();
       localStorage.setItem('fallenmoon_save_v1', JSON.stringify(SAVE));
-      return { q: back.q, g: back.sluiceG };
+      return { q: back.q, g: back.sluiceG, qRefit: back2.q };
     })()`);
-    gate('world: forward derivation — mouthOpen drags q to 19 and sets all gates',
+    gate('world: forward derivation — mouthOpen alone drags q to 19 and sets all gates',
       qmin.q === 19 && qmin.g === 3, JSON.stringify(qmin));
+    gate('world: forward derivation — mouthOpen + refit closes the chapter at 20',
+      qmin.qRefit === 20, JSON.stringify(qmin));
     /* NEW GAME: everything un-derives (the REAL path — beginNewGame;
        a reload would only re-run the probe's own seed script) */
     await api.eval('beginNewGame(); 0');
