@@ -5865,6 +5865,13 @@ try {
   for (let x = 1932; x <= 2076; x += 6) for (let z = 1188; z <= 1336; z += 6) pts.push([x, z]);
   for (let x = -1545; x <= -1420; x += 5) for (let z = -470; z <= -350; z += 5) pts.push([x, z]);
   for (let x = 1950; x <= 2350; x += 12) for (let z = 1250; z <= 1560; z += 12) pts.push([x, z]);
+  /* the small far things the 80 m ocean stride walked straight past: two
+     beacon islets barely wider than one stride, and the Emberwaste's
+     southern strip + caldera, which sat entirely below the sweep's z floor
+     of -1180. A rule nobody visits is a rule nobody keeps. */
+  for (let x = -216; x <= -178; x += 4) for (let z = 90; z <= 128; z += 4) pts.push([x, z]);
+  for (let x = -920; x <= -884; x += 4) for (let z = 300; z <= 336; z += 4) pts.push([x, z]);
+  for (let x = -1300; x <= -1000; x += 12) for (let z = -1250; z <= -1184; z += 11) pts.push([x, z]);
   for (const R of ROOMS) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1])
     pts.push([R.x + dx * 1.1, R.z + dz * 1.1]);
   for (const [x, z] of pts) {

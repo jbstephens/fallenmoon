@@ -756,6 +756,8 @@ let cnMoonRoad = null;
    (derived from ROOMS' own exterior doors) + the lighthouse beam. One
    glow mesh — the post-game night village and the rising's shot four. */
 let cnVillGlow = null, cnLightBeamGrp = null;
+/* the lighthouse beam's live length + its recompute countdown (below) */
+let cnBeamCd = 0, cnBeamLen = 80;
 (function cnBuildVillageGlow() {
   const md = MD(), uvs = [];
   for (let i = 0; i < ROOMS.length; i++) {
@@ -801,10 +803,27 @@ let cnVillGlow = null, cnLightBeamGrp = null;
   }
   cnLightBeamGrp.position.set(lx, ly, lz);
   cnLightBeamGrp.rotation.x = -0.045;      // the lamp sweeps the WATER, never the sky
-  cnLightBeamGrp.scale.set(1, 1, 80);
+  cnLightBeamGrp.scale.set(1, 1, cnBeamLen);
   cnLightBeamGrp.visible = false;
   scene.add(cnLightBeamGrp);
 })();
+/* NO FIXED-LENGTH BEAM GEOMETRY (the world rule). The lamp used to be a
+   flat 80 m fin sweeping a full circle through the village, so it speared
+   the harbour row, the wheel hill and the headland rock on every turn.
+   Its length comes from the air now, exactly like p6k's beacons: the
+   geometry already slopes -0.1 in y per metre of z and the group is
+   tilted +0.045 back, so the march direction is (sin yaw, -0.055, cos yaw).
+   A frame COUNTDOWN, never a simTick modulo — under turbo the frame samples
+   simTick in strides and a misaligned phase would freeze the length forever
+   (p6k's hard-won note). `force` for the cinematics, which jump the yaw. */
+function cnBeamClamp(force) {
+  const p = cnLightBeamGrp.position, yaw = cnLightBeamGrp.rotation.y;
+  if (force || --cnBeamCd <= 0) {
+    cnBeamCd = 10;
+    cnBeamLen = beamHitDist(p.x, p.y, p.z, Math.sin(yaw), -0.055, Math.cos(yaw), 80);
+  }
+  cnLightBeamGrp.scale.set(1, 1, Math.max(4, cnBeamLen));
+}
 const cnNightLightsOn = () => (cnRisen() || cnMoonHome());
 
 /* ── the rising itself ── */
@@ -843,6 +862,11 @@ function cnRisingRestore() {
 }
 function cnFinishRising() {
   const replay = CN_RISING.replay;
+  /* the memories flag is SHARED with the end flight and never outlives its
+     own cinematic (cnFinishEnd clears it the same way). Left standing, a
+     replayed rising made the next real one behave like a memory: no
+     save writes, no quest 34, no rise. */
+  CN_RISING.replay = false;
   cnRisingRestore();
   markCineSeen('cnRising');
   cnPaintSpan(cnFillSpan, (replay ? cnRisen() : true) ? 1 : 0);
@@ -1070,6 +1094,7 @@ function cnTickRising(t) {
     cnVillGlow.material.opacity = Math.min(1.0, u * 0.55);
     cnLightBeamGrp.visible = true;
     cnLightBeamGrp.rotation.y = 2.2 + u * 0.1;
+    cnBeamClamp(true);
     cnLightBeamGrp.children[0].material.opacity = 0.5;
     if (u < 4) {
       const k = smoothstep(clamp(u / 4, 0, 1));
@@ -1321,6 +1346,27 @@ function cnSeat8(k) {
   crescentItem.scale.setScalar(0.8);
   crescentItem.position.set(cr[0], cr[1], cr[2]);
 }
+/* ── THE EIGHT RELICS BELONG TO THE HILL (sweep C). cnSeat8 turns all
+   eight on and nothing ever turned them back off but the coin: seven
+   relics plus their halos were fourteen draw calls paid from the far side
+   of the world (measured at the quay, 87 m away, and every vista beyond
+   it). One rule, the wheelRing pattern (p7's near2 gate, radius 135) at
+   the relics' own much smaller scale — they are thumb-sized props on a
+   monument, and past 60 m they are a fistful of invisible sprites.
+   HIDE-ONLY and re-run every frame, never on the transition: p6h's own
+   four-relic gate re-asserts at 150 m and this chain runs LAST, so the
+   hide has to be the last word each frame or the sliver, gibbous, shield
+   and crescent walk back on at the 150 m ring. ── */
+function cnHideSeat8() {
+  cnCoinItem.visible = false;
+  const bp = cnBoneProp(); if (bp) bp.visible = false;
+  if (typeof mlRelic !== 'undefined' && mlRelic) mlRelic.visible = false;
+  if (typeof nmItem5 !== 'undefined' && nmItem5) nmItem5.visible = false;
+  if (typeof sliverProp !== 'undefined' && sliverProp) sliverProp.visible = false;
+  if (typeof gibbousItem !== 'undefined' && gibbousItem) gibbousItem.visible = false;
+  if (typeof shieldItem !== 'undefined' && shieldItem) shieldItem.visible = false;
+  crescentItem.visible = false;
+}
 function cnPayoff8() {
   QUEST.phases = 8;
   if (SAVE) {
@@ -1484,6 +1530,7 @@ function cnTickEnd(t) {
     cnVillGlow.material.opacity = 0.9;
     cnLightBeamGrp.visible = true;
     cnLightBeamGrp.rotation.y += DT * 0.12;
+    cnBeamClamp();
     if (!LOWFX && here.seg >= 6 && here.seg <= 8 && (simTick % 3) === 0) {
       psNmFly.spawn(here.x + (Math.random() - 0.5) * 60, here.y - 30 - Math.random() * 20, here.z + (Math.random() - 0.5) * 60,
         0, 0.6, 0, 2.2);
@@ -1510,7 +1557,7 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
   cnEndUI = document.createElement('div');
   cnEndUI.id = 'cnEndUI';
   cnEndUI.style.cssText = 'position:absolute;inset:0;z-index:30;display:none;background:#000;' +
-    'opacity:0;transition:opacity 1.1s ease;font-family:Georgia,serif;color:#e8e4d2;' +
+    'opacity:0;transition:opacity 1.1s ease;font-family:Georgia,serif;color:#f2eee0;' +
     'align-items:center;justify-content:center;text-align:center;overflow:hidden;';
   const mk = (id, css, html) => {
     const d = document.createElement('div');
@@ -1528,8 +1575,13 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
   cnCreditsInner = document.createElement('div');
   cnCreditsInner.style.cssText = 'position:absolute;left:0;right:0;top:100%;font-size:19px;line-height:2.1;' +
     'letter-spacing:0.08em;';
-  const L = (n, r) => '<div style="margin:6px 0"><span style="color:#f2eeda">' + n + '</span>' +
-    (r ? '<span style="color:#9a94b8"> — ' + r + '</span>' : '') + '</div>';
+  /* THE CREDITS ARE READ FROM A SOFA, in a lit room, on a TV. The roles,
+     the dedication and the footer were 47-60% greys on pure black and
+     dissolved at couch distance. Everything is >=85% of white now; the
+     serif, the letterspacing and the hierarchy (name brighter than role)
+     are untouched — only the floor came up. */
+  const L = (n, r) => '<div style="margin:6px 0"><span style="color:#f7f3e4">' + n + '</span>' +
+    (r ? '<span style="color:#d9d4ea"> — ' + r + '</span>' : '') + '</div>';
   cnCreditsInner.innerHTML =
     '<div style="font-size:24px;letter-spacing:0.2em;margin-bottom:26px">FALLEN MOON</div>' +
     L('WICK', 'the kid with the sword') +
@@ -1543,12 +1595,12 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
     L('THE HOUR TORTOISE · THE SILT WYRM · THE KING CRAB', 'cured, every one') +
     L('THE ASH STAG · THE LANTERN MOTH · THE KILN HOUND', 'cured, every one') +
     L('THE MOON', 'home') +
-    '<div style="margin-top:34px;font-size:21px;color:#cfd8f2">for the family that fixed the sky</div>' +
-    '<div style="margin-top:26px;font-size:15px;color:#7a7590">Stephens Arcade · ses.q5labs.co</div>';
+    '<div style="margin-top:34px;font-size:21px;color:#e2e8ff">for the family that fixed the sky</div>' +
+    '<div style="margin-top:26px;font-size:15px;color:#cdc9dc">Stephens Arcade · ses.q5labs.co</div>';
   cnCredits.appendChild(cnCreditsInner);
   cnCardGo = document.createElement('div');
   cnCardGo.style.cssText = 'position:absolute;bottom:34px;left:0;right:0;text-align:center;' +
-    'font-size:15px;letter-spacing:0.18em;color:#8a86a0;opacity:0;transition:opacity 0.6s ease;';
+    'font-size:15px;letter-spacing:0.18em;color:#d5d1e2;opacity:0;transition:opacity 0.6s ease;';
   cnEndUI.appendChild(cnCardGo);
   stage.appendChild(cnEndUI);
 })();
@@ -2007,17 +2059,8 @@ cullChunks = function (ccx, ccz) {
         cnVillGlow.visible = false;
         cnLightBeamGrp.visible = false;
       }
-      if (endOn) {
-        /* the relics rest while the flight passes the monument */
-        cnCoinItem.visible = false;
-        const bp = cnBoneProp(); if (bp) bp.visible = false;
-        if (typeof mlRelic !== 'undefined' && mlRelic) mlRelic.visible = false;
-        if (typeof nmItem5 !== 'undefined' && nmItem5) nmItem5.visible = false;
-        if (typeof sliverProp !== 'undefined' && sliverProp) sliverProp.visible = false;
-        if (typeof gibbousItem !== 'undefined' && gibbousItem) gibbousItem.visible = false;
-        if (typeof shieldItem !== 'undefined' && shieldItem) shieldItem.visible = false;
-        crescentItem.visible = false;
-      }
+      /* the relics rest while the flight passes the monument */
+      if (endOn) cnHideSeat8();
     }
     if (risingOn) {
       /* the sea's wildlife sits the show out */
@@ -2145,9 +2188,12 @@ cullChunks = function (ccx, ccz) {
     if (!risingOn && !endOn) {
       cnVillGlow.visible = lightsOn && nearVill;
       if (cnVillGlow.visible) cnVillGlow.material.opacity = 0.85 * nightK;
-      cnLightBeamGrp.visible = lightsOn && nearVill;
+      /* a lighthouse beam at NOON is a lamp nobody lit: the windows can
+         warm at dusk, but the beam waits for real dark */
+      cnLightBeamGrp.visible = lightsOn && nearVill && nightK > 0.25;
       if (cnLightBeamGrp.visible) {
         cnLightBeamGrp.rotation.y += dtv * 0.14;
+        cnBeamClamp();
         cnLightBeamGrp.children[0].material.opacity = 0.08 + nightK * 0.22;
       }
     }
@@ -2185,9 +2231,15 @@ cullChunks = function (ccx, ccz) {
   }
   /* the wheel keeps eight once it has eight */
   if (SAVE && cnSky() >= 8 && CINE.id !== 'cnWheel8') {
-    const nw = nearWheel2 < 150 * 150;
-    if (nw && (!cnSeat8Shown || (simTick % 90) === 0)) cnSeat8(1);
-    if (!nw && cnSeat8Shown) cnCoinItem.visible = false;
+    const nw = nearWheel2 < 60 * 60;
+    if (nw) { if (!cnSeat8Shown || (simTick % 90) === 0) cnSeat8(1); }
+    else {
+      /* the coin in Wick's hands belongs to the carry block above, not to
+         the wheel — the hill only takes back what the hill is holding */
+      const carried = cnCoinItem.visible && cnCarryCoin() && state === 'play' && CINE.id === null;
+      cnHideSeat8();
+      if (carried) cnCoinItem.visible = true;
+    }
     cnSeat8Shown = nw;
   } else if (CINE.id === 'cnWheel8' && cnSeat8K >= 0) cnSeat8(cnSeat8K);
   /* ── post-game night ambience, ashore: soft fireflies, a night-bird ── */

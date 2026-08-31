@@ -137,13 +137,7 @@ function itemToast(big, small) {
 function grantFinnHeart() {
   if (SAVE.finnHeart) return;
   SAVE.finnHeart = true;
-  P.maxHearts = Math.min(8, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemGetT = 0;
-  itemToast('HEART CONTAINER', 'Finn kept it safe through the long noon.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Finn kept it safe through the long noon.', groundH(P.x, P.z) + 1.4);
 }
 
 /* ── interactions — v2: nothing is quest-gated; prompts appear only when
@@ -433,13 +427,7 @@ function tickLightChest() {
     } else {
       lightChest.heart.visible = false;
       lightChestAnimT = -1; lightHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'Kept polished for a night worth lighting.');
-      SFX.heart();
-      burst(psSparkle, P.x, 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'Kept polished for a night worth lighting.', 1.4);
     }
   }
 }
@@ -517,13 +505,7 @@ function tickChest() {
     } else {
       chest.heart.visible = false;
       chestAnimT = -1; heartFloatT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The old sea kept one safe for you.');
-      SFX.heart();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The old sea kept one safe for you.', groundH(P.x, P.z) + 1.4);
     }
   }
 }
@@ -550,7 +532,15 @@ function tickSalt() {
 /* ── the mirror-shell puzzle ── */
 let burnT = 0, beamOn = false, wallBurnAnim = -1, mirrorDelta = 9;
 function tickMirror() {
-  const ctx = currentInteract();
+  /* the shell is a PLACE. Resolving the ✕ prompt walks every region's
+     interact chain in the game — the whole world's worth of proximity
+     tests — and this asked for it every single frame from anywhere,
+     including two kilometres away on the Crown. Gate it on the mirror's
+     own footprint (p6e's foundry pattern); everything below still runs
+     unchanged, so the beam, the magnetic settle and the burn are
+     byte-identical wherever they could ever be watched. */
+  const dmx = P.x - MIRROR_POS.x, dmz = P.z - MIRROR_POS.z;
+  const ctx = (dmx * dmx + dmz * dmz < 60 * 60) ? currentInteract() : null;
   const nearMirror = ctx && ctx.id === 'mirror';
   if (nearMirror && IN.atkHeld && state === 'play') {
     mirror.angle += 0.75 * DT;

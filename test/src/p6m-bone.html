@@ -473,9 +473,17 @@ seaShoalAt = function (x, z) {
 /* ═══ RULES registrations ═══ */
 window.__WORLD_REG.push({
   name: 'emberwaste', kind: 'ground', over: ['sea'],
-  owns: (x, z) => obInRegion(x, z),
+  /* the rect INCLUSIVE of its own rim. obInRegion is a strict t < 1 — the
+     right answer for the live wraps, whose skirt has already blended to
+     zero by then — but it left the boundary line itself declared by
+     nobody: south of the sea box's z floor (-1184) there is no other
+     owner, so the extended rules sweep found open air with no authority.
+     obGroundAt answers with the captured chain at t >= 1, which is
+     exactly what the live groundH answers there, so this declares the
+     truth rather than changing it. */
+  owns: (x, z) => obRegionT(x, z) <= 1,
   ground: (x, z) => obGroundAt(x, z),
-  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge)',
+  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge); the rim line is declared here too, since nothing else reaches south of the sea box',
 });
 window.__PORTALS.push({
   name: 'kiln-gate',
@@ -924,17 +932,7 @@ function obTickChests() {
       } else {
         a.e.ch.heart.visible = false;
         obChestAnims.splice(i, 1);
-        const before = P.maxHearts;
-        P.maxHearts = Math.min(10, P.maxHearts + 1);
-        P.hearts = P.maxHearts;
-        SAVE.mh = P.maxHearts; storeSave();
-        if (P.maxHearts === before) {
-          /* a full row already: the container gives its warmth instead */
-          P.salt += 8; SAVE.salt = P.salt; storeSave();
-          itemToast('A FULL HEART ROW', 'It fills every heart you have — and leaves eight salt behind.');
-        } else itemToast(a.e.big, a.e.small);
-        SFX.heart();
-        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+        gainHeart(a.e.big, a.e.small, P.fy + 1.4);
       }
     }
   }
@@ -2558,7 +2556,14 @@ cullChunks = function (ccx, ccz) {
         if (!nw && obSeat7Shown) obBone.visible = false;
         obSeat7Shown = nw;
       } else if (obSeatK >= 0) obSeat7(obSeatK);
-    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7') {
+    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7' &&
+               !(SAVE.sky >= 8 && typeof cnSeat8 === 'function')) {
+      /* ...and at 8/8 the bone belongs entirely to the sibling. The branch
+         above already yields the SEATING at sky 8, but this one went on
+         hiding obBone every frame while p6n only re-seats it every ninety
+         ticks — so THE OLD BONE was missing from the finished moonwheel
+         eighty-nine frames out of ninety (found by counting the relics at
+         the wheel while gating them). One owner or the other, never both. */
       obBone.visible = false;
     }
   }

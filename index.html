@@ -186,13 +186,17 @@
     position: absolute; left: 0; right: 0; top: 118px;
     text-align: center;
     font-size: 15px; letter-spacing: 12px; text-indent: 12px; color: #efe0b8;
-    text-shadow: 0 1px 4px rgba(60,38,20,0.6);
+    /* pale cream on a pale noon sky reads as nothing from a sofa: the
+       glyphs keep their colour and carry their own dark behind them */
+    text-shadow: 0 1px 2px rgba(26,15,6,0.95), 0 2px 9px rgba(26,15,6,0.8),
+                 0 0 20px rgba(26,15,6,0.55);
   }
   #tSub {
     position: absolute; left: 0; right: 0; top: 246px;
     text-align: center;
     font-size: 16px; letter-spacing: 10px; text-indent: 10px; color: #f0e2bf;
-    text-shadow: 0 1px 4px rgba(60,38,20,0.6);
+    text-shadow: 0 1px 2px rgba(26,15,6,0.95), 0 2px 9px rgba(26,15,6,0.8),
+                 0 0 20px rgba(26,15,6,0.55);
   }
   #tRule {
     position: absolute; left: 50%; top: 236px; transform: translateX(-50%);
@@ -441,6 +445,18 @@ const TURBO = Math.min(30, Math.max(0, parseInt(QS.get('turbo') || '0', 10) || 0
 const SAVE_KEY = 'fallenmoon_save_v1';
 const BUILD_TAG = 'FM-P8-MOONHOME-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
+
+/* ── THE HEART ROW HAS ONE CAP (sweep C). Nine containers were each
+   written with their own literal — min(8) seven times, min(9) once,
+   min(10) once — so a late container could silently CLIP a row an earlier
+   one had already grown, and every gain that landed on a ceiling did so
+   with no acknowledgement at all except in the Emberwaste. One constant,
+   one grant path (`gainHeart`, at the foot of this part), and every
+   container in the game does something. The arithmetic: 7 early + the
+   market's + the Emberwaste's two = 10 gains from a base of 5, so five of
+   them WILL land at the cap — which is exactly why the at-cap
+   compensation is now honest everywhere. ── */
+const HEART_CAP = 10;
 
 /* ───────────────────────── math utils ───────────────────────── */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -999,6 +1015,10 @@ function loadSave() {
     const v = JSON.parse(s);
     if (typeof v.q !== 'number') return null;
     const out = Object.assign(defaultSave(), v);
+    /* the heart row is UPWARD-ONLY: a save can be raised to the floor of
+       five and held at the cap, but loading must never hand back fewer
+       hearts than the row already earned */
+    out.mh = clamp(Math.round(+out.mh) || 5, 5, HEART_CAP);
     if (!v.v) {
       // v1 → v2 migration: everyone starts armed now. Old q1 ("cut Finn's
       // door") folds into the started Crescent thread; Finn's heart container
@@ -1095,6 +1115,33 @@ function storeSave() {
   } catch (e) {}
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } catch (e) {}
 }
+/* ── THE ONE HEART-CONTAINER GRANT. Every container in the game routes
+   here (see HEART_CAP above). Three rules it owns:
+     1. the row NEVER shrinks — a min() with a smaller literal used to be
+        able to clip a row a later region had already grown;
+     2. at the cap the container still PAYS — the Emberwaste's full heal +
+        eight salt + a caption that says so, now everywhere;
+     3. the item-get pose plays for all of them (two grants used to skip it).
+   Declared in p2 but bound late: P, SAVE, itemToast, SFX, burst and
+   psSparkle all exist by the time any container can fire. `y` is the
+   sparkle height — passed explicitly by each caller so the burst reads at
+   the same place it always did (ground-relative ashore, P.fy at sea). ── */
+function gainHeart(big, small, y) {
+  const before = P.maxHearts;
+  P.maxHearts = Math.max(before, Math.min(HEART_CAP, before + 1));
+  P.hearts = P.maxHearts;
+  if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
+  itemGetT = 0;
+  if (P.maxHearts === before) {
+    /* a full row already: the container gives its warmth instead */
+    P.salt += 8;
+    if (SAVE) { SAVE.salt = P.salt; storeSave(); }
+    itemToast('A FULL HEART ROW', 'It fills every heart you have — and leaves eight salt behind.');
+  } else itemToast(big, small);
+  SFX.heart();
+  burst(psSparkle, P.x, (y == null ? P.fy + 1.4 : y), P.z, 18, 1.4, 1.2, 1.0);
+}
+
 SAVE = loadSave();
 
 /* game-wide state string — declared here, driven by p6 flow */
@@ -5981,13 +6028,7 @@ function itemToast(big, small) {
 function grantFinnHeart() {
   if (SAVE.finnHeart) return;
   SAVE.finnHeart = true;
-  P.maxHearts = Math.min(8, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemGetT = 0;
-  itemToast('HEART CONTAINER', 'Finn kept it safe through the long noon.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Finn kept it safe through the long noon.', groundH(P.x, P.z) + 1.4);
 }
 
 /* ── interactions — v2: nothing is quest-gated; prompts appear only when
@@ -6277,13 +6318,7 @@ function tickLightChest() {
     } else {
       lightChest.heart.visible = false;
       lightChestAnimT = -1; lightHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'Kept polished for a night worth lighting.');
-      SFX.heart();
-      burst(psSparkle, P.x, 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'Kept polished for a night worth lighting.', 1.4);
     }
   }
 }
@@ -6361,13 +6396,7 @@ function tickChest() {
     } else {
       chest.heart.visible = false;
       chestAnimT = -1; heartFloatT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The old sea kept one safe for you.');
-      SFX.heart();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The old sea kept one safe for you.', groundH(P.x, P.z) + 1.4);
     }
   }
 }
@@ -6394,7 +6423,15 @@ function tickSalt() {
 /* ── the mirror-shell puzzle ── */
 let burnT = 0, beamOn = false, wallBurnAnim = -1, mirrorDelta = 9;
 function tickMirror() {
-  const ctx = currentInteract();
+  /* the shell is a PLACE. Resolving the ✕ prompt walks every region's
+     interact chain in the game — the whole world's worth of proximity
+     tests — and this asked for it every single frame from anywhere,
+     including two kilometres away on the Crown. Gate it on the mirror's
+     own footprint (p6e's foundry pattern); everything below still runs
+     unchanged, so the beam, the magnetic settle and the burn are
+     byte-identical wherever they could ever be watched. */
+  const dmx = P.x - MIRROR_POS.x, dmz = P.z - MIRROR_POS.z;
+  const ctx = (dmx * dmx + dmz * dmz < 60 * 60) ? currentInteract() : null;
   const nearMirror = ctx && ctx.id === 'mirror';
   if (nearMirror && IN.atkHeld && state === 'play') {
     mirror.angle += 0.75 * DT;
@@ -9418,13 +9455,7 @@ function tickCedarChest() {
     } else {
       cedarChest.heart.visible = false;
       cedarAnimT = -1; cedarHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The Great Cedar kept its last green heart for you.');
-      SFX.heart();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The Great Cedar kept its last green heart for you.', groundH(P.x, P.z) + 1.4);
     }
   }
 }
@@ -11794,6 +11825,12 @@ function rescueStrandedBoat() {
       const px = wk[0] + Math.sin(a) * r, pz = wk[1] + Math.cos(a) * r;
       if (waterDepthAt(px, pz) < 1.3) continue;        // she must float AND sail — 0.4 beached John at his own re-moor
       if (!boatMooringOK(px, pz)) continue;
+      /* sea water only — never up a river. The two later rescues both
+         carry this check; this one, the oldest, did not, so a wake at the
+         river mouth could re-moor her onto the lower river's elevated
+         surface and strand her all over again. */
+      if (typeof window.__boatSurfaceYAt === 'function' &&
+          Math.abs(window.__boatSurfaceYAt(px, pz) - WL) > 0.05) continue;
       BOAT.x = px; BOAT.z = pz;
       sailboat.group.position.set(BOAT.x, WL - 0.18, BOAT.z);
       sailboatColl.x = BOAT.x; sailboatColl.z = BOAT.z; sailboatColl.off = false;
@@ -12507,7 +12544,15 @@ const HMIRRORS = [
   { m: hm2, id: 'hmirror2', door: glyphDoor2, doorPos: HDOOR2, key: 'glyph2', beam: hBeam2, burnT: 0, delta: 9 },
 ];
 function tickHollowMirrors() {
-  const ctx = state === 'play' ? currentInteract() : null;
+  /* both shells live in the hollow; walking the whole ✕ interact chain
+     from the far side of the sea buys nothing (p6e's foundry pattern).
+     The loop below still runs everywhere — it is twenty flops — so the
+     deltas, the settle and the burn are unchanged where anyone can see
+     them; only the world-wide prompt resolve is gated. */
+  const nearShell =
+    (P.x - HM1.x) * (P.x - HM1.x) + (P.z - HM1.z) * (P.z - HM1.z) < 60 * 60 ||
+    (P.x - HM2.x) * (P.x - HM2.x) + (P.z - HM2.z) * (P.z - HM2.z) < 60 * 60;
+  const ctx = (state === 'play' && nearShell) ? currentInteract() : null;
   for (const HM of HMIRRORS) {
     if (SAVE && SAVE[HM.key]) { HM.delta = 0; continue; }
     const nearM = ctx && ctx.id === HM.id;
@@ -13731,6 +13776,11 @@ let waveAmpC = new Float32Array(WG_N * WG_N), waveOffC = new Float32Array(WG_N *
 })();
 const S_SEA1 = col(0x11384f), S_SEA2 = col(0x1c5b68), S_SEA3 = col(0x3f8b8c),
       S_SEA_SHOAL = col(0x6fb3a4), S_FOAM = col(0xdff0ee);
+/* the far-water colour the swell grid's rim dissolves into. Hoisted for
+   the same reason S_SEA1/S_FOAM are: it is read once per grid VERTEX, and
+   a literal there allocated a fresh 3-array 19,440 times a second while
+   sailing. */
+const S_SEA_RIM = [0.09, 0.26, 0.36];
 const _wc = [0, 0, 0];
 let waterClarity = 0;              // 0 normal → 1 the clear water over the moon
 /* the bay keeps its OWN water plane (p6c). The ocean grid must not draw a
@@ -13861,7 +13911,7 @@ function updateWaveGrid() {
       if (dip > 0) mix3(_wc, S_SEA2, dip * 0.55, _wc);
       /* the RIM of the grid dissolves into the far-water colour, so the
          grid's origin snapping a cell as you sail never pops a visible edge */
-      if (rimK < 1) mix3(_wc, [0.09, 0.26, 0.36], (1 - rimK) * 0.9, _wc);
+      if (rimK < 1) mix3(_wc, S_SEA_RIM, (1 - rimK) * 0.9, _wc);
       waveCol[o] = _wc[0]; waveCol[o + 1] = _wc[1]; waveCol[o + 2] = _wc[2];
     }
   }
@@ -14838,13 +14888,7 @@ function tickIsleChests() {
       } else {
         strandChest.heart.visible = false;
         strandAnimT = -1; strandHeartT = -1;
-        P.maxHearts = Math.min(8, P.maxHearts + 1);
-        P.hearts = P.maxHearts;
-        SAVE.mh = P.maxHearts; storeSave();
-        itemGetT = 0;
-        itemToast('HEART CONTAINER', 'The strand keeps what the sea is finished with.');
-        SFX.heart();
-        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+        gainHeart('HEART CONTAINER', 'The strand keeps what the sea is finished with.', P.fy + 1.4);
       }
     }
   }
@@ -18949,13 +18993,7 @@ function tickFMouldChest() {
     } else {
       fMouldChest.heart.visible = false;
       fChestAnimT = -1; fHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'Left in a mould room by someone who meant to come back.');
-      SFX.heart();
-      burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'Left in a mould room by someone who meant to come back.', P.fy + 1.4);
     }
   }
 }
@@ -23036,13 +23074,7 @@ function tickBeaconChest() {
     } else {
       beaconChest.heart.visible = false;
       beaconAnimT = -1; beaconHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The last watcher’s, left where the fire used to be.');
-      SFX.heart();
-      burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The last watcher’s, left where the fire used to be.', P.fy + 1.4);
     }
   }
 }
@@ -29895,12 +29927,7 @@ function nmGrantHeart() {
   if (!SAVE || SAVE.marketHeart || P.salt < 60) return;
   P.salt -= 60; SAVE.salt = P.salt;
   SAVE.marketHeart = true;
-  P.maxHearts = Math.min(9, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemToast('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.', groundH(P.x, P.z) + 1.4);
 }
 function nmGrantGlass() {
   if (!SAVE || SAVE.spyglass || P.salt < 25) return;
@@ -31042,6 +31069,20 @@ window.__worldStateHooks.push(function (S) {
 });
 
 /* ═══ RULES registrations ═══ */
+/* RULE 1: p6j wraps the forest's SOLID authority to open the ferry-yard
+   clearing (the pines over it are parked out of the chunk meshes and
+   __forestSolid answers false inside the rect), and for three phases it
+   declared nothing — so the conformance sweep judged that footprint as
+   plain forest and never saw the owner that actually carved it. The ground
+   under the market is still the forest's field, exactly as the grotto's
+   entry re-declares the bay's: what p6j owns here is the carve. */
+const __regNightGround = groundH;    // the chain as it stands at p6j, captured
+window.__WORLD_REG.push({
+  name: 'night-market', kind: 'ground', over: ['forest'],
+  owns: (x, z) => nmMarketClearQ(x, z),
+  ground: (x, z) => __regNightGround(x, z),
+  note: 'the ferry-yard clearing (nmMarketClearQ footprint) — the forest heightfield stands, but __forestSolid is wrapped open here and the pines are parked out of the bakes; the quay and stalls add their own colliders',
+});
 window.__PORTALS.push({
   name: 'market-gate',
   x: NM_MARKET.gate.x, z: NM_MARKET.gate.z,
@@ -35744,9 +35785,17 @@ seaShoalAt = function (x, z) {
 /* ═══ RULES registrations ═══ */
 window.__WORLD_REG.push({
   name: 'emberwaste', kind: 'ground', over: ['sea'],
-  owns: (x, z) => obInRegion(x, z),
+  /* the rect INCLUSIVE of its own rim. obInRegion is a strict t < 1 — the
+     right answer for the live wraps, whose skirt has already blended to
+     zero by then — but it left the boundary line itself declared by
+     nobody: south of the sea box's z floor (-1184) there is no other
+     owner, so the extended rules sweep found open air with no authority.
+     obGroundAt answers with the captured chain at t >= 1, which is
+     exactly what the live groundH answers there, so this declares the
+     truth rather than changing it. */
+  owns: (x, z) => obRegionT(x, z) <= 1,
   ground: (x, z) => obGroundAt(x, z),
-  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge)',
+  note: 'the Emberwaste (p6m) — one analytic badland field on a 3 m lattice; solid = obSolidAt (caldera ring + south ridge); the rim line is declared here too, since nothing else reaches south of the sea box',
 });
 window.__PORTALS.push({
   name: 'kiln-gate',
@@ -36195,17 +36244,7 @@ function obTickChests() {
       } else {
         a.e.ch.heart.visible = false;
         obChestAnims.splice(i, 1);
-        const before = P.maxHearts;
-        P.maxHearts = Math.min(10, P.maxHearts + 1);
-        P.hearts = P.maxHearts;
-        SAVE.mh = P.maxHearts; storeSave();
-        if (P.maxHearts === before) {
-          /* a full row already: the container gives its warmth instead */
-          P.salt += 8; SAVE.salt = P.salt; storeSave();
-          itemToast('A FULL HEART ROW', 'It fills every heart you have — and leaves eight salt behind.');
-        } else itemToast(a.e.big, a.e.small);
-        SFX.heart();
-        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+        gainHeart(a.e.big, a.e.small, P.fy + 1.4);
       }
     }
   }
@@ -37829,7 +37868,14 @@ cullChunks = function (ccx, ccz) {
         if (!nw && obSeat7Shown) obBone.visible = false;
         obSeat7Shown = nw;
       } else if (obSeatK >= 0) obSeat7(obSeatK);
-    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7') {
+    } else if (state === 'play' && CINE.id !== 'obCure' && CINE.id !== 'obWheel7' &&
+               !(SAVE.sky >= 8 && typeof cnSeat8 === 'function')) {
+      /* ...and at 8/8 the bone belongs entirely to the sibling. The branch
+         above already yields the SEATING at sky 8, but this one went on
+         hiding obBone every frame while p6n only re-seats it every ninety
+         ticks — so THE OLD BONE was missing from the finished moonwheel
+         eighty-nine frames out of ninety (found by counting the relics at
+         the wheel while gating them). One owner or the other, never both. */
       obBone.visible = false;
     }
   }
@@ -38754,6 +38800,8 @@ let cnMoonRoad = null;
    (derived from ROOMS' own exterior doors) + the lighthouse beam. One
    glow mesh — the post-game night village and the rising's shot four. */
 let cnVillGlow = null, cnLightBeamGrp = null;
+/* the lighthouse beam's live length + its recompute countdown (below) */
+let cnBeamCd = 0, cnBeamLen = 80;
 (function cnBuildVillageGlow() {
   const md = MD(), uvs = [];
   for (let i = 0; i < ROOMS.length; i++) {
@@ -38799,10 +38847,27 @@ let cnVillGlow = null, cnLightBeamGrp = null;
   }
   cnLightBeamGrp.position.set(lx, ly, lz);
   cnLightBeamGrp.rotation.x = -0.045;      // the lamp sweeps the WATER, never the sky
-  cnLightBeamGrp.scale.set(1, 1, 80);
+  cnLightBeamGrp.scale.set(1, 1, cnBeamLen);
   cnLightBeamGrp.visible = false;
   scene.add(cnLightBeamGrp);
 })();
+/* NO FIXED-LENGTH BEAM GEOMETRY (the world rule). The lamp used to be a
+   flat 80 m fin sweeping a full circle through the village, so it speared
+   the harbour row, the wheel hill and the headland rock on every turn.
+   Its length comes from the air now, exactly like p6k's beacons: the
+   geometry already slopes -0.1 in y per metre of z and the group is
+   tilted +0.045 back, so the march direction is (sin yaw, -0.055, cos yaw).
+   A frame COUNTDOWN, never a simTick modulo — under turbo the frame samples
+   simTick in strides and a misaligned phase would freeze the length forever
+   (p6k's hard-won note). `force` for the cinematics, which jump the yaw. */
+function cnBeamClamp(force) {
+  const p = cnLightBeamGrp.position, yaw = cnLightBeamGrp.rotation.y;
+  if (force || --cnBeamCd <= 0) {
+    cnBeamCd = 10;
+    cnBeamLen = beamHitDist(p.x, p.y, p.z, Math.sin(yaw), -0.055, Math.cos(yaw), 80);
+  }
+  cnLightBeamGrp.scale.set(1, 1, Math.max(4, cnBeamLen));
+}
 const cnNightLightsOn = () => (cnRisen() || cnMoonHome());
 
 /* ── the rising itself ── */
@@ -38841,6 +38906,11 @@ function cnRisingRestore() {
 }
 function cnFinishRising() {
   const replay = CN_RISING.replay;
+  /* the memories flag is SHARED with the end flight and never outlives its
+     own cinematic (cnFinishEnd clears it the same way). Left standing, a
+     replayed rising made the next real one behave like a memory: no
+     save writes, no quest 34, no rise. */
+  CN_RISING.replay = false;
   cnRisingRestore();
   markCineSeen('cnRising');
   cnPaintSpan(cnFillSpan, (replay ? cnRisen() : true) ? 1 : 0);
@@ -39068,6 +39138,7 @@ function cnTickRising(t) {
     cnVillGlow.material.opacity = Math.min(1.0, u * 0.55);
     cnLightBeamGrp.visible = true;
     cnLightBeamGrp.rotation.y = 2.2 + u * 0.1;
+    cnBeamClamp(true);
     cnLightBeamGrp.children[0].material.opacity = 0.5;
     if (u < 4) {
       const k = smoothstep(clamp(u / 4, 0, 1));
@@ -39319,6 +39390,27 @@ function cnSeat8(k) {
   crescentItem.scale.setScalar(0.8);
   crescentItem.position.set(cr[0], cr[1], cr[2]);
 }
+/* ── THE EIGHT RELICS BELONG TO THE HILL (sweep C). cnSeat8 turns all
+   eight on and nothing ever turned them back off but the coin: seven
+   relics plus their halos were fourteen draw calls paid from the far side
+   of the world (measured at the quay, 87 m away, and every vista beyond
+   it). One rule, the wheelRing pattern (p7's near2 gate, radius 135) at
+   the relics' own much smaller scale — they are thumb-sized props on a
+   monument, and past 60 m they are a fistful of invisible sprites.
+   HIDE-ONLY and re-run every frame, never on the transition: p6h's own
+   four-relic gate re-asserts at 150 m and this chain runs LAST, so the
+   hide has to be the last word each frame or the sliver, gibbous, shield
+   and crescent walk back on at the 150 m ring. ── */
+function cnHideSeat8() {
+  cnCoinItem.visible = false;
+  const bp = cnBoneProp(); if (bp) bp.visible = false;
+  if (typeof mlRelic !== 'undefined' && mlRelic) mlRelic.visible = false;
+  if (typeof nmItem5 !== 'undefined' && nmItem5) nmItem5.visible = false;
+  if (typeof sliverProp !== 'undefined' && sliverProp) sliverProp.visible = false;
+  if (typeof gibbousItem !== 'undefined' && gibbousItem) gibbousItem.visible = false;
+  if (typeof shieldItem !== 'undefined' && shieldItem) shieldItem.visible = false;
+  crescentItem.visible = false;
+}
 function cnPayoff8() {
   QUEST.phases = 8;
   if (SAVE) {
@@ -39482,6 +39574,7 @@ function cnTickEnd(t) {
     cnVillGlow.material.opacity = 0.9;
     cnLightBeamGrp.visible = true;
     cnLightBeamGrp.rotation.y += DT * 0.12;
+    cnBeamClamp();
     if (!LOWFX && here.seg >= 6 && here.seg <= 8 && (simTick % 3) === 0) {
       psNmFly.spawn(here.x + (Math.random() - 0.5) * 60, here.y - 30 - Math.random() * 20, here.z + (Math.random() - 0.5) * 60,
         0, 0.6, 0, 2.2);
@@ -39508,7 +39601,7 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
   cnEndUI = document.createElement('div');
   cnEndUI.id = 'cnEndUI';
   cnEndUI.style.cssText = 'position:absolute;inset:0;z-index:30;display:none;background:#000;' +
-    'opacity:0;transition:opacity 1.1s ease;font-family:Georgia,serif;color:#e8e4d2;' +
+    'opacity:0;transition:opacity 1.1s ease;font-family:Georgia,serif;color:#f2eee0;' +
     'align-items:center;justify-content:center;text-align:center;overflow:hidden;';
   const mk = (id, css, html) => {
     const d = document.createElement('div');
@@ -39526,8 +39619,13 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
   cnCreditsInner = document.createElement('div');
   cnCreditsInner.style.cssText = 'position:absolute;left:0;right:0;top:100%;font-size:19px;line-height:2.1;' +
     'letter-spacing:0.08em;';
-  const L = (n, r) => '<div style="margin:6px 0"><span style="color:#f2eeda">' + n + '</span>' +
-    (r ? '<span style="color:#9a94b8"> — ' + r + '</span>' : '') + '</div>';
+  /* THE CREDITS ARE READ FROM A SOFA, in a lit room, on a TV. The roles,
+     the dedication and the footer were 47-60% greys on pure black and
+     dissolved at couch distance. Everything is >=85% of white now; the
+     serif, the letterspacing and the hierarchy (name brighter than role)
+     are untouched — only the floor came up. */
+  const L = (n, r) => '<div style="margin:6px 0"><span style="color:#f7f3e4">' + n + '</span>' +
+    (r ? '<span style="color:#d9d4ea"> — ' + r + '</span>' : '') + '</div>';
   cnCreditsInner.innerHTML =
     '<div style="font-size:24px;letter-spacing:0.2em;margin-bottom:26px">FALLEN MOON</div>' +
     L('WICK', 'the kid with the sword') +
@@ -39541,12 +39639,12 @@ let cnEndUI = null, cnCard1 = null, cnCard2 = null, cnCredits = null, cnCardGo =
     L('THE HOUR TORTOISE · THE SILT WYRM · THE KING CRAB', 'cured, every one') +
     L('THE ASH STAG · THE LANTERN MOTH · THE KILN HOUND', 'cured, every one') +
     L('THE MOON', 'home') +
-    '<div style="margin-top:34px;font-size:21px;color:#cfd8f2">for the family that fixed the sky</div>' +
-    '<div style="margin-top:26px;font-size:15px;color:#7a7590">Stephens Arcade · ses.q5labs.co</div>';
+    '<div style="margin-top:34px;font-size:21px;color:#e2e8ff">for the family that fixed the sky</div>' +
+    '<div style="margin-top:26px;font-size:15px;color:#cdc9dc">Stephens Arcade · ses.q5labs.co</div>';
   cnCredits.appendChild(cnCreditsInner);
   cnCardGo = document.createElement('div');
   cnCardGo.style.cssText = 'position:absolute;bottom:34px;left:0;right:0;text-align:center;' +
-    'font-size:15px;letter-spacing:0.18em;color:#8a86a0;opacity:0;transition:opacity 0.6s ease;';
+    'font-size:15px;letter-spacing:0.18em;color:#d5d1e2;opacity:0;transition:opacity 0.6s ease;';
   cnEndUI.appendChild(cnCardGo);
   stage.appendChild(cnEndUI);
 })();
@@ -40005,17 +40103,8 @@ cullChunks = function (ccx, ccz) {
         cnVillGlow.visible = false;
         cnLightBeamGrp.visible = false;
       }
-      if (endOn) {
-        /* the relics rest while the flight passes the monument */
-        cnCoinItem.visible = false;
-        const bp = cnBoneProp(); if (bp) bp.visible = false;
-        if (typeof mlRelic !== 'undefined' && mlRelic) mlRelic.visible = false;
-        if (typeof nmItem5 !== 'undefined' && nmItem5) nmItem5.visible = false;
-        if (typeof sliverProp !== 'undefined' && sliverProp) sliverProp.visible = false;
-        if (typeof gibbousItem !== 'undefined' && gibbousItem) gibbousItem.visible = false;
-        if (typeof shieldItem !== 'undefined' && shieldItem) shieldItem.visible = false;
-        crescentItem.visible = false;
-      }
+      /* the relics rest while the flight passes the monument */
+      if (endOn) cnHideSeat8();
     }
     if (risingOn) {
       /* the sea's wildlife sits the show out */
@@ -40143,9 +40232,12 @@ cullChunks = function (ccx, ccz) {
     if (!risingOn && !endOn) {
       cnVillGlow.visible = lightsOn && nearVill;
       if (cnVillGlow.visible) cnVillGlow.material.opacity = 0.85 * nightK;
-      cnLightBeamGrp.visible = lightsOn && nearVill;
+      /* a lighthouse beam at NOON is a lamp nobody lit: the windows can
+         warm at dusk, but the beam waits for real dark */
+      cnLightBeamGrp.visible = lightsOn && nearVill && nightK > 0.25;
       if (cnLightBeamGrp.visible) {
         cnLightBeamGrp.rotation.y += dtv * 0.14;
+        cnBeamClamp();
         cnLightBeamGrp.children[0].material.opacity = 0.08 + nightK * 0.22;
       }
     }
@@ -40183,9 +40275,15 @@ cullChunks = function (ccx, ccz) {
   }
   /* the wheel keeps eight once it has eight */
   if (SAVE && cnSky() >= 8 && CINE.id !== 'cnWheel8') {
-    const nw = nearWheel2 < 150 * 150;
-    if (nw && (!cnSeat8Shown || (simTick % 90) === 0)) cnSeat8(1);
-    if (!nw && cnSeat8Shown) cnCoinItem.visible = false;
+    const nw = nearWheel2 < 60 * 60;
+    if (nw) { if (!cnSeat8Shown || (simTick % 90) === 0) cnSeat8(1); }
+    else {
+      /* the coin in Wick's hands belongs to the carry block above, not to
+         the wheel — the hill only takes back what the hill is holding */
+      const carried = cnCoinItem.visible && cnCarryCoin() && state === 'play' && CINE.id === null;
+      cnHideSeat8();
+      if (carried) cnCoinItem.visible = true;
+    }
     cnSeat8Shown = nw;
   } else if (CINE.id === 'cnWheel8' && cnSeat8K >= 0) cnSeat8(cnSeat8K);
   /* ── post-game night ambience, ashore: soft fireflies, a night-bird ── */
@@ -40708,17 +40806,24 @@ function drawHearts() {
     g.shadowOffsetY = 0;
   }
 }
+let hudLastPrompt = '';
 function updatePrompt() {
-  if (state !== 'play') { promptEl.classList.remove('on'); return; }
+  if (state !== 'play') { promptEl.classList.remove('on'); hudLastPrompt = ''; return; }
   const ctx = currentInteract();
   if (ctx) {
     let label = ctx.label;
     if (window.ArcadeController && ArcadeController.currentInputSource && ArcadeController.currentInputSource() === 'keyboard') {
       label = label.replace('✕', 'J');
     }
-    promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+    /* the same change-gate drawHearts keeps just above: an innerHTML write
+       re-parses and re-lays-out the prompt EVERY frame, and the label is
+       the same string for whole minutes at a time */
+    if (label !== hudLastPrompt) {
+      hudLastPrompt = label;
+      promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+    }
     promptEl.classList.add('on');
-  } else promptEl.classList.remove('on');
+  } else { promptEl.classList.remove('on'); hudLastPrompt = ''; }
 }
 
 /* ── portrait mode (art review screenshots only) ── */

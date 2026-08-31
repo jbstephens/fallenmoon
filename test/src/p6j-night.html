@@ -1484,12 +1484,7 @@ function nmGrantHeart() {
   if (!SAVE || SAVE.marketHeart || P.salt < 60) return;
   P.salt -= 60; SAVE.salt = P.salt;
   SAVE.marketHeart = true;
-  P.maxHearts = Math.min(9, P.maxHearts + 1);
-  P.hearts = P.maxHearts;
-  SAVE.mh = P.maxHearts; storeSave();
-  itemToast('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.');
-  SFX.heart();
-  burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+  gainHeart('HEART CONTAINER', 'Hammered from moonglass slag. The tinker kept the best one back.', groundH(P.x, P.z) + 1.4);
 }
 function nmGrantGlass() {
   if (!SAVE || SAVE.spyglass || P.salt < 25) return;
@@ -2631,6 +2626,20 @@ window.__worldStateHooks.push(function (S) {
 });
 
 /* ═══ RULES registrations ═══ */
+/* RULE 1: p6j wraps the forest's SOLID authority to open the ferry-yard
+   clearing (the pines over it are parked out of the chunk meshes and
+   __forestSolid answers false inside the rect), and for three phases it
+   declared nothing — so the conformance sweep judged that footprint as
+   plain forest and never saw the owner that actually carved it. The ground
+   under the market is still the forest's field, exactly as the grotto's
+   entry re-declares the bay's: what p6j owns here is the carve. */
+const __regNightGround = groundH;    // the chain as it stands at p6j, captured
+window.__WORLD_REG.push({
+  name: 'night-market', kind: 'ground', over: ['forest'],
+  owns: (x, z) => nmMarketClearQ(x, z),
+  ground: (x, z) => __regNightGround(x, z),
+  note: 'the ferry-yard clearing (nmMarketClearQ footprint) — the forest heightfield stands, but __forestSolid is wrapped open here and the pines are parked out of the bakes; the quay and stalls add their own colliders',
+});
 window.__PORTALS.push({
   name: 'market-gate',
   x: NM_MARKET.gate.x, z: NM_MARKET.gate.z,

@@ -2904,13 +2904,7 @@ function tickBeaconChest() {
     } else {
       beaconChest.heart.visible = false;
       beaconAnimT = -1; beaconHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The last watcher’s, left where the fire used to be.');
-      SFX.heart();
-      burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The last watcher’s, left where the fire used to be.', P.fy + 1.4);
     }
   }
 }

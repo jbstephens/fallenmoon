@@ -1947,13 +1947,7 @@ function tickCedarChest() {
     } else {
       cedarChest.heart.visible = false;
       cedarAnimT = -1; cedarHeartT = -1;
-      P.maxHearts = Math.min(8, P.maxHearts + 1);
-      P.hearts = P.maxHearts;
-      SAVE.mh = P.maxHearts; storeSave();
-      itemGetT = 0;
-      itemToast('HEART CONTAINER', 'The Great Cedar kept its last green heart for you.');
-      SFX.heart();
-      burst(psSparkle, P.x, groundH(P.x, P.z) + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+      gainHeart('HEART CONTAINER', 'The Great Cedar kept its last green heart for you.', groundH(P.x, P.z) + 1.4);
     }
   }
 }

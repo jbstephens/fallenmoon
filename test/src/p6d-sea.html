@@ -507,6 +507,11 @@ let waveAmpC = new Float32Array(WG_N * WG_N), waveOffC = new Float32Array(WG_N *
 })();
 const S_SEA1 = col(0x11384f), S_SEA2 = col(0x1c5b68), S_SEA3 = col(0x3f8b8c),
       S_SEA_SHOAL = col(0x6fb3a4), S_FOAM = col(0xdff0ee);
+/* the far-water colour the swell grid's rim dissolves into. Hoisted for
+   the same reason S_SEA1/S_FOAM are: it is read once per grid VERTEX, and
+   a literal there allocated a fresh 3-array 19,440 times a second while
+   sailing. */
+const S_SEA_RIM = [0.09, 0.26, 0.36];
 const _wc = [0, 0, 0];
 let waterClarity = 0;              // 0 normal → 1 the clear water over the moon
 /* the bay keeps its OWN water plane (p6c). The ocean grid must not draw a
@@ -637,7 +642,7 @@ function updateWaveGrid() {
       if (dip > 0) mix3(_wc, S_SEA2, dip * 0.55, _wc);
       /* the RIM of the grid dissolves into the far-water colour, so the
          grid's origin snapping a cell as you sail never pops a visible edge */
-      if (rimK < 1) mix3(_wc, [0.09, 0.26, 0.36], (1 - rimK) * 0.9, _wc);
+      if (rimK < 1) mix3(_wc, S_SEA_RIM, (1 - rimK) * 0.9, _wc);
       waveCol[o] = _wc[0]; waveCol[o + 1] = _wc[1]; waveCol[o + 2] = _wc[2];
     }
   }
@@ -1614,13 +1619,7 @@ function tickIsleChests() {
       } else {
         strandChest.heart.visible = false;
         strandAnimT = -1; strandHeartT = -1;
-        P.maxHearts = Math.min(8, P.maxHearts + 1);
-        P.hearts = P.maxHearts;
-        SAVE.mh = P.maxHearts; storeSave();
-        itemGetT = 0;
-        itemToast('HEART CONTAINER', 'The strand keeps what the sea is finished with.');
-        SFX.heart();
-        burst(psSparkle, P.x, P.fy + 1.4, P.z, 18, 1.4, 1.2, 1.0);
+        gainHeart('HEART CONTAINER', 'The strand keeps what the sea is finished with.', P.fy + 1.4);
       }
     }
   }

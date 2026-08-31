@@ -27,6 +27,18 @@ const SAVE_KEY = 'fallenmoon_save_v1';
 const BUILD_TAG = 'FM-P8-MOONHOME-1';   // deploy marker (build-unique)
 window.__fmBuild = BUILD_TAG;
 
+/* ── THE HEART ROW HAS ONE CAP (sweep C). Nine containers were each
+   written with their own literal — min(8) seven times, min(9) once,
+   min(10) once — so a late container could silently CLIP a row an earlier
+   one had already grown, and every gain that landed on a ceiling did so
+   with no acknowledgement at all except in the Emberwaste. One constant,
+   one grant path (`gainHeart`, at the foot of this part), and every
+   container in the game does something. The arithmetic: 7 early + the
+   market's + the Emberwaste's two = 10 gains from a base of 5, so five of
+   them WILL land at the cap — which is exactly why the at-cap
+   compensation is now honest everywhere. ── */
+const HEART_CAP = 10;
+
 /* ───────────────────────── math utils ───────────────────────── */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -584,6 +596,10 @@ function loadSave() {
     const v = JSON.parse(s);
     if (typeof v.q !== 'number') return null;
     const out = Object.assign(defaultSave(), v);
+    /* the heart row is UPWARD-ONLY: a save can be raised to the floor of
+       five and held at the cap, but loading must never hand back fewer
+       hearts than the row already earned */
+    out.mh = clamp(Math.round(+out.mh) || 5, 5, HEART_CAP);
     if (!v.v) {
       // v1 → v2 migration: everyone starts armed now. Old q1 ("cut Finn's
       // door") folds into the started Crescent thread; Finn's heart container
@@ -680,6 +696,33 @@ function storeSave() {
   } catch (e) {}
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); } catch (e) {}
 }
+/* ── THE ONE HEART-CONTAINER GRANT. Every container in the game routes
+   here (see HEART_CAP above). Three rules it owns:
+     1. the row NEVER shrinks — a min() with a smaller literal used to be
+        able to clip a row a later region had already grown;
+     2. at the cap the container still PAYS — the Emberwaste's full heal +
+        eight salt + a caption that says so, now everywhere;
+     3. the item-get pose plays for all of them (two grants used to skip it).
+   Declared in p2 but bound late: P, SAVE, itemToast, SFX, burst and
+   psSparkle all exist by the time any container can fire. `y` is the
+   sparkle height — passed explicitly by each caller so the burst reads at
+   the same place it always did (ground-relative ashore, P.fy at sea). ── */
+function gainHeart(big, small, y) {
+  const before = P.maxHearts;
+  P.maxHearts = Math.max(before, Math.min(HEART_CAP, before + 1));
+  P.hearts = P.maxHearts;
+  if (SAVE) { SAVE.mh = P.maxHearts; storeSave(); }
+  itemGetT = 0;
+  if (P.maxHearts === before) {
+    /* a full row already: the container gives its warmth instead */
+    P.salt += 8;
+    if (SAVE) { SAVE.salt = P.salt; storeSave(); }
+    itemToast('A FULL HEART ROW', 'It fills every heart you have — and leaves eight salt behind.');
+  } else itemToast(big, small);
+  SFX.heart();
+  burst(psSparkle, P.x, (y == null ? P.fy + 1.4 : y), P.z, 18, 1.4, 1.2, 1.0);
+}
+
 SAVE = loadSave();
 
 /* game-wide state string — declared here, driven by p6 flow */

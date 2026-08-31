@@ -360,17 +360,24 @@ function drawHearts() {
     g.shadowOffsetY = 0;
   }
 }
+let hudLastPrompt = '';
 function updatePrompt() {
-  if (state !== 'play') { promptEl.classList.remove('on'); return; }
+  if (state !== 'play') { promptEl.classList.remove('on'); hudLastPrompt = ''; return; }
   const ctx = currentInteract();
   if (ctx) {
     let label = ctx.label;
     if (window.ArcadeController && ArcadeController.currentInputSource && ArcadeController.currentInputSource() === 'keyboard') {
       label = label.replace('✕', 'J');
     }
-    promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+    /* the same change-gate drawHearts keeps just above: an innerHTML write
+       re-parses and re-lays-out the prompt EVERY frame, and the label is
+       the same string for whole minutes at a time */
+    if (label !== hudLastPrompt) {
+      hudLastPrompt = label;
+      promptEl.innerHTML = label.replace(/(✕|J|HOLD)/g, '<b>$1</b>');
+    }
     promptEl.classList.add('on');
-  } else promptEl.classList.remove('on');
+  } else { promptEl.classList.remove('on'); hudLastPrompt = ''; }
 }
 
 /* ── portrait mode (art review screenshots only) ── */
