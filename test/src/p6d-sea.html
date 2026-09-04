@@ -2574,6 +2574,17 @@ tickPlayer = function () {
 /* ── SAILING: the double sail, the opened sea, the chart's edge ── */
 const _n2TickSailing = tickSailing;
 tickSailing = function () {
+  /* △ AFLOAT: THE MOON COMPASS ANSWERS EVERY STATE (the MIRROR-4 law).
+     △/L is consumed in tickPlayer's on-foot free-movement block — which
+     tickSailing REPLACES (p6c's tickPlayer wrap routes P.sailing here and
+     never calls the base). So for the whole life of sailing the compass
+     was silently dead at the helm: John hit it mid-q33, sitting on the
+     boat at the night anchorage with no way to ask where the next call
+     was. Same guard as on foot (IN.pulse && P.sword), same doPulse.
+     tickSailing only ever runs from tickPlayer in state 'play', so the
+     cine parity is structural; VOYAGE is Pearl's authored lap — on rails,
+     with its own captions, and nothing there to be lost from. */
+  if (IN.pulse && P.sword && !VOYAGE.active) doPulse();
   /* ✕ afloat: context first (exactly like on foot), otherwise SWING */
   if (IN.atk && !VOYAGE.active && state === 'play' && !BATK.on) {
     const ctx = currentInteract();

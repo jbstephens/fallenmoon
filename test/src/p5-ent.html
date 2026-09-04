@@ -361,7 +361,14 @@ function doPulse() {
   P.pulseT = 1.0;
   const o = objectivePoint();
   let str = 0.25;
-  const y = P.fy + 1.2;
+  /* the arc starts at his HANDS. Ashore that is P.fy (the foot height the
+     body is drawn from). ABOARD anything, P.fy is a constant just above the
+     waterline while the rendered body heaves with the swell — up to a metre
+     and a half of it at the moon site — so the stream would leave from the
+     water instead of from him. Take the rendered root when he is riding. */
+  const ridingY = (P.sailing || P.skiffing || P.skPunting) &&
+    typeof wick !== 'undefined' && wick.root ? wick.root.position.y : P.fy;
+  const y = ridingY + 1.2;
   // no objective? the moonglass tugs toward moon-stuff — and the nearest
   // moon-stuff is the keel-stone of a boat left far behind (post-arc,
   // "I can't find my boat" is the recurring family question)
@@ -407,6 +414,27 @@ function moveWithCollision(nx, nz) {
   const r = resolveSolid(ox, oz, c[0], c[1]);
   P.x = r[0]; P.z = r[1];
 }
+/* ── THE PLAYER'S OWN CLOCKS — one owner, every locomotion mode ──
+   These two are counters on the PLAYER, not on his legs, so they may
+   never live inside a body-driver that something else can replace.
+   THREE drivers replace `tickPlayer` wholesale — `tickSailing` (p6c,
+   P.sailing), `tickSkiff` (p6h, P.skiffing) and `skTickPunt` (p6k,
+   P.skPunting) — and while any of them held the body these counters
+   simply STOPPED:
+     · P.iframes froze at 85 after the first hit taken aboard, so Wick
+       strobed at 8 Hz (animateWick's i-frame blink) for the rest of the
+       voyage — John's "WICK FLICKERS at night", three reports, blamed
+       twice on display half-rate — and hurtPlayer's `iframes > 0` guard
+       made the helm permanently INVULNERABLE besides.
+     · P.pulseT latched at 1.0, so the moonglass glow never faded.
+   p6k had already noticed the shape of this and hand-patched the night
+   clock back into its own punt branch; a per-driver patch is not an
+   owner. The sim owns them now — tickSim calls this once per tick in
+   state 'play', which is exactly when the old inline lines ran. */
+function tickPlayerClocks() {
+  if (P.iframes > 0) P.iframes--;
+  if (P.pulseT > 0) P.pulseT -= DT;
+}
 /* ── player sim tick (runs in state 'play') ── */
 function tickPlayer() {
   const inShade = inShadeAt(P.x, P.z);
@@ -422,7 +450,7 @@ function tickPlayer() {
     }
     P.everSun = true;
   }
-  if (P.iframes > 0) P.iframes--;
+  // P.iframes ticks in tickPlayerClocks — it belongs to the player, not to his legs
   // shade heals: 1 heart / 4 s
   if (inShade && P.hearts < P.maxHearts && (P.st === 'idle' || P.st === 'walk')) {
     P.healT++;
@@ -432,7 +460,7 @@ function tickPlayer() {
       burst(psSparkle, P.x, P.fy + 1.0, P.z, 12, 0.9, 1.3, 0.9);
     }
   } else if (!inShade) P.healT = 0;
-  if (P.pulseT > 0) P.pulseT -= DT;
+  // P.pulseT ticks in tickPlayerClocks (the compass answers afloat too)
   if (P.landT > 0) P.landT -= DT;
 
   /* ── vertical: real jump physics (v3). Runs every tick, whatever the

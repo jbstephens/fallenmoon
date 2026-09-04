@@ -2045,7 +2045,10 @@ tickCine = function () {
 let hSaidHead = false, hSaidRiver = false;
 const _crownTickPlayer = tickPlayer;
 tickPlayer = function () {
-  if (P.skiffing) tickSkiff();
+  /* △ IN THE SKIFF — the compass answers every state (MIRROR-4). tickSkiff
+     replaces the on-foot free-movement block that consumes IN.pulse, so the
+     moonglass was dead on the river exactly as it was dead at the helm. */
+  if (P.skiffing) { if (IN.pulse && P.sword) doPulse(); tickSkiff(); }
   else _crownTickPlayer();
   tickGreenWorld();
 };

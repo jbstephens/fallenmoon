@@ -1789,6 +1789,9 @@ const skLastDry = [0, 0, 0];
 const _skPrevTickPlayer = tickPlayer;
 tickPlayer = function () {
   if (P.skPunting) {
+    /* △ IN THE PUNT — the compass answers every state (MIRROR-4); the punt
+       replaces the block that consumes IN.pulse, same as the boat and skiff */
+    if (IN.pulse && P.sword) doPulse();
     skTickPunt();
     if (typeof nmTickNightClock === 'function') nmTickNightClock();
   } else _skPrevTickPlayer();
